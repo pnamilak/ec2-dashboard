@@ -6,18 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
+      /* Vibrant professional theme */
       --bg1:#0b1020; --bg2:#0a122b;
       --card:#0f172a; --card2:#0b1326;
-      --text:#e5f0ff; --muted:#9db4d6;
+      --text:#eaf2ff; --muted:#9bb2d8;
       --brand1:#22d3ee; --brand2:#6366f1; --brand3:#06b6d4;
       --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
       --border:rgba(255,255,255,.12);
-      --ring: 0 0 0 4px rgba(99,102,241,.22);
-      --radius:18px;
       --shadow-lg: 0 20px 50px rgba(3,8,35,.55);
       --shadow-sm: 0 8px 24px rgba(3,8,35,.35);
-      --glow: 0 0 40px rgba(34,211,238,.25);
+      --radius:18px;
+      --ring: 0 0 0 4px rgba(99,102,241,.22);
     }
+
+    /* Background + subtle grid overlay */
     body{
       margin:0; min-height:100vh; color:var(--text);
       background:
@@ -33,25 +35,26 @@
         linear-gradient(#fff 1px, transparent 1px) 0 0/34px 34px;
       mix-blend-mode:overlay;
     }
-    .container{ width:min(1200px, calc(100% - 40px)); margin:42px auto; }
 
+    .container{ width:min(1150px, calc(100% - 40px)); margin:42px auto; }
+
+    /* Top header */
     .hero{
       display:flex; align-items:center; justify-content:space-between; gap:16px;
-      padding:18px 22px; border-radius:20px; background:linear-gradient(180deg, #0e1731, #0b1227);
-      box-shadow: var(--shadow-lg);
-      border:1px solid var(--border);
+      padding:18px 22px; border-radius:20px;
+      background:linear-gradient(180deg, #111a3c, #0c1530);
+      border:1px solid var(--border); box-shadow:var(--shadow-lg);
       position:relative; overflow:hidden;
     }
     .hero::after{
       content:""; position:absolute; right:-120px; top:-120px; width:240px; height:240px;
       background: radial-gradient(closest-side, rgba(34,211,238,.16), transparent);
-      filter: blur(1px);
     }
     .brand{ display:flex; align-items:center; gap:12px; }
     .logo{
-      width:38px; height:38px; border-radius:10px;
+      width:42px; height:42px; border-radius:12px;
       background: conic-gradient(from 220deg, var(--brand2), var(--brand1), var(--brand3), var(--brand2));
-      box-shadow: var(--glow);
+      box-shadow: 0 0 32px rgba(34,211,238,.25);
     }
     .title{
       font-size:22px; font-weight:800; letter-spacing:.2px;
@@ -60,29 +63,37 @@
     }
     .subtitle{ color:var(--muted); font-size:14px; }
 
+    /* Cards */
     .card{
       margin-top:18px; background:linear-gradient(180deg, var(--card), var(--card2));
-      border:1px solid var(--border); border-radius:var(--radius);
-      box-shadow: var(--shadow-lg); padding:22px;
+      border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); padding:22px;
     }
 
-    #loginForm label{ display:block; font-weight:600; color:#b9c8e9; margin:12px 0 8px; }
+    /* Login */
+    #loginForm label{ display:block; margin:10px 0 8px; font-weight:600; color:#c2d3f3; }
     #loginForm input{
-      width:100%; padding:12px 14px; border-radius:12px; border:1px solid #223055; background:#0d1a36; color:#eaf2ff;
-      outline:0; transition:.18s; box-shadow: var(--shadow-sm);
+      width:100%; padding:12px 14px; border-radius:12px; border:1px solid #25345f;
+      background:#0d1a36; color:#eaf2ff; outline:0; transition:.18s; box-shadow:var(--shadow-sm);
     }
     #loginForm input:focus{ border-color:#4f6cf7; box-shadow:var(--ring); }
 
     .btn{
-      display:inline-block; padding:10px 18px; border-radius:999px; border:0; cursor:pointer; color:#051028; font-weight:800;
-      background:linear-gradient(180deg, var(--brand1), var(--brand2));
+      display:inline-block; padding:10px 18px; border-radius:999px; border:0; cursor:pointer; font-weight:800;
+      background:linear-gradient(180deg, var(--brand1), var(--brand2)); color:#041127;
       box-shadow:0 2px 0 rgba(2,6,23,.28), 0 14px 28px rgba(11,25,70,.5);
-      transition:transform .08s ease, box-shadow .12s ease, filter .18s ease;
+      transition:transform .08s ease, filter .18s ease;
     }
-    .btn:hover{ filter:brightness(1.03); }
+    .btn:hover{ filter:brightness(1.04); }
     .btn:active{ transform:translateY(2px); }
 
-    .tabs{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; border-bottom:1px dashed var(--border); padding-bottom:12px; }
+    .btn-start{ background:linear-gradient(180deg, #7df0a3, var(--green)); color:#062013; }
+    .btn-stop { background:linear-gradient(180deg, #ff9b9b, var(--red));  color:#210707; }
+
+    /* Tabs */
+    .tabs{
+      display:flex; flex-wrap:wrap; gap:8px; margin: -6px 0 14px 0; padding-bottom:12px;
+      border-bottom:1px dashed var(--border);
+    }
     .tab{
       padding:10px 14px; border-radius:12px; border:1px solid var(--border);
       background:#0f1c3a; color:#cfe6ff; cursor:pointer; font-weight:700; font-size:14px;
@@ -95,6 +106,7 @@
       border-color: transparent;
     }
 
+    /* Table */
     table{ width:100%; border-collapse:separate; border-spacing:0; margin-top:6px; }
     thead th{
       text-align:left; font-size:14px; color:#cfe0ff; background:#0a1837;
@@ -107,19 +119,19 @@
     .stop  { background:rgba(239,68,68,.18); color:#ffb2b2; border:1px solid rgba(239,68,68,.32); }
     .pend  { background:rgba(245,158,11,.18); color:#ffd79a; border:1px solid rgba(245,158,11,.35); }
 
-    .btn-start{ background:linear-gradient(180deg, #7df0a3, var(--green)); color:#041216; }
-    .btn-stop { background:linear-gradient(180deg, #ff9b9b, var(--red));  color:#230606; }
-
-    .hidden{ display:none; }
-    .row-actions{ display:flex; gap:8px; }
     .status-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
     .dot-ok{ background:#22c55e; } .dot-stop{ background:#ef4444; } .dot-pend{ background:#f59e0b; }
 
-    .foot{ margin-top:14px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.8; }
+    .row-actions{ display:flex; gap:8px; }
+    .hidden{ display:none; }
+
+    .foot{ margin-top:10px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.85; }
   </style>
 </head>
 <body>
   <div class="container">
+
+    <!-- Header -->
     <div class="hero">
       <div class="brand">
         <div class="logo"></div>
@@ -130,7 +142,8 @@
       </div>
     </div>
 
-    <form class="card" id="loginForm" onsubmit="login();return false;">
+    <!-- Login -->
+    <form class="card" id="loginForm" onsubmit="login(); return false;">
       <label>Username</label>
       <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
       <label>Password</label>
@@ -141,7 +154,9 @@
       </div>
     </form>
 
+    <!-- Dashboard -->
     <div id="dashboard" class="card hidden">
+      <!-- Tabs (replace dropdown) -->
       <div class="tabs" id="envTabs"></div>
 
       <table id="instTable">
@@ -158,110 +173,145 @@
 
       <div class="foot">Tip: Click a tab to switch environments. Actions update live.</div>
     </div>
+
   </div>
 
   <script>
-    // Terraform should only substitute this one:
+    // Only this placeholder is for Terraform:
     const API_ENDPOINT = "${api_url}/instances";
 
-    const ENVIRONMENTS = ["PRQA1","PRQA2","PRQA3","PRQA6","PNQA1","AVQA1"];
+    // Your original environments (from dropdown)
+    const ENVIRONMENTS = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1"];
+
     let encodedToken = "";
     let activeEnv = "";
 
-    document.addEventListener("DOMContentLoaded", () => {
-      const dash = document.getElementById("dashboard");
-      if (dash) dash.classList.add("hidden");
+    // Keep dashboard hidden until login
+    document.addEventListener('DOMContentLoaded', function () {
+      var dash = document.getElementById('dashboard');
+      if (dash) dash.classList.add('hidden');
     });
 
-    function login(){
-      const u = document.getElementById("username").value.trim();
-      const p = document.getElementById("password").value.trim();
-      if(!u || !p){
+    function login() {
+      var user = document.getElementById("username").value.trim();
+      var pass = document.getElementById("password").value.trim();
+      if (!user || !pass) {
         document.getElementById("loginStatus").innerText = "Enter username and password";
         return;
       }
-      encodedToken = btoa(u + ":" + p);
+      encodedToken = btoa(user + ":" + pass);
 
-      document.getElementById("loginForm").remove();
-      const dash = document.getElementById("dashboard");
+      // Remove login, show dashboard
+      var form = document.getElementById("loginForm");
+      if (form) form.remove();
+      var dash = document.getElementById("dashboard");
       dash.classList.remove("hidden");
 
       buildTabs();
-      setActiveEnv(ENVIRONMENTS[0]);
+      setActiveEnv(ENVIRONMENTS[0]); // default to first tab
     }
 
     function buildTabs(){
-      const tabs = document.getElementById("envTabs");
+      var tabs = document.getElementById("envTabs");
       tabs.innerHTML = "";
-      ENVIRONMENTS.forEach(env => {
-        const btn = document.createElement("button");
-        btn.className = "tab";
-        btn.innerText = env;
-        btn.onclick = () => setActiveEnv(env);
-        tabs.appendChild(btn);
-      });
-    }
-
-    function markActiveTab(){
-      const all = document.querySelectorAll(".tab");
-      all.forEach(btn => {
-        if(btn.innerText === activeEnv) btn.classList.add("active");
-        else btn.classList.remove("active");
-      });
-    }
-
-    async function setActiveEnv(env){
-      activeEnv = env;
-      markActiveTab();
-      await fetchInstances();
-    }
-
-    async function fetchInstances(){
-      const tbody = document.querySelector("#instTable tbody");
-      tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">Loading $${activeEnv}…</td></tr>`;
-
-      try{
-        const res = await fetch(`$${API_ENDPOINT}?action=list&env=$${encodeURIComponent(activeEnv)}`, {
-          headers: { "Authorization": encodedToken }
-        });
-        const data = await res.json();
-
-        tbody.innerHTML = "";
-        data.forEach(inst => {
-          const row = document.createElement("tr");
-
-          const state = (inst.State || "").toLowerCase();
-          const dot  = state === "running" ? "dot-ok" : (state.includes("pending") ? "dot-pend" : "dot-stop");
-          const pill = state === "running" ? "ok" : (state.includes("pending") ? "pend" : "stop");
-          const actionText  = state === "running" ? "Stop" : "Start";
-          const actionClass = state === "running" ? "btn btn-stop" : "btn btn-start";
-
-          row.innerHTML =
-            `<td>$${inst.Name || ""}</td>` +
-            `<td>$${inst.InstanceId || ""}</td>` +
-            `<td><span class="status-dot ${dot}"></span><span class="badge ${pill}">$${inst.State}</span></td>` +
-            `<td class="row-actions"><button class="${actionClass}" onclick="toggleInstance('$${inst.InstanceId}','$${inst.State}')">${actionText}</button></td>`;
-
-          tbody.appendChild(row);
-        });
-
-        if(data.length === 0){
-          tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">No instances found for $${activeEnv}.</td></tr>`;
-        }
-      }catch(err){
-        tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#ffb2b2;">Failed to load instances for $${activeEnv}.</td></tr>`;
+      for (var i=0; i<ENVIRONMENTS.length; i++){
+        (function(env){
+          var btn = document.createElement("button");
+          btn.className = "tab";
+          btn.textContent = env;
+          btn.onclick = function(){ setActiveEnv(env); };
+          tabs.appendChild(btn);
+        })(ENVIRONMENTS[i]);
       }
     }
 
-    async function toggleInstance(id, state){
-      const action = state.toLowerCase() === "running" ? "stop" : "start";
+    function markActiveTab(){
+      var tabEls = document.querySelectorAll(".tab");
+      for (var i=0; i<tabEls.length; i++){
+        if (tabEls[i].textContent === activeEnv) tabEls[i].classList.add("active");
+        else tabEls[i].classList.remove("active");
+      }
+    }
+
+    function setActiveEnv(env){
+      activeEnv = env;
+      markActiveTab();
+      fetchInstances();
+    }
+
+    async function fetchInstances() {
+      if (!activeEnv) return;
+
+      var tbody = document.querySelector("#instTable tbody");
+      tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>Loading "+ activeEnv +"…</td></tr>";
+
       try{
-        await fetch(`$${API_ENDPOINT}?action=$${action}&instance_id=$${encodeURIComponent(id)}`, {
+        var res = await fetch(API_ENDPOINT + "?action=list&env=" + encodeURIComponent(activeEnv), {
+          headers: { "Authorization": encodedToken }
+        });
+        var data = await res.json();
+
+        tbody.innerHTML = "";
+        for (var i=0; i<data.length; i++){
+          var inst = data[i];
+          var state = (inst.State || "").toLowerCase();
+
+          var dotClass  = (state === "running") ? "dot-ok" : (state.indexOf("pending") !== -1 ? "dot-pend" : "dot-stop");
+          var pillClass = (state === "running") ? "ok"     : (state.indexOf("pending") !== -1 ? "pend"     : "stop");
+          var actionTxt = (state === "running") ? "Stop" : "Start";
+          var btnClass  = (state === "running") ? "btn btn-stop" : "btn btn-start";
+
+          var row = document.createElement("tr");
+
+          var tdName = document.createElement("td");
+          tdName.textContent = inst.Name || "";
+          row.appendChild(tdName);
+
+          var tdId = document.createElement("td");
+          tdId.textContent = inst.InstanceId || "";
+          row.appendChild(tdId);
+
+          var tdState = document.createElement("td");
+          var dot = document.createElement("span");
+          dot.className = "status-dot " + dotClass;
+          var pill = document.createElement("span");
+          pill.className = "badge " + pillClass;
+          pill.textContent = inst.State || "";
+          tdState.appendChild(dot);
+          tdState.appendChild(pill);
+          row.appendChild(tdState);
+
+          var tdAction = document.createElement("td");
+          tdAction.className = "row-actions";
+          var btn = document.createElement("button");
+          btn.className = btnClass;
+          btn.textContent = actionTxt;
+          (function(instanceId, currentState){
+            btn.onclick = function(){ toggleInstance(instanceId, currentState); };
+          })(inst.InstanceId, inst.State);
+          tdAction.appendChild(btn);
+          row.appendChild(tdAction);
+
+          tbody.appendChild(row);
+        }
+
+        if (data.length === 0){
+          tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>No instances found for "+ activeEnv +".</td></tr>";
+        }
+      }catch(e){
+        tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#ffb2b2;'>Failed to load instances for "+ activeEnv +".</td></tr>";
+      }
+    }
+
+    async function toggleInstance(id, state) {
+      var action = (state && state.toLowerCase() === "running") ? "stop" : "start";
+      try{
+        await fetch(API_ENDPOINT + "?action=" + action + "&instance_id=" + encodeURIComponent(id), {
           headers: { "Authorization": encodedToken }
         });
         setTimeout(fetchInstances, 900);
-      }catch(err){
-        alert("Action failed: " + (err?.message || err));
+      }catch(e){
+        alert("Action failed.");
       }
     }
   </script>
