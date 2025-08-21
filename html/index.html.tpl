@@ -98,7 +98,7 @@
       position:fixed; inset:0; background:rgba(0,0,0,.5);
       display:flex; align-items:center; justify-content:center; z-index:50;
     }
-    /* Ensure hidden modals stay hidden regardless of rule order */
+    /* keep modal hidden until opened */
     .modal.hidden { display: none !important; }
 
     .modal-card{ width:min(560px, calc(100% - 28px)); background:linear-gradient(180deg, #0e1731, #0b1227);
@@ -189,11 +189,10 @@
       var dash = document.getElementById('dashboard');
       if (dash) dash.classList.add('hidden');
 
-      // Ensure the details modal starts hidden even if CSS order changes
+      // keep modal hidden at start (belt & suspenders)
       var modal = document.getElementById('detailsModal');
-      if (modal && !modal.classList.contains('hidden')) modal.classList.add('hidden');
+      if (modal) modal.classList.add('hidden');
 
-      // Optional: click outside the card to close
       if (modal) {
         modal.addEventListener('click', function(e){
           if (e.target.id === 'detailsModal') closeDetails();
@@ -205,7 +204,9 @@
       var user = document.getElementById("username").value.trim();
       var pass = document.getElementById("password").value.trim();
       if (!user || !pass) { document.getElementById("loginStatus").innerText = "Enter username and password"; return; }
-      encodedToken = btoa(user + ":" + pass");
+
+      // FIXED: removed stray quote
+      encodedToken = btoa(user + ":" + pass);
 
       var form = document.getElementById("loginForm"); if (form) form.remove();
       var dash = document.getElementById("dashboard"); dash.classList.remove("hidden");
