@@ -243,3 +243,22 @@ resource "aws_lambda_permission" "apigw_auth" {
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
+
+# Allow Lambda to run SSM commands on instances
+resource "aws_iam_policy" "ssm_commands" {
+  name_prefix = "ssm-commands-"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = ["ssm:SendCommand", "ssm:GetCommandInvocation"],
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.ssm_commands.arn
+}
+
