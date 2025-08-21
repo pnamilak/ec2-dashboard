@@ -6,243 +6,313 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      /* Theme */
-      --bg1:#0f172a; --bg2:#0b1222;                    /* dark navy gradient */
-      --card:#ffffff; --text:#0f172a; --muted:#64748b;
-      --brand:#06b6d4; --brand2:#22d3ee;               /* teal/cyan accents */
-      --green:#22c55e; --red:#ef4444;
-
+      /* Vibrant professional theme */
+      --bg1:#0b1020; --bg2:#0a122b;
+      --card:#0f172a; --card2:#0b1326;
+      --text:#eaf2ff; --muted:#9bb2d8;
+      --brand1:#22d3ee; --brand2:#6366f1; --brand3:#06b6d4;
+      --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
+      --border:rgba(255,255,255,.12);
+      --shadow-lg: 0 20px 50px rgba(3,8,35,.55);
+      --shadow-sm: 0 8px 24px rgba(3,8,35,.35);
       --radius:18px;
-      --shadow-lg: 0 18px 40px rgba(2,6,23,.35);
-      --shadow-md: 0 10px 24px rgba(2,6,23,.20);
-      --ring: 0 0 0 4px rgba(34,211,238,.18);
+      --ring: 0 0 0 4px rgba(99,102,241,.22);
     }
 
-    /* Pleasant, professional background with faint grid */
+    /* Background + subtle grid overlay */
     body{
       margin:0; min-height:100vh; color:var(--text);
       background:
-        radial-gradient(1200px 800px at 20% 0%, rgba(45,92,132,.48) 0%, transparent 60%),
-        radial-gradient(900px 700px at 90% 10%, rgba(32,87,128,.40) 0%, transparent 55%),
+        radial-gradient(900px 600px at 15% -10%, rgba(34,211,238,.22), transparent 55%),
+        radial-gradient(800px 650px at 110% 10%, rgba(99,102,241,.18), transparent 60%),
         linear-gradient(180deg, var(--bg1), var(--bg2));
-      font-family: Inter, system-ui, Arial, sans-serif;
+      font-family: Inter, system-ui, Segoe UI, Arial, sans-serif;
     }
     body::before{
-      content:""; position:fixed; inset:0; pointer-events:none; opacity:.06;
+      content:""; position:fixed; inset:0; pointer-events:none; opacity:.08;
       background:
-        linear-gradient(90deg, #fff 1px, transparent 1px) 0 0/32px 32px,
-        linear-gradient(#fff 1px, transparent 1px) 0 0/32px 32px;
+        linear-gradient(90deg, #fff 1px, transparent 1px) 0 0/34px 34px,
+        linear-gradient(#fff 1px, transparent 1px) 0 0/34px 34px;
       mix-blend-mode:overlay;
     }
 
-    .container{
-      width:min(1100px, calc(100% - 40px));
-      margin:40px auto;
-      display:flex; flex-direction:column; gap:22px; align-items:center;
-    }
+    .container{ width:min(1150px, calc(100% - 40px)); margin:42px auto; }
 
-    .card{
-      width:100%;
-      background:var(--card);
-      border-radius:var(--radius);
-      padding:24px 24px 18px;
-      box-shadow:var(--shadow-lg);
-      border:1px solid rgba(255,255,255,.08);
-      position:relative;
+    /* Top header */
+    .hero{
+      display:flex; align-items:center; justify-content:space-between; gap:16px;
+      padding:18px 22px; border-radius:20px;
+      background:linear-gradient(180deg, #111a3c, #0c1530);
+      border:1px solid var(--border); box-shadow:var(--shadow-lg);
+      position:relative; overflow:hidden;
     }
-    /* subtle gradient frame */
-    .card.decor::before{
-      content:""; position:absolute; inset:0; border-radius:var(--radius); padding:1px;
-      background:linear-gradient(90deg, rgba(6,182,212,.35), rgba(34,211,238,.35));
-      -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor; mask-composite: exclude;
-      pointer-events:none;
+    .hero::after{
+      content:""; position:absolute; right:-120px; top:-120px; width:240px; height:240px;
+      background: radial-gradient(closest-side, rgba(34,211,238,.16), transparent);
     }
-
-    .header{ display:flex; align-items:center; gap:10px; margin:4px 0 18px; }
+    .brand{ display:flex; align-items:center; gap:12px; }
+    .logo{
+      width:42px; height:42px; border-radius:12px;
+      background: conic-gradient(from 220deg, var(--brand2), var(--brand1), var(--brand3), var(--brand2));
+      box-shadow: 0 0 32px rgba(34,211,238,.25);
+    }
     .title{
-      font-size:22px; font-weight:800; margin:0; line-height:1.1;
-      background:linear-gradient(90deg, var(--brand), var(--brand2));
+      font-size:22px; font-weight:800; letter-spacing:.2px;
+      background:linear-gradient(90deg, var(--brand1), var(--brand2));
       -webkit-background-clip:text; background-clip:text; color:transparent;
-      letter-spacing:.2px;
     }
-    .icon{ width:22px; height:22px; flex:0 0 22px; color:var(--brand); }
+    .subtitle{ color:var(--muted); font-size:14px; }
 
-    label{ display:block; margin:10px 0 6px; font-weight:600; color:var(--muted); }
-
-    input, select{
-      width:100%; padding:12px 14px; border-radius:12px; border:1px solid #d1d5db;
-      background:#fff; outline:0; transition:.18s; font-size:15px;
-      box-shadow:var(--shadow-md);
+    /* Cards */
+    .card{
+      margin-top:18px; background:linear-gradient(180deg, var(--card), var(--card2));
+      border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); padding:22px;
     }
-    input:focus, select:focus{ border-color:var(--brand); box-shadow:var(--ring); }
 
-    .login-grid{ display:grid; gap:12px; }
+    /* Login */
+    #loginForm label{ display:block; margin:10px 0 8px; font-weight:600; color:#c2d3f3; }
+    #loginForm input{
+      width:100%; padding:12px 14px; border-radius:12px; border:1px solid #25345f;
+      background:#0d1a36; color:#eaf2ff; outline:0; transition:.18s; box-shadow:var(--shadow-sm);
+    }
+    #loginForm input:focus{ border-color:#4f6cf7; box-shadow:var(--ring); }
 
-    .actions{ margin-top:14px; display:flex; align-items:center; gap:12px; }
+    .btn{
+      display:inline-block; padding:10px 18px; border-radius:999px; border:0; cursor:pointer; font-weight:800;
+      background:linear-gradient(180deg, var(--brand1), var(--brand2)); color:#041127;
+      box-shadow:0 2px 0 rgba(2,6,23,.28), 0 14px 28px rgba(11,25,70,.5);
+      transition:transform .08s ease, filter .18s ease;
+    }
+    .btn:hover{ filter:brightness(1.04); }
+    .btn:active{ transform:translateY(2px); }
 
+    .btn-start{ background:linear-gradient(180deg, #7df0a3, var(--green)); color:#062013; }
+    .btn-stop { background:linear-gradient(180deg, #ff9b9b, var(--red));  color:#210707; }
+
+    /* Tabs */
+    .tabs{
+      display:flex; flex-wrap:wrap; gap:8px; margin: -6px 0 14px 0; padding-bottom:12px;
+      border-bottom:1px dashed var(--border);
+    }
+    .tab{
+      padding:10px 14px; border-radius:12px; border:1px solid var(--border);
+      background:#0f1c3a; color:#cfe6ff; cursor:pointer; font-weight:700; font-size:14px;
+      transition: all .15s ease;
+    }
+    .tab:hover{ box-shadow: var(--shadow-sm); }
+    .tab.active{
+      color:#031230;
+      background:linear-gradient(180deg, var(--brand1), var(--brand2));
+      border-color: transparent;
+    }
+
+    /* Table */
+    table{ width:100%; border-collapse:separate; border-spacing:0; margin-top:6px; }
+    thead th{
+      text-align:left; font-size:14px; color:#cfe0ff; background:#0a1837;
+      padding:12px 14px; border-bottom:1px solid #223055; position:sticky; top:0; z-index:1;
+    }
+    tbody td{ padding:12px 14px; border-bottom:1px dashed #213055; font-size:15px; color:#eaf2ff; }
+
+    .badge{ display:inline-block; padding:6px 10px; border-radius:999px; font-weight:800; font-size:12px; }
+    .ok    { background:rgba(34,197,94,.18); color:#9af0b7; border:1px solid rgba(34,197,94,.35); }
+    .stop  { background:rgba(239,68,68,.18); color:#ffb2b2; border:1px solid rgba(239,68,68,.32); }
+    .pend  { background:rgba(245,158,11,.18); color:#ffd79a; border:1px solid rgba(245,158,11,.35); }
+
+    .status-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
+    .dot-ok{ background:#22c55e; } .dot-stop{ background:#ef4444; } .dot-pend{ background:#f59e0b; }
+
+    .row-actions{ display:flex; gap:8px; }
     .hidden{ display:none; }
 
-    table{ width:100%; border-collapse:separate; border-spacing:0; margin-top:14px; }
-    thead th{
-      text-align:left; font-size:15px; color:#0f172a; background:#f8fafc;
-      padding:12px 14px; border-bottom:1px solid #e5e7eb; position:sticky; top:0; z-index:1;
-    }
-    tbody td{ padding:12px 14px; border-bottom:1px solid #eef2f7; font-size:16px; }
-    tbody tr:last-child td{ border-bottom:none; }
-
-    /* Soft 3D buttons */
-    .btn{
-      display:inline-block; font-weight:700; letter-spacing:.2px;
-      padding:10px 18px; border-radius:999px; border:0; cursor:pointer; color:#fff;
-      transform:translateY(0);
-      box-shadow:0 2px 0 rgba(2,6,23,.18), 0 10px 22px rgba(2,6,23,.22);
-      transition:transform .08s ease, box-shadow .12s ease, filter .2s ease;
-    }
-    .btn:hover{ filter:brightness(1.03); }
-    .btn:active{ transform:translateY(2px); box-shadow:0 1px 0 rgba(2,6,23,.22), 0 6px 14px rgba(2,6,23,.26); }
-
-    .btn-primary{ background:linear-gradient(180deg, var(--brand2), var(--brand)); }
-    .btn-start{ background:linear-gradient(180deg, #4ade80, var(--green)); }
-    .btn-stop{  background:linear-gradient(180deg, #ff8a8a, var(--red)); }
+    .foot{ margin-top:10px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.85; }
   </style>
 </head>
 <body>
   <div class="container">
 
+    <!-- Header -->
+    <div class="hero">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="title">EC2 Instance Control</div>
+          <div class="subtitle">Start / Stop by environment with one click</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Login -->
-    <form class="card decor" id="loginForm" onsubmit="login(); return false;">
-      <div class="header">
-        <svg class="icon" viewBox="0 0 24 24" fill="none">
-          <path d="M7 10V8a5 5 0 1 1 10 0v2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" stroke-width="2"/>
-          <circle cx="12" cy="15" r="1.5" fill="currentColor"/>
-        </svg>
-        <h2 class="title">EC2 Dashboard Login</h2>
-      </div>
-
-      <div class="login-grid">
-        <div>
-          <label>Username</label>
-          <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
-        </div>
-        <div>
-          <label>Password</label>
-          <input type="password" id="password" placeholder="Enter password" autocomplete="current-password" />
-        </div>
-      </div>
-
-      <div class="actions">
-        <button class="btn btn-primary" type="submit">Login</button>
-        <span id="loginStatus" style="color:#dc2626; font-weight:600;"></span>
+    <form class="card" id="loginForm" onsubmit="login(); return false;">
+      <label>Username</label>
+      <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
+      <label>Password</label>
+      <input type="password" id="password" placeholder="Enter password" autocomplete="current-password" />
+      <div style="margin-top:14px; display:flex; gap:12px; align-items:center;">
+        <button class="btn" type="submit">Sign in</button>
+        <span id="loginStatus" style="color:#ffb2b2; font-weight:700;"></span>
       </div>
     </form>
 
-    <!-- Dashboard (hidden until login) -->
-    <div id="dashboard" class="card decor hidden">
-      <div class="header">
-        <svg class="icon" viewBox="0 0 24 24" fill="none">
-          <rect x="3" y="4"  width="18" height="6" rx="2" stroke="currentColor" stroke-width="2"/>
-          <rect x="3" y="14" width="18" height="6" rx="2" stroke="currentColor" stroke-width="2"/>
-          <circle cx="8" cy="7"  r="1" fill="currentColor"/>
-          <circle cx="8" cy="17" r="1" fill="currentColor"/>
-        </svg>
-        <h2 class="title">EC2 Instance Start / Stop</h2>
-      </div>
-
-      <label for="env">Select Environment</label>
-      <select id="env" onchange="fetchInstances()">
-        <option value="">-- Choose --</option>
-        <option>NAQA1</option>
-        <option>NAQA2</option>
-        <option>NAQA3</option>
-        <option>NAQA6</option>
-        <option>APQA1</option>
-        <option>EUQA1</option>
-      </select>
+    <!-- Dashboard -->
+    <div id="dashboard" class="card hidden">
+      <!-- Tabs (replace dropdown) -->
+      <div class="tabs" id="envTabs"></div>
 
       <table id="instTable">
         <thead>
           <tr>
-            <th style="width:38%">Name</th>
-            <th style="width:32%">Instance ID</th>
+            <th style="width:36%">Name</th>
+            <th style="width:34%">Instance ID</th>
             <th style="width:15%">Status</th>
             <th style="width:15%">Action</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
+
+      <div class="foot">Tip: Click a tab to switch environments. Actions update live.</div>
     </div>
 
   </div>
 
   <script>
-    // Safety: ensure dashboard starts hidden even with caching
-    document.addEventListener('DOMContentLoaded', () => {
-      const dash = document.getElementById('dashboard');
+    // Only this placeholder is for Terraform:
+    const API_ENDPOINT = "${api_url}/instances";
+
+    // Your original environments (from dropdown)
+    const ENVIRONMENTS = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1"];
+
+    let encodedToken = "";
+    let activeEnv = "";
+
+    // Keep dashboard hidden until login
+    document.addEventListener('DOMContentLoaded', function () {
+      var dash = document.getElementById('dashboard');
       if (dash) dash.classList.add('hidden');
     });
 
-    const API_ENDPOINT = "${api_url}/instances";
-    let encodedToken = "";
-
     function login() {
-      const user = document.getElementById("username").value.trim();
-      const pass = document.getElementById("password").value.trim();
-
+      var user = document.getElementById("username").value.trim();
+      var pass = document.getElementById("password").value.trim();
       if (!user || !pass) {
         document.getElementById("loginStatus").innerText = "Enter username and password";
         return;
       }
-
       encodedToken = btoa(user + ":" + pass);
 
       // Remove login, show dashboard
-      const form = document.getElementById("loginForm");
+      var form = document.getElementById("loginForm");
       if (form) form.remove();
-
-      const dash = document.getElementById("dashboard");
+      var dash = document.getElementById("dashboard");
       dash.classList.remove("hidden");
 
-      // Force environment pick after login
-      const envSel = document.getElementById("env");
-      if (envSel) envSel.value = "";
+      buildTabs();
+      setActiveEnv(ENVIRONMENTS[0]); // default to first tab
+    }
+
+    function buildTabs(){
+      var tabs = document.getElementById("envTabs");
+      tabs.innerHTML = "";
+      for (var i=0; i<ENVIRONMENTS.length; i++){
+        (function(env){
+          var btn = document.createElement("button");
+          btn.className = "tab";
+          btn.textContent = env;
+          btn.onclick = function(){ setActiveEnv(env); };
+          tabs.appendChild(btn);
+        })(ENVIRONMENTS[i]);
+      }
+    }
+
+    function markActiveTab(){
+      var tabEls = document.querySelectorAll(".tab");
+      for (var i=0; i<tabEls.length; i++){
+        if (tabEls[i].textContent === activeEnv) tabEls[i].classList.add("active");
+        else tabEls[i].classList.remove("active");
+      }
+    }
+
+    function setActiveEnv(env){
+      activeEnv = env;
+      markActiveTab();
+      fetchInstances();
     }
 
     async function fetchInstances() {
-      const env = document.getElementById("env").value;
-      if (!env) return;
+      if (!activeEnv) return;
 
-      const res = await fetch(API_ENDPOINT + "?action=list&env=" + encodeURIComponent(env), {
-        headers: { "Authorization": encodedToken }
-      });
+      var tbody = document.querySelector("#instTable tbody");
+      tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>Loading "+ activeEnv +"…</td></tr>";
 
-      const data = await res.json();
-      const tbody = document.querySelector("#instTable tbody");
-      tbody.innerHTML = "";
+      try{
+        var res = await fetch(API_ENDPOINT + "?action=list&env=" + encodeURIComponent(activeEnv), {
+          headers: { "Authorization": encodedToken }
+        });
+        var data = await res.json();
 
-      data.forEach(inst => {
-        const row = document.createElement("tr");
-        const action = inst.State === "running" ? "Stop" : "Start";
-        const btnClass = inst.State === "running" ? "btn btn-stop" : "btn btn-start";
+        tbody.innerHTML = "";
+        for (var i=0; i<data.length; i++){
+          var inst = data[i];
+          var state = (inst.State || "").toLowerCase();
 
-        row.innerHTML =
-          "<td>" + inst.Name + "</td>" +
-          "<td>" + inst.InstanceId + "</td>" +
-          "<td>" + inst.State + "</td>" +
-          "<td><button class=\"" + btnClass +
-          "\" onclick=\"toggleInstance('" + inst.InstanceId + "', '" + inst.State + "')\">" + action + "</button></td>";
+          var dotClass  = (state === "running") ? "dot-ok" : (state.indexOf("pending") !== -1 ? "dot-pend" : "dot-stop");
+          var pillClass = (state === "running") ? "ok"     : (state.indexOf("pending") !== -1 ? "pend"     : "stop");
+          var actionTxt = (state === "running") ? "Stop" : "Start";
+          var btnClass  = (state === "running") ? "btn btn-stop" : "btn btn-start";
 
-        tbody.appendChild(row);
-      });
+          var row = document.createElement("tr");
+
+          var tdName = document.createElement("td");
+          tdName.textContent = inst.Name || "";
+          row.appendChild(tdName);
+
+          var tdId = document.createElement("td");
+          tdId.textContent = inst.InstanceId || "";
+          row.appendChild(tdId);
+
+          var tdState = document.createElement("td");
+          var dot = document.createElement("span");
+          dot.className = "status-dot " + dotClass;
+          var pill = document.createElement("span");
+          pill.className = "badge " + pillClass;
+          pill.textContent = inst.State || "";
+          tdState.appendChild(dot);
+          tdState.appendChild(pill);
+          row.appendChild(tdState);
+
+          var tdAction = document.createElement("td");
+          tdAction.className = "row-actions";
+          var btn = document.createElement("button");
+          btn.className = btnClass;
+          btn.textContent = actionTxt;
+          (function(instanceId, currentState){
+            btn.onclick = function(){ toggleInstance(instanceId, currentState); };
+          })(inst.InstanceId, inst.State);
+          tdAction.appendChild(btn);
+          row.appendChild(tdAction);
+
+          tbody.appendChild(row);
+        }
+
+        if (data.length === 0){
+          tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>No instances found for "+ activeEnv +".</td></tr>";
+        }
+      }catch(e){
+        tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#ffb2b2;'>Failed to load instances for "+ activeEnv +".</td></tr>";
+      }
     }
 
     async function toggleInstance(id, state) {
-      const action = state === "running" ? "stop" : "start";
-      await fetch(API_ENDPOINT + "?action=" + action + "&instance_id=" + encodeURIComponent(id), {
-        headers: { "Authorization": encodedToken }
-      });
-      fetchInstances();
+      var action = (state && state.toLowerCase() === "running") ? "stop" : "start";
+      try{
+        await fetch(API_ENDPOINT + "?action=" + action + "&instance_id=" + encodeURIComponent(id), {
+          headers: { "Authorization": encodedToken }
+        });
+        setTimeout(fetchInstances, 900);
+      }catch(e){
+        alert("Action failed.");
+      }
     }
   </script>
 </body>
