@@ -94,7 +94,13 @@
     .foot{ margin-top:10px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.85; }
 
     /* Modal */
-    .modal{ position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:50; }
+    .modal{
+      position:fixed; inset:0; background:rgba(0,0,0,.5);
+      display:flex; align-items:center; justify-content:center; z-index:50;
+    }
+    /* Ensure hidden modals stay hidden regardless of rule order */
+    .modal.hidden { display: none !important; }
+
     .modal-card{ width:min(560px, calc(100% - 28px)); background:linear-gradient(180deg, #0e1731, #0b1227);
       border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow-lg); padding:18px; }
     .modal-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
@@ -149,7 +155,7 @@
   </div>
 
   <!-- Details Modal -->
-  <div id="detailsModal" class="modal hidden">
+  <div id="detailsModal" class="modal hidden" aria-hidden="true">
     <div class="modal-card">
       <div class="modal-head">
         <div style="font-weight:800; font-size:16px;">Instance details</div>
@@ -182,13 +188,24 @@
     document.addEventListener('DOMContentLoaded', function () {
       var dash = document.getElementById('dashboard');
       if (dash) dash.classList.add('hidden');
+
+      // Ensure the details modal starts hidden even if CSS order changes
+      var modal = document.getElementById('detailsModal');
+      if (modal && !modal.classList.contains('hidden')) modal.classList.add('hidden');
+
+      // Optional: click outside the card to close
+      if (modal) {
+        modal.addEventListener('click', function(e){
+          if (e.target.id === 'detailsModal') closeDetails();
+        });
+      }
     });
 
     function login() {
       var user = document.getElementById("username").value.trim();
       var pass = document.getElementById("password").value.trim();
       if (!user || !pass) { document.getElementById("loginStatus").innerText = "Enter username and password"; return; }
-      encodedToken = btoa(user + ":" + pass);
+      encodedToken = btoa(user + ":" + pass");
 
       var form = document.getElementById("loginForm"); if (form) form.remove();
       var dash = document.getElementById("dashboard"); dash.classList.remove("hidden");
@@ -275,10 +292,14 @@
       document.getElementById("dState").textContent = currentInstance.state;
       document.getElementById("svcStatus").textContent = "—";
       document.getElementById("svcOS").textContent = "—";
-      document.getElementById("detailsModal").classList.remove("hidden");
+      var modal = document.getElementById("detailsModal");
+      if (modal) modal.classList.remove("hidden");
       refreshService();
     }
-    function closeDetails(){ document.getElementById("detailsModal").classList.add("hidden"); }
+    function closeDetails(){
+      var modal = document.getElementById("detailsModal");
+      if (modal && !modal.classList.contains("hidden")) modal.classList.add("hidden");
+    }
 
     async function refreshService(){
       var svc = document.getElementById("svcName").value.trim() || "MSSQLSERVER";
