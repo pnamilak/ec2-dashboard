@@ -1,0 +1,16 @@
+# Terraform sensitive and local state
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+terraform.auto.tfvars
+
+# Archive outputs
+*.zip
+
+# IDE files
+*.log
+.vscode/
+.idea/
+.DS_Store
+live.html

@@ -1,0 +1,82 @@
+name: Deploy EC2 Dashboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      ENVIRONMENT:
+        description: 'Environment identifier'
+        required: true
+        default: 'mypersonalAWS'
+
+      REGION:
+        description: 'AWS region'
+        required: true
+        default: 'us-east-2'
+
+      BUCKET_NAME:
+        description: 'S3 bucket name (must be globally unique)'
+        required: true
+        default: 'pnamilak'
+
+      ACTION:
+        description: 'Select Terraform action'
+        required: true
+        type: choice
+        default: 'apply'
+        options:
+          - plan
+          - apply
+          - destroy
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event.inputs.ACTION }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.ENVIRONMENT }} 
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ github.event.inputs.REGION }}
+
+      - name: Generate terraform.auto.tfvars
+        run: |
+          echo "aws_region = \"${{ github.event.inputs.REGION }}\"" >> terraform.auto.tfvars
+          echo "bucket_name = \"${{ github.event.inputs.BUCKET_NAME }}\"" >> terraform.auto.tfvars
+          echo "environment = \"${{ github.event.inputs.ENVIRONMENT }}\"" >> terraform.auto.tfvars
+
+      - name: Remove previous .terraform folder
+        run: rm -rf .terraform
+      - name: Terraform Init with Backend
+        run: |
+          terraform init \
+            -backend-config="bucket=tfstate-pnamilak" \
+            -backend-config="key=state/terraform.tfstate" \
+            -backend-config="region=${{ github.event.inputs.REGION }}" \
+            -backend-config="dynamodb_table=terraform-ec2-dashboard-lock" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Apply/Destroy
+        run: |
+          case "${{ github.event.inputs.ACTION }}" in
+            "plan")
+              terraform plan
+              ;;
+            "apply")
+              terraform apply -auto-approve
+              ;;
+            "destroy")
+              terraform destroy -auto-approve
+              ;;
+          esac
