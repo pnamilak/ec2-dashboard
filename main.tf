@@ -262,3 +262,79 @@ resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
   policy_arn = aws_iam_policy.ssm_commands.arn
 }
 
+# SSM command permissions for Lambda
+resource "aws_iam_policy" "lambda_ssm_commands" {
+  name_prefix = "lambda-ssm-commands-"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations",
+        "ssm:CancelCommand"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
+# Attach to your existing lambda role
+resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
+}
+
+# Role EC2 will assume
+resource "aws_iam_role" "ec2_ssm_role" {
+  name_prefix = "ec2-ssm-core-"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach AmazonSSMManagedInstanceCore to that role
+resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance profile for EC2 (wraps the role)
+resource "aws_iam_instance_profile" "ec2_ssm" {
+  name_prefix = "ec2-ssm-"
+  role        = aws_iam_role.ec2_ssm_role.name
+}
+
+# OPTIONAL: Attach the profile to existing instances you list in var.existing_instance_ids
+# (This works even if those instances were not created by Terraform.)
+resource "aws_iam_instance_profile_association" "attach_ssm_to_existing" {
+  count                = length(var.existing_instance_ids)
+  instance_id          = var.existing_instance_ids[count.index]
+  iam_instance_profile = aws_iam_instance_profile.ec2_ssm.name
+}
+
+# Interface endpoints for SSM, SSMMessages, EC2Messages
+locals {
+  ssm_endpoints = [
+    "ssm",
+    "ssmmessages",
+    "ec2messages"
+  ]
+}
+
+resource "aws_vpc_endpoint" "ssm_endpoints" {
+  count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0
+  vpc_id              = var.vpc_id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.${local.ssm_endpoints[count.index]}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.private_subnet_ids
+  security_group_ids  = [var.endpoint_sg_id]
+  private_dns_enabled = true
+}
