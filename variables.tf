@@ -1,12 +1,17 @@
 variable "aws_region" {
-  default = "us-east-2"
-}
-
-variable "bucket_name" {
-  default = "ec2-manual-dashboard"
-}
-variable "environment" {
-  description = "Environment identifier (e.g., mypersonalAWS)"
   type        = string
+  description = "AWS region"
+  default     = "us-east-2"
 }
 
+variable "website_bucket_name" {
+  type        = string
+  description = "Optional: existing S3 bucket to reuse. Leave empty to create deterministic name."
+  default     = ""
+}
+
+variable "name_prefix" {
+  type        = string
+  description = "Prefix for resources (lambdas, etc.)"
+  default     = "ec2-control"
+}

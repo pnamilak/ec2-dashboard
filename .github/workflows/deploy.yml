@@ -3,80 +3,110 @@ name: Deploy EC2 Dashboard
 on:
   workflow_dispatch:
     inputs:
-      ENVIRONMENT:
-        description: 'Environment identifier'
+      AWS_REGION:
+        description: "AWS region"
+        default: "us-east-2"
         required: true
-        default: 'mypersonalAWS'
-
-      REGION:
-        description: 'AWS region'
+      STATE_BUCKET:
+        description: "Terraform state bucket (pre-created)"
         required: true
-        default: 'us-east-2'
-
-      BUCKET_NAME:
-        description: 'S3 bucket name (must be globally unique)'
+      STATE_KEY:
+        description: "Terraform state key"
+        default: "ec2-dashboard/terraform.tfstate"
         required: true
-        default: 'pnamilak'
-
-      ACTION:
-        description: 'Select Terraform action'
+      STATE_DDB_TABLE:
+        description: "Terraform lock table"
         required: true
-        type: choice
-        default: 'apply'
-        options:
-          - plan
-          - apply
-          - destroy
+      WEBSITE_BUCKET_NAME:
+        description: "Optional existing website bucket to reuse; leave blank to create deterministic name"
+        required: false
+        default: ""
 
 jobs:
-  terraform:
-    name: Terraform ${{ github.event.inputs.ACTION }}
+  apply:
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.ENVIRONMENT }} 
-
+    env:
+      AWS_REGION: ${{ inputs.AWS_REGION }}
+      TF_IN_AUTOMATION: "true"
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.5.0
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ github.event.inputs.REGION }}
+          aws-region: ${{ inputs.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: ec2-dashboard-deploy
 
-      - name: Generate terraform.auto.tfvars
+      - name: Zip lambda
         run: |
-          echo "aws_region = \"${{ github.event.inputs.REGION }}\"" >> terraform.auto.tfvars
-          echo "bucket_name = \"${{ github.event.inputs.BUCKET_NAME }}\"" >> terraform.auto.tfvars
-          echo "environment = \"${{ github.event.inputs.ENVIRONMENT }}\"" >> terraform.auto.tfvars
+          rm -f lambda_payload.zip || true
+          cd lambda
+          zip -r ../lambda_payload.zip .
+          cd ..
 
-      - name: Remove previous .terraform folder
-        run: rm -rf .terraform
-      - name: Terraform Init with Backend
+      - name: Terraform Init
         run: |
           terraform init \
-            -backend-config="bucket=tfstate-pnamilak" \
-            -backend-config="key=state/terraform.tfstate" \
-            -backend-config="region=${{ github.event.inputs.REGION }}" \
-            -backend-config="dynamodb_table=terraform-ec2-dashboard-lock" \
+            -backend-config="bucket=${{ inputs.STATE_BUCKET }}" \
+            -backend-config="key=${{ inputs.STATE_KEY }}" \
+            -backend-config="region=${{ inputs.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ inputs.STATE_DDB_TABLE }}" \
             -backend-config="encrypt=true"
 
-      - name: Terraform Apply/Destroy
+      - name: Preflight import/reuse existing resources
+        shell: bash
+        env:
+          WEBSITE_BUCKET_NAME: ${{ inputs.WEBSITE_BUCKET_NAME }}
         run: |
-          case "${{ github.event.inputs.ACTION }}" in
-            "plan")
-              terraform plan
-              ;;
-            "apply")
-              terraform apply -auto-approve
-              ;;
-            "destroy")
-              terraform destroy -auto-approve
-              ;;
-          esac
+          set -euo pipefail
+
+          # export TF vars
+          if [[ -n "${WEBSITE_BUCKET_NAME}" ]]; then
+            echo "Using provided bucket: ${WEBSITE_BUCKET_NAME}"
+            echo "TF_VAR_website_bucket_name=${WEBSITE_BUCKET_NAME}" >> $GITHUB_ENV
+          else
+            # compute deterministic bucket name (must match main.tf)
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            DET_BUCKET="ec2-dashboard-${ACCOUNT_ID}-${AWS_REGION}"
+            echo "TF_VAR_website_bucket_name=${DET_BUCKET}" >> $GITHUB_ENV
+          fi
+
+          # re-source to load TF_VAR_website_bucket_name
+          source $GITHUB_ENV
+          echo "Bucket for frontend = ${TF_VAR_website_bucket_name}"
+
+          # If bucket exists and we own it, import into state
+          if aws s3api head-bucket --bucket "${TF_VAR_website_bucket_name}" 2>/dev/null; then
+            echo "Bucket exists; importing into Terraform state..."
+            terraform import -no-color aws_s3_bucket.frontend "${TF_VAR_website_bucket_name}" || true
+            terraform import -no-color aws_s3_bucket_website_configuration.frontend "${TF_VAR_website_bucket_name}" || true
+            terraform import -no-color aws_s3_bucket_public_access_block.frontend "${TF_VAR_website_bucket_name}" || true
+          else
+            echo "Bucket does not exist; Terraform will create it."
+          fi
+
+          # If Lambdas exist already, import them
+          if aws lambda get-function --function-name "ec2-control-handler" >/dev/null 2>&1; then
+            echo "Importing existing lambda ec2-control-handler"
+            terraform import -no-color aws_lambda_function.ec2_handler "ec2-control-handler" || true
+          fi
+
+          if aws lambda get-function --function-name "ec2-control-authorizer" >/dev/null 2>&1; then
+            echo "Importing existing lambda ec2-control-authorizer"
+            terraform import -no-color aws_lambda_function.authorizer "ec2-control-authorizer" || true
+          fi
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve \
+              -var="aws_region=${{ inputs.AWS_REGION }}" \
+              -var="website_bucket_name=${{ env.TF_VAR_website_bucket_name }}"
+
+      - name: Show outputs
+        run: terraform output -json
+
+  # Optional: destroy job you can trigger manually by re-running workflow with "Run workflow" > "Enable debug logging" and editing below
+  # (or create a separate workflow for destroy)
