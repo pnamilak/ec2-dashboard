@@ -153,12 +153,12 @@
       <label for="env">Select Environment</label>
       <select id="env" onchange="fetchInstances()">
         <option value="">-- Choose --</option>
-        <option>PRQA1</option>
-        <option>PRQA2</option>
-        <option>PRQA3</option>
-        <option>PRQA6</option>
-        <option>PNQA1</option>
-        <option>AVQA1</option>
+        <option>NAQA1</option>
+        <option>NAQA2</option>
+        <option>NAQA3</option>
+        <option>NAQA6</option>
+        <option>APQA1</option>
+        <option>EUQA1</option>
       </select>
 
       <table id="instTable">
