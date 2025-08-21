@@ -13,3 +13,13 @@ variable "environment" {
   type        = string
 }
 
+variable "existing_instance_ids" {
+  description = "Attach SSM instance profile to these existing EC2 instance IDs (optional)."
+  type        = list(string)
+  default     = []
+}
+
+variable "create_ssm_endpoints"  { type = bool        default = false }
+variable "vpc_id"                { type = string      default = null }
+variable "private_subnet_ids"    { type = list(string) default = [] }
+variable "endpoint_sg_id"        { type = string      default = null }
