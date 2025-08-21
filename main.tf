@@ -4,6 +4,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = ">= 2.4.0"
+    }
+    template = {
+      source  = "hashicorp/template"
+      version = ">= 2.2.0"
+    }
   }
 }
 
@@ -17,11 +25,9 @@ data "aws_region" "current" {}
 ##########################
 # Bucket name resolution
 ##########################
-# If bucket_name is empty, generate a unique one to avoid 409 conflicts
 locals {
-  resolved_bucket_name = var.bucket_name != "" ?
-    var.bucket_name :
-    "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  # Keep ternary on one line to avoid parse errors
+  resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
 }
 
 ##########################
@@ -53,18 +59,14 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [
-      {
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = ["s3:GetObject"],
-        Resource  = "${aws_s3_bucket.frontend.arn}/*"
-      }
-    ]
+    Statement = [{
+      Effect    = "Allow",
+      Principal = "*",
+      Action    = ["s3:GetObject"],
+      Resource  = "${aws_s3_bucket.frontend.arn}/*"
+    }]
   })
-  depends_on = [
-    aws_s3_bucket_public_access_block.frontend
-  ]
+  depends_on = [aws_s3_bucket_public_access_block.frontend]
 }
 
 ##########################
@@ -203,7 +205,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2" {
   policy_arn = aws_iam_policy.ec2_control_policy.arn
 }
 
-# If authorizer reads SSM parameters for auth
+# If authorizer reads SSM parameters for auth (e.g., /ec2-auth/*)
 resource "aws_iam_policy" "ssm_read_auth" {
   name_prefix = "ssm-read-auth-params-"
   policy = jsonencode({
@@ -268,8 +270,7 @@ resource "aws_lambda_permission" "apigw_handler" {
 # HTML → S3 (templated)
 ##########################
 data "template_file" "html" {
-  template = file("${path.module}/html/index.html.tpl")
-
+  template = file("${path.module}/index.html.tpl")
   vars = {
     api_url = aws_apigatewayv2_stage.default.invoke_url
   }
@@ -317,11 +318,7 @@ resource "aws_iam_instance_profile_association" "attach_ssm_to_existing" {
 
 # (Optional) SSM VPC Interface Endpoints for private subnets
 locals {
-  ssm_endpoints = [
-    "ssm",
-    "ssmmessages",
-    "ec2messages"
-  ]
+  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
 }
 
 resource "aws_vpc_endpoint" "ssm_endpoints" {
@@ -330,6 +327,6 @@ resource "aws_vpc_endpoint" "ssm_endpoints" {
   service_name        = "com.amazonaws.${data.aws_region.current.name}.${local.ssm_endpoints[count.index]}"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.endpoint_sg_id]
+  security_group_ids  = var.endpoint_sg_id != null ? [var.endpoint_sg_id] : []
   private_dns_enabled = true
 }

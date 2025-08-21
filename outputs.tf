@@ -1,9 +1,12 @@
 output "s3_website_url" {
-  value = "http://${aws_s3_bucket.frontend.bucket}.s3-website.${var.aws_region}.amazonaws.com/"
+  value       = "http://${aws_s3_bucket.frontend.bucket}.s3-website.${var.aws_region}.amazonaws.com/"
+  description = "Public S3 static website URL"
 }
 
+# Keep this as your simple API endpoint (no stage)
 output "api_gateway_url" {
-  value = aws_apigatewayv2_api.api.api_endpoint
+  value       = aws_apigatewayv2_api.api.api_endpoint
+  description = "Base API endpoint (without stage)"
 }
 
 output "lambda_handler_name" {
