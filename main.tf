@@ -12,12 +12,10 @@ provider "aws" {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 locals {
-  # If bucket_name is provided, use it. Otherwise build a unique, deterministic name.
-  resolved_bucket_name = var.bucket_name != "" ?
-    var.bucket_name :
-    "ec2-manual-dashboard-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+  resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-manual-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
 }
 
 
@@ -25,9 +23,10 @@ locals {
 # S3 Bucket for Frontend
 ##########################
 resource "aws_s3_bucket" "frontend" {
-  bucket        = local.resolved_bucket_name   # <-- changed (was var.bucket_name)
+  bucket        = local.resolved_bucket_name
   force_destroy = true
 }
+
 
 resource "aws_s3_bucket_website_configuration" "frontend" {
   bucket = aws_s3_bucket.frontend.id

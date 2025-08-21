@@ -4,8 +4,8 @@ variable "aws_region" {
 
 variable "bucket_name" {
   type        = string
-  description = "Optional. Frontend S3 bucket name. Leave empty to auto-generate a unique name."
-  default     = ""   # <-- changed from "ec2-manual-dashboard"
+  description = "Optional. Frontend S3 bucket name. Leave empty to auto-generate a unique one."
+  default     = ""
 }
 
 variable "environment" {
