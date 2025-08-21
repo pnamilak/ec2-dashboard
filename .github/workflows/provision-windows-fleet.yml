@@ -35,20 +35,10 @@ on:
         description: "Root volume size (GiB)"
         type: number
         default: 50
-      create_ssm_endpoints:
-        description: "Create VPC endpoints for SSM?"
-        type: boolean
-        default: false
-      vpc_id:
-        description: "(If endpoints) VPC ID"
-        type: string
-        default: ""
-      private_subnet_ids_csv:
-        description: "(If endpoints) comma-separated private subnet IDs"
-        type: string
-        default: ""
-      endpoint_sg_id:
-        description: "(If endpoints) security group for endpoints"
+      endpoints_json:
+        description: >-
+          Optional JSON for SSM VPC endpoints:
+          {"create_ssm_endpoints":true,"vpc_id":"vpc-...","private_subnet_ids_csv":"subnet-a,subnet-b","endpoint_sg_id":"sg-..."}
         type: string
         default: ""
 
@@ -57,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: fleet
+        working-directory: fleet   # <--- change if your folder is elsewhere
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -71,9 +61,9 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-east-2
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }} # or set AWS_ACCESS_KEY_ID/SECRET in secrets instead
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           role-session-name: gh-fleet
-        # If using keys instead of a role, set:
+        # Or use keys instead of a role:
         # env:
         #   AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
         #   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -81,6 +71,27 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
+
+      - name: Parse optional endpoints config
+        id: ep
+        shell: bash
+        run: |
+          J='${{ inputs.endpoints_json }}'
+          if [ -z "$J" ]; then
+            echo "create=false"        >> $GITHUB_OUTPUT
+            echo "vpc_id="             >> $GITHUB_OUTPUT
+            echo "subnets="            >> $GITHUB_OUTPUT
+            echo "sg_id="              >> $GITHUB_OUTPUT
+          else
+            CREATE=$(echo "$J" | jq -r '.create_ssm_endpoints // false')
+            VPCID=$(echo "$J" | jq -r '.vpc_id // ""')
+            SUBS=$(echo "$J" | jq -r '.private_subnet_ids_csv // ""')
+            SGID=$(echo "$J" | jq -r '.endpoint_sg_id // ""')
+            echo "create=$CREATE"      >> $GITHUB_OUTPUT
+            echo "vpc_id=$VPCID"       >> $GITHUB_OUTPUT
+            echo "subnets=$SUBS"       >> $GITHUB_OUTPUT
+            echo "sg_id=$SGID"         >> $GITHUB_OUTPUT
+          fi
 
       - name: Terraform Apply
         run: |
@@ -93,10 +104,10 @@ jobs:
             -var environment="${{ inputs.environment }}" \
             -var instance_type="${{ inputs.instance_type }}" \
             -var root_volume_size=${{ inputs.root_volume_size }} \
-            -var create_ssm_endpoints=${{ inputs.create_ssm_endpoints }} \
-            -var vpc_id="${{ inputs.vpc_id }}" \
-            -var private_subnet_ids_csv="${{ inputs.private_subnet_ids_csv }}" \
-            -var endpoint_sg_id="${{ inputs.endpoint_sg_id }}"
+            -var create_ssm_endpoints=${{ steps.ep.outputs.create }} \
+            -var vpc_id="${{ steps.ep.outputs.vpc_id }}" \
+            -var private_subnet_ids_csv="${{ steps.ep.outputs.subnets }}" \
+            -var endpoint_sg_id="${{ steps.ep.outputs.sg_id }}"
 
       - name: Show Outputs
         run: |
