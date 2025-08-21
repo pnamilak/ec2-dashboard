@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      /* Vibrant, professional palette */
       --bg1:#0b1020; --bg2:#0a122b;
       --card:#0f172a; --card2:#0b1326;
       --text:#e5f0ff; --muted:#9db4d6;
@@ -19,8 +18,6 @@
       --shadow-sm: 0 8px 24px rgba(3,8,35,.35);
       --glow: 0 0 40px rgba(34,211,238,.25);
     }
-
-    /* Background with soft shapes */
     body{
       margin:0; min-height:100vh; color:var(--text);
       background:
@@ -36,10 +33,8 @@
         linear-gradient(#fff 1px, transparent 1px) 0 0/34px 34px;
       mix-blend-mode:overlay;
     }
-
     .container{ width:min(1200px, calc(100% - 40px)); margin:42px auto; }
 
-    /* Header */
     .hero{
       display:flex; align-items:center; justify-content:space-between; gap:16px;
       padding:18px 22px; border-radius:20px; background:linear-gradient(180deg, #0e1731, #0b1227);
@@ -52,9 +47,7 @@
       background: radial-gradient(closest-side, rgba(34,211,238,.16), transparent);
       filter: blur(1px);
     }
-    .brand{
-      display:flex; align-items:center; gap:12px;
-    }
+    .brand{ display:flex; align-items:center; gap:12px; }
     .logo{
       width:38px; height:38px; border-radius:10px;
       background: conic-gradient(from 220deg, var(--brand2), var(--brand1), var(--brand3), var(--brand2));
@@ -67,19 +60,16 @@
     }
     .subtitle{ color:var(--muted); font-size:14px; }
 
-    /* Card shells */
     .card{
       margin-top:18px; background:linear-gradient(180deg, var(--card), var(--card2));
       border:1px solid var(--border); border-radius:var(--radius);
       box-shadow: var(--shadow-lg); padding:22px;
     }
 
-    /* Login panel */
     #loginForm label{ display:block; font-weight:600; color:#b9c8e9; margin:12px 0 8px; }
     #loginForm input{
       width:100%; padding:12px 14px; border-radius:12px; border:1px solid #223055; background:#0d1a36; color:#eaf2ff;
-      outline:0; transition:.18s;
-      box-shadow: var(--shadow-sm);
+      outline:0; transition:.18s; box-shadow: var(--shadow-sm);
     }
     #loginForm input:focus{ border-color:#4f6cf7; box-shadow:var(--ring); }
 
@@ -92,11 +82,7 @@
     .btn:hover{ filter:brightness(1.03); }
     .btn:active{ transform:translateY(2px); }
 
-    /* Tabs */
-    .tabs{
-      display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px;
-      border-bottom:1px dashed var(--border); padding-bottom:12px;
-    }
+    .tabs{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; border-bottom:1px dashed var(--border); padding-bottom:12px; }
     .tab{
       padding:10px 14px; border-radius:12px; border:1px solid var(--border);
       background:#0f1c3a; color:#cfe6ff; cursor:pointer; font-weight:700; font-size:14px;
@@ -109,7 +95,6 @@
       border-color: transparent;
     }
 
-    /* Table */
     table{ width:100%; border-collapse:separate; border-spacing:0; margin-top:6px; }
     thead th{
       text-align:left; font-size:14px; color:#cfe0ff; background:#0a1837;
@@ -117,9 +102,7 @@
     }
     tbody td{ padding:12px 14px; border-bottom:1px dashed #213055; font-size:15px; color:#eaf2ff; }
 
-    .badge{
-      display:inline-block; padding:6px 10px; border-radius:999px; font-weight:800; font-size:12px;
-    }
+    .badge{ display:inline-block; padding:6px 10px; border-radius:999px; font-weight:800; font-size:12px; }
     .ok    { background:rgba(34,197,94,.18); color:#9af0b7; border:1px solid rgba(34,197,94,.35); }
     .stop  { background:rgba(239,68,68,.18); color:#ffb2b2; border:1px solid rgba(239,68,68,.32); }
     .pend  { background:rgba(245,158,11,.18); color:#ffd79a; border:1px solid rgba(245,158,11,.35); }
@@ -132,16 +115,11 @@
     .status-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
     .dot-ok{ background:#22c55e; } .dot-stop{ background:#ef4444; } .dot-pend{ background:#f59e0b; }
 
-    /* Footer */
-    .foot{
-      margin-top:14px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.8;
-    }
+    .foot{ margin-top:14px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.8; }
   </style>
 </head>
 <body>
   <div class="container">
-
-    <!-- Top brand strip -->
     <div class="hero">
       <div class="brand">
         <div class="logo"></div>
@@ -152,7 +130,6 @@
       </div>
     </div>
 
-    <!-- Login -->
     <form class="card" id="loginForm" onsubmit="login();return false;">
       <label>Username</label>
       <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
@@ -164,12 +141,9 @@
       </div>
     </form>
 
-    <!-- Dashboard -->
     <div id="dashboard" class="card hidden">
-      <!-- Tabs -->
       <div class="tabs" id="envTabs"></div>
 
-      <!-- Table -->
       <table id="instTable">
         <thead>
           <tr>
@@ -187,7 +161,7 @@
   </div>
 
   <script>
-    // Keep the API base exactly as your Terraform template injects it:
+    // Terraform should only substitute this one:
     const API_ENDPOINT = "${api_url}/instances";
 
     const ENVIRONMENTS = ["PRQA1","PRQA2","PRQA3","PRQA6","PNQA1","AVQA1"];
@@ -196,7 +170,7 @@
 
     document.addEventListener("DOMContentLoaded", () => {
       const dash = document.getElementById("dashboard");
-      if (dash) dash.classList.add("hidden");  // ensure hidden until login
+      if (dash) dash.classList.add("hidden");
     });
 
     function login(){
@@ -208,13 +182,12 @@
       }
       encodedToken = btoa(u + ":" + p);
 
-      // Remove login card, show dashboard
       document.getElementById("loginForm").remove();
       const dash = document.getElementById("dashboard");
       dash.classList.remove("hidden");
 
       buildTabs();
-      setActiveEnv(ENVIRONMENTS[0]); // default first tab
+      setActiveEnv(ENVIRONMENTS[0]);
     }
 
     function buildTabs(){
@@ -245,10 +218,10 @@
 
     async function fetchInstances(){
       const tbody = document.querySelector("#instTable tbody");
-      tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">Loading ${activeEnv}…</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">Loading $${activeEnv}…</td></tr>`;
 
       try{
-        const res = await fetch(`${API_ENDPOINT}?action=list&env=${encodeURIComponent(activeEnv)}`, {
+        const res = await fetch(`$${API_ENDPOINT}?action=list&env=$${encodeURIComponent(activeEnv)}`, {
           headers: { "Authorization": encodedToken }
         });
         const data = await res.json();
@@ -257,7 +230,6 @@
         data.forEach(inst => {
           const row = document.createElement("tr");
 
-          // status decorations
           const state = (inst.State || "").toLowerCase();
           const dot  = state === "running" ? "dot-ok" : (state.includes("pending") ? "dot-pend" : "dot-stop");
           const pill = state === "running" ? "ok" : (state.includes("pending") ? "pend" : "stop");
@@ -265,29 +237,28 @@
           const actionClass = state === "running" ? "btn btn-stop" : "btn btn-start";
 
           row.innerHTML =
-            `<td>${inst.Name || ""}</td>` +
-            `<td>${inst.InstanceId || ""}</td>` +
-            `<td><span class="status-dot ${dot}"></span><span class="badge ${pill}">${inst.State}</span></td>` +
-            `<td class="row-actions"><button class="${actionClass}" onclick="toggleInstance('${inst.InstanceId}','${inst.State}')">${actionText}</button></td>`;
+            `<td>$${inst.Name || ""}</td>` +
+            `<td>$${inst.InstanceId || ""}</td>` +
+            `<td><span class="status-dot ${dot}"></span><span class="badge ${pill}">$${inst.State}</span></td>` +
+            `<td class="row-actions"><button class="${actionClass}" onclick="toggleInstance('$${inst.InstanceId}','$${inst.State}')">${actionText}</button></td>`;
 
           tbody.appendChild(row);
         });
 
         if(data.length === 0){
-          tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">No instances found for ${activeEnv}.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#9db4d6;">No instances found for $${activeEnv}.</td></tr>`;
         }
       }catch(err){
-        tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#ffb2b2;">Failed to load instances for ${activeEnv}.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="4" style="padding:18px;color:#ffb2b2;">Failed to load instances for $${activeEnv}.</td></tr>`;
       }
     }
 
     async function toggleInstance(id, state){
       const action = state.toLowerCase() === "running" ? "stop" : "start";
       try{
-        await fetch(`${API_ENDPOINT}?action=${action}&instance_id=${encodeURIComponent(id)}`, {
+        await fetch(`$${API_ENDPOINT}?action=$${action}&instance_id=$${encodeURIComponent(id)}`, {
           headers: { "Authorization": encodedToken }
         });
-        // brief delay to let status settle, then refresh
         setTimeout(fetchInstances, 900);
       }catch(err){
         alert("Action failed: " + (err?.message || err));
