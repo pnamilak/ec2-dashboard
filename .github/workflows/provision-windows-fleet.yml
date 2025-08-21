@@ -1,0 +1,110 @@
+name: Provision Windows Fleet
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_prefix:
+        description: "Name prefix (e.g. naqa1-win2022-)"
+        type: string
+        default: "naqa1-win2022-"
+      instance_count:
+        description: "How many instances"
+        type: number
+        default: 10
+      environment:
+        description: "Environment tag"
+        type: string
+        default: "NAQA1"
+      key_name:
+        description: "Existing EC2 key pair name"
+        type: string
+        required: true
+      subnet_id:
+        description: "Subnet ID"
+        type: string
+        required: true
+      security_group_ids_csv:
+        description: "Comma-separated SG IDs (optional)"
+        type: string
+        default: ""
+      instance_type:
+        description: "EC2 type"
+        type: string
+        default: "t2.medium"
+      root_volume_size:
+        description: "Root volume size (GiB)"
+        type: number
+        default: 50
+      create_ssm_endpoints:
+        description: "Create VPC endpoints for SSM?"
+        type: boolean
+        default: false
+      vpc_id:
+        description: "(If endpoints) VPC ID"
+        type: string
+        default: ""
+      private_subnet_ids_csv:
+        description: "(If endpoints) comma-separated private subnet IDs"
+        type: string
+        default: ""
+      endpoint_sg_id:
+        description: "(If endpoints) security group for endpoints"
+        type: string
+        default: ""
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fleet
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-2
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }} # or set AWS_ACCESS_KEY_ID/SECRET in secrets instead
+          role-session-name: gh-fleet
+        # If using keys instead of a role, set:
+        # env:
+        #   AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+        #   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        #   AWS_REGION:            us-east-2
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: |
+          terraform apply -auto-approve \
+            -var key_name="${{ inputs.key_name }}" \
+            -var subnet_id="${{ inputs.subnet_id }}" \
+            -var security_group_ids_csv="${{ inputs.security_group_ids_csv }}" \
+            -var instance_prefix="${{ inputs.instance_prefix }}" \
+            -var instance_count=${{ inputs.instance_count }} \
+            -var environment="${{ inputs.environment }}" \
+            -var instance_type="${{ inputs.instance_type }}" \
+            -var root_volume_size=${{ inputs.root_volume_size }} \
+            -var create_ssm_endpoints=${{ inputs.create_ssm_endpoints }} \
+            -var vpc_id="${{ inputs.vpc_id }}" \
+            -var private_subnet_ids_csv="${{ inputs.private_subnet_ids_csv }}" \
+            -var endpoint_sg_id="${{ inputs.endpoint_sg_id }}"
+
+      - name: Show Outputs
+        run: |
+          terraform output -json > tf_outputs.json
+          echo "## Windows Fleet" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Names → IDs**" >> $GITHUB_STEP_SUMMARY
+          jq -r '.name_to_id | to_entries[] | "- \(.key): `\(.value)`"' tf_outputs.json >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Public DNS**" >> $GITHUB_STEP_SUMMARY
+          jq -r '.public_dns[] | "- \(. )"' tf_outputs.json >> $GITHUB_STEP_SUMMARY
