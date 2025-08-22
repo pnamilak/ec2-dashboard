@@ -157,7 +157,7 @@ resource "aws_apigatewayv2_integration" "lambda" {
   integration_method     = "POST"
   payload_format_version = "2.0"
 
-  integration_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.ec2_handler.invoke_arn}/invocations"
+  integration_uri = aws_lambda_function.ec2_handler.invoke_arn
 }
 
 resource "aws_apigatewayv2_route" "instances_route" {
