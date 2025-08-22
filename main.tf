@@ -309,9 +309,6 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
 # that match state/tag filters
 #############################################
 
-# Region (if you don't already have it in this file)
-data "aws_region" "current" {}
-
 # Find instances to target (running by default, plus optional tag filters)
 data "aws_instances" "ssm_attach_targets" {
   filter {
