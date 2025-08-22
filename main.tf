@@ -148,8 +148,13 @@ resource "aws_apigatewayv2_authorizer" "lambda_auth" {
   enable_simple_responses           = true
   identity_sources                  = ["$request.header.Authorization"]
 
-  authorizer_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.invoke_arn}/invocations"
+  # Use the FUNCTION ARN here (not invoke_arn)
+  authorizer_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
+
+  # (Optional) ensure the Lambda permission exists before creating the authorizer
+  depends_on = [aws_lambda_permission.apigw_auth]
 }
+
 
 resource "aws_apigatewayv2_integration" "lambda" {
   api_id                 = aws_apigatewayv2_api.api.id
