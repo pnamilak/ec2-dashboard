@@ -20,3 +20,8 @@ output "authorizer_lambda_name" {
 output "lambda_role_name" {
   value = aws_iam_role.lambda_role.name
 }
+
+output "ec2_ssm_instance_profile_name" {
+  description = "Name of the SSM instance profile created for EC2."
+  value       = aws_iam_instance_profile.ec2_ssm_profile.name
+}

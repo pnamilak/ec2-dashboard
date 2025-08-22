@@ -275,6 +275,74 @@ resource "aws_lambda_permission" "apigw_auth" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
 }
 
+#############################################
+# SSM role + instance profile for EC2
+#############################################
+
+# Role EC2 will assume
+resource "aws_iam_role" "ec2_ssm_role" {
+  name_prefix = "ec2-ssm-role-"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action   = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Attach AmazonSSMManagedInstanceCore
+resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance profile EC2 uses
+resource "aws_iam_instance_profile" "ec2_ssm_profile" {
+  name_prefix = "ec2-ssm-instance-profile-"
+  role        = aws_iam_role.ec2_ssm_role.name
+}
+
+#############################################
+# (Optional) Attach the profile to existing EC2
+# that match state/tag filters
+#############################################
+
+# Region (if you don't already have it in this file)
+data "aws_region" "current" {}
+
+# Find instances to target (running by default, plus optional tag filters)
+data "aws_instances" "ssm_attach_targets" {
+  filter {
+    name   = "instance-state-name"
+    values = var.instance_state_filter
+  }
+
+  dynamic "filter" {
+    for_each = var.target_tag_selector
+    content {
+      name   = "tag:${filter.key}"
+      values = [filter.value]
+    }
+  }
+}
+
+# Use the AWS CLI to associate the profile to each target instance
+# (GitHub ubuntu runners include AWS CLI; no changes to your existing workflow needed)
+resource "null_resource" "associate_ssm_profile" {
+  for_each = var.auto_attach_ssm_profile ? toset(data.aws_instances.ssm_attach_targets.ids) : []
+
+  triggers = {
+    instance_id = each.value
+    profile     = aws_iam_instance_profile.ec2_ssm_profile.name
+  }
+
+  provisioner "local-exec" {
+    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --instance-id ${each.value} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile.name} || true"
+  }
+}
+
 resource "aws_lambda_permission" "apigw_handler" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
