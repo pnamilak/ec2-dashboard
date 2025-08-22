@@ -23,10 +23,21 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 ##########################
+# Standardized source paths
+##########################
+# Place your files like this:
+#   lambda/handler.py
+#   lambda/authorizer.py
+#   html/index.html.tpl
+locals {
+  lambda_dir = "${path.module}/lambda"
+  web_dir    = "${path.module}/html"
+}
+
+##########################
 # Bucket name resolution
 ##########################
 locals {
-  # Keep ternary on one line to avoid parse errors
   resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
 }
 
@@ -72,17 +83,18 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 ##########################
 # Package Lambda Code
 ##########################
+# Zips the two Python files from ./lambda
 data "archive_file" "lambda_zip" {
   type        = "zip"
   output_path = "${path.module}/lambda_payload.zip"
 
   source {
-    content  = file("${path.module}/handler.py")
+    content  = file("${local.lambda_dir}/handler.py")
     filename = "handler.py"
   }
 
   source {
-    content  = file("${path.module}/authorizer.py")
+    content  = file("${local.lambda_dir}/authorizer.py")
     filename = "authorizer.py"
   }
 }
@@ -223,7 +235,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ssm" {
   policy_arn = aws_iam_policy.ssm_read_auth.arn
 }
 
-# ✅ Single, consolidated SSM command policy for Lambda
+# ✅ SSM command permissions for service controls
 resource "aws_iam_policy" "lambda_ssm_commands" {
   name_prefix = "lambda-ssm-commands-"
   policy = jsonencode({
@@ -270,7 +282,7 @@ resource "aws_lambda_permission" "apigw_handler" {
 # HTML → S3 (templated)
 ##########################
 data "template_file" "html" {
-  template = file("${path.module}/index.html.tpl")
+  template = file("${local.web_dir}/index.html.tpl")
   vars = {
     api_url = aws_apigatewayv2_stage.default.invoke_url
   }
@@ -284,39 +296,8 @@ resource "aws_s3_object" "index_html" {
 }
 
 ##########################
-# EC2 SSM (optional helpers)
+# (Optional) SSM VPC Interface Endpoints
 ##########################
-# Role + profile for EC2 to be SSM-managed (attach to existing with association below)
-resource "aws_iam_role" "ec2_ssm_role" {
-  name_prefix = "ec2-ssm-core-"
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Principal = { Service = "ec2.amazonaws.com" },
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ec2_ssm" {
-  name_prefix = "ec2-ssm-"
-  role        = aws_iam_role.ec2_ssm_role.name
-}
-
-# Auto-attach the profile to any existing instance IDs you pass via var.existing_instance_ids
-resource "aws_iam_instance_profile_association" "attach_ssm_to_existing" {
-  count                = length(var.existing_instance_ids)
-  instance_id          = var.existing_instance_ids[count.index]
-  iam_instance_profile = aws_iam_instance_profile.ec2_ssm.name
-}
-
-# (Optional) SSM VPC Interface Endpoints for private subnets
 locals {
   ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
 }

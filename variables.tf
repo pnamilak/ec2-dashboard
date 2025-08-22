@@ -16,7 +16,7 @@ variable "environment" {
 }
 
 variable "existing_instance_ids" {
-  description = "Attach SSM instance profile to these existing EC2 instance IDs (optional)."
+  description = "Attach SSM instance profile to these existing EC2 instance IDs (optional, via CLI not TF)."
   type        = list(string)
   default     = []
 }
