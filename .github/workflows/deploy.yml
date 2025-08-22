@@ -28,6 +28,10 @@ on:
           - apply
           - destroy
 
+env:
+  AWS_MAX_ATTEMPTS: 10
+
+
 jobs:
   terraform:
     name: Terraform ${{ github.event.inputs.ACTION }}

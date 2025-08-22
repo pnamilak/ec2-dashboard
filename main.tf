@@ -4,6 +4,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = ">= 2.4.0"
+    }
+    template = {
+      source  = "hashicorp/template"
+      version = ">= 2.2.0"
+    }
   }
 }
 
@@ -14,10 +22,24 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+##########################
+# Standardized source paths
+##########################
+# Place your files like this:
+#   lambda/handler.py
+#   lambda/authorizer.py
+#   html/index.html.tpl
 locals {
-  resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-manual-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+  lambda_dir = "${path.module}/lambda"
+  web_dir    = "${path.module}/html"
 }
 
+##########################
+# Bucket name resolution
+##########################
+locals {
+  resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+}
 
 ##########################
 # S3 Bucket for Frontend
@@ -26,7 +48,6 @@ resource "aws_s3_bucket" "frontend" {
   bucket        = local.resolved_bucket_name
   force_destroy = true
 }
-
 
 resource "aws_s3_bucket_website_configuration" "frontend" {
   bucket = aws_s3_bucket.frontend.id
@@ -37,8 +58,7 @@ resource "aws_s3_bucket_website_configuration" "frontend" {
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
+  bucket                  = aws_s3_bucket.frontend.id
   block_public_acls       = false
   block_public_policy     = false
   ignore_public_acls      = false
@@ -50,23 +70,224 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [
-      {
-        Effect    = "Allow",
-        Principal = "*",
-        Action    = ["s3:GetObject"],
-        Resource  = "${aws_s3_bucket.frontend.arn}/*"
-      }
-    ]
+    Statement = [{
+      Effect    = "Allow",
+      Principal = "*",
+      Action    = ["s3:GetObject"],
+      Resource  = "${aws_s3_bucket.frontend.arn}/*"
+    }]
   })
-  depends_on = [
-    aws_s3_bucket_public_access_block.frontend
-  ]
+  depends_on = [aws_s3_bucket_public_access_block.frontend]
 }
 
-data "template_file" "html" {
-  template = file("${path.module}/html/index.html.tpl")
+##########################
+# Package Lambda Code
+##########################
+# Zips the two Python files from ./lambda
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  output_path = "${path.module}/lambda_payload.zip"
 
+  source {
+    content  = file("${local.lambda_dir}/handler.py")
+    filename = "handler.py"
+  }
+
+  source {
+    content  = file("${local.lambda_dir}/authorizer.py")
+    filename = "authorizer.py"
+  }
+}
+
+##########################
+# API Gateway (HTTP API v2)
+##########################
+resource "aws_apigatewayv2_api" "api" {
+  name                       = "ec2-control-api"
+  protocol_type              = "HTTP"
+  route_selection_expression = "$request.method $request.path"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["GET", "OPTIONS"]
+    allow_headers = ["Authorization", "Content-Type"]
+  }
+}
+
+resource "aws_lambda_function" "authorizer" {
+  function_name = "ec2-control-authorizer"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "authorizer.lambda_handler"
+  runtime       = "python3.9"
+
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+  timeout     = 5
+  memory_size = 128
+}
+
+resource "aws_lambda_function" "ec2_handler" {
+  function_name = "ec2-control-handler"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "handler.lambda_handler"
+  runtime       = "python3.9"
+
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+
+  timeout     = 10
+  memory_size = 128
+}
+
+resource "aws_apigatewayv2_authorizer" "lambda_auth" {
+  api_id                            = aws_apigatewayv2_api.api.id
+  name                              = "lambda-auth"
+  authorizer_type                   = "REQUEST"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  identity_sources                  = ["$request.header.Authorization"]
+
+  # Use the FUNCTION ARN here (not invoke_arn)
+  authorizer_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
+
+  # (Optional) ensure the Lambda permission exists before creating the authorizer
+  depends_on = [aws_lambda_permission.apigw_auth]
+}
+
+
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+
+  integration_uri = aws_lambda_function.ec2_handler.invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "instances_route" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "GET /instances"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "prod"
+  auto_deploy = true
+}
+
+##########################
+# IAM for Lambda
+##########################
+resource "aws_iam_role" "lambda_role" {
+  name_prefix = "ec2-control-lambda-role-"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Action    = "sts:AssumeRole",
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+# Basic logging
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# EC2 Describe/Start/Stop
+resource "aws_iam_policy" "ec2_control_policy" {
+  name_prefix = "ec2-control-policy-"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = [
+        "ec2:DescribeInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances"
+      ],
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ec2" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.ec2_control_policy.arn
+}
+
+# If authorizer reads SSM parameters for auth (e.g., /ec2-auth/*)
+resource "aws_iam_policy" "ssm_read_auth" {
+  name_prefix = "ssm-read-auth-params-"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
+      Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ssm" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.ssm_read_auth.arn
+}
+
+# ✅ SSM command permissions for service controls
+resource "aws_iam_policy" "lambda_ssm_commands" {
+  name_prefix = "lambda-ssm-commands-"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect   = "Allow",
+      Action   = [
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations",
+        "ssm:CancelCommand"
+      ],
+      Resource = "*"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
+}
+
+##########################
+# Lambda invoke permissions from API Gateway
+##########################
+resource "aws_lambda_permission" "apigw_auth" {
+  statement_id  = "AllowExecutionFromAPIGatewayAuth"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
+}
+
+resource "aws_lambda_permission" "apigw_handler" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ec2_handler.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}
+
+##########################
+# HTML → S3 (templated)
+##########################
+data "template_file" "html" {
+  template = file("${local.web_dir}/index.html.tpl")
   vars = {
     api_url = aws_apigatewayv2_stage.default.invoke_url
   }
@@ -79,254 +300,11 @@ resource "aws_s3_object" "index_html" {
   content_type = "text/html"
 }
 
-##########################################
-# IAM Role and Policies for Lambda Access
-##########################################
-resource "aws_iam_role" "lambda_role" {
-  name_prefix = "ec2-control-lambda-role-"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Principal = { Service = "lambda.amazonaws.com" },
-      Action = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_policy" "ec2_control_policy" {
-  name_prefix = "ec2-control-policy-"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect   = "Allow",
-        Action   = ["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"],
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_policy" "ssm_read_auth" {
-  name_prefix = "ssm-read-auth-params-"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = ["ssm:GetParameter"],
-      Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ec2" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ec2_control_policy.arn
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ssm_read_auth.arn
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-#####################
-# Lambda Functions
-#####################
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  output_path = "${path.module}/lambda_payload.zip"
-  source_dir  = "${path.module}/lambda"
-}
-
-resource "aws_lambda_function" "ec2_handler" {
-  filename         = data.archive_file.lambda_zip.output_path
-  function_name    = "ec2-control-handler"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "handler.lambda_handler"
-  runtime          = "python3.9"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  timeout          = 10
-}
-
-resource "aws_lambda_function" "authorizer" {
-  filename         = data.archive_file.lambda_zip.output_path
-  function_name    = "ec2-control-authorizer"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "authorizer.lambda_handler"
-  runtime          = "python3.9"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  timeout          = 5
-}
-
-############################
-# API Gateway (HTTP API)
-############################
-resource "aws_apigatewayv2_api" "api" {
-  name          = "ec2-control-api"
-  protocol_type = "HTTP"
-
-  cors_configuration {
-    allow_origins  = ["*"]
-    allow_methods  = ["GET", "OPTIONS"]
-    allow_headers  = ["Authorization", "Content-Type"]
-    # optional:
-    # expose_headers = ["Content-Type"]
-    # max_age        = 3600
-  }
-}
-
-resource "aws_apigatewayv2_integration" "lambda" {
-  api_id                  = aws_apigatewayv2_api.api.id
-  integration_type        = "AWS_PROXY"
-  integration_uri         = aws_lambda_function.ec2_handler.invoke_arn
-  integration_method      = "POST"
-  payload_format_version  = "2.0"
-}
-
-resource "aws_apigatewayv2_authorizer" "lambda_auth" {
-  api_id                              = aws_apigatewayv2_api.api.id
-  authorizer_type                     = "REQUEST"
-  name                                = "lambda-auth"
-  authorizer_uri                      = aws_lambda_function.authorizer.invoke_arn
-  identity_sources                    = ["$request.header.Authorization"]
-  authorizer_payload_format_version   = "2.0"
-  enable_simple_responses             = true
-}
-
-resource "aws_apigatewayv2_route" "instances_route" {
-  api_id             = aws_apigatewayv2_api.api.id
-  route_key          = "GET /instances"
-  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-  authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
-  authorization_type = "CUSTOM" # Required to actually link the Lambda authorizer
-
-  depends_on = [
-    aws_lambda_permission.apigw_handler,
-    aws_lambda_permission.apigw_auth,
-    aws_apigatewayv2_authorizer.lambda_auth
-  ]
-}
-
-
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.api.id
-  name        = "prod"
-  auto_deploy = true
-
-  depends_on = [
-    aws_apigatewayv2_route.instances_route
-  ]
-}
-
-
-resource "aws_lambda_permission" "apigw_handler" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_handler.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
-}
-
-resource "aws_lambda_permission" "apigw_auth" {
-  statement_id  = "AllowExecutionFromAPIGatewayAuth"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.authorizer.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
-}
-
-# Allow Lambda to run SSM commands on instances
-resource "aws_iam_policy" "ssm_commands" {
-  name_prefix = "ssm-commands-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = ["ssm:SendCommand", "ssm:GetCommandInvocation"],
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ssm_commands.arn
-}
-
-# SSM command permissions for Lambda
-resource "aws_iam_policy" "lambda_ssm_commands" {
-  name_prefix = "lambda-ssm-commands-"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = [
-        "ssm:SendCommand",
-        "ssm:GetCommandInvocation",
-        "ssm:ListCommands",
-        "ssm:ListCommandInvocations",
-        "ssm:CancelCommand"
-      ]
-      Resource = "*"
-    }]
-  })
-}
-
-# Attach to your existing lambda role
-resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
-}
-
-# Role EC2 will assume
-resource "aws_iam_role" "ec2_ssm_role" {
-  name_prefix = "ec2-ssm-core-"
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-}
-
-# Attach AmazonSSMManagedInstanceCore to that role
-resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# Instance profile for EC2 (wraps the role)
-resource "aws_iam_instance_profile" "ec2_ssm" {
-  name_prefix = "ec2-ssm-"
-  role        = aws_iam_role.ec2_ssm_role.name
-}
-
-# OPTIONAL: Attach the profile to existing instances you list in var.existing_instance_ids
-# (This works even if those instances were not created by Terraform.)
-resource "aws_iam_instance_profile_association" "attach_ssm_to_existing" {
-  count                = length(var.existing_instance_ids)
-  instance_id          = var.existing_instance_ids[count.index]
-  iam_instance_profile = aws_iam_instance_profile.ec2_ssm.name
-}
-
-# Interface endpoints for SSM, SSMMessages, EC2Messages
+##########################
+# (Optional) SSM VPC Interface Endpoints
+##########################
 locals {
-  ssm_endpoints = [
-    "ssm",
-    "ssmmessages",
-    "ec2messages"
-  ]
+  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
 }
 
 resource "aws_vpc_endpoint" "ssm_endpoints" {
@@ -335,6 +313,6 @@ resource "aws_vpc_endpoint" "ssm_endpoints" {
   service_name        = "com.amazonaws.${data.aws_region.current.name}.${local.ssm_endpoints[count.index]}"
   vpc_endpoint_type   = "Interface"
   subnet_ids          = var.private_subnet_ids
-  security_group_ids  = [var.endpoint_sg_id]
+  security_group_ids  = var.endpoint_sg_id != null ? [var.endpoint_sg_id] : []
   private_dns_enabled = true
 }
