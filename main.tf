@@ -29,6 +29,7 @@ data "aws_region" "current" {}
 #   lambda/handler.py
 #   lambda/authorizer.py
 #   html/index.html.tpl
+#   html/app.js                 # >>> NEW: split JS file
 locals {
   lambda_dir = "${path.module}/lambda"
   web_dir    = "${path.module}/html"
@@ -109,7 +110,7 @@ resource "aws_apigatewayv2_api" "api" {
 
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["GET", "OPTIONS"]
+    allow_methods = ["GET", "POST", "OPTIONS"]    # >>> add POST
     allow_headers = ["Authorization", "Content-Type"]
   }
 }
@@ -151,10 +152,8 @@ resource "aws_apigatewayv2_authorizer" "lambda_auth" {
   # Use the FUNCTION ARN here (not invoke_arn)
   authorizer_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
 
-  # (Optional) ensure the Lambda permission exists before creating the authorizer
   depends_on = [aws_lambda_permission.apigw_auth]
 }
-
 
 resource "aws_apigatewayv2_integration" "lambda" {
   api_id                 = aws_apigatewayv2_api.api.id
@@ -165,9 +164,19 @@ resource "aws_apigatewayv2_integration" "lambda" {
   integration_uri = aws_lambda_function.ec2_handler.invoke_arn
 }
 
+# GET /instances (list)
 resource "aws_apigatewayv2_route" "instances_route" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "GET /instances"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# >>> NEW: POST /instances (actions: start/stop/reboot, services_query, service_start/stop)
+resource "aws_apigatewayv2_route" "instances_post" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /instances"
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
@@ -210,7 +219,8 @@ resource "aws_iam_policy" "ec2_control_policy" {
       Action   = [
         "ec2:DescribeInstances",
         "ec2:StartInstances",
-        "ec2:StopInstances"
+        "ec2:StopInstances",
+        "ec2:RebootInstances"         # >>> add reboot for parity
       ],
       Resource = "*"
     }]
@@ -252,7 +262,8 @@ resource "aws_iam_policy" "lambda_ssm_commands" {
         "ssm:GetCommandInvocation",
         "ssm:ListCommands",
         "ssm:ListCommandInvocations",
-        "ssm:CancelCommand"
+        "ssm:CancelCommand",
+        "ssm:DescribeInstanceInformation"
       ],
       Resource = "*"
     }]
@@ -273,6 +284,14 @@ resource "aws_lambda_permission" "apigw_auth" {
   function_name = aws_lambda_function.authorizer.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
+}
+
+resource "aws_lambda_permission" "apigw_handler" {
+  statement_id  = "AllowExecutionFromAPIGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ec2_handler.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
 #############################################
@@ -340,14 +359,6 @@ resource "null_resource" "associate_ssm_profile" {
   }
 }
 
-resource "aws_lambda_permission" "apigw_handler" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_handler.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
-}
-
 ##########################
 # HTML → S3 (templated)
 ##########################
@@ -359,22 +370,6 @@ data "template_file" "html" {
 }
 
 resource "aws_s3_object" "index_html" {
-  bucket       = aws_s3_bucket.frontend.id
-  key          = "index.html"
-  content      = data.template_file.html.rendered
-  content_type = "text/html"
-}
-
-# Inject API URL into HTML template
-data "template_file" "html" {
-  template = file("${path.module}/html/index.html.tpl")
-  vars = {
-    api_url = aws_apigatewayv2_stage.default.invoke_url
-  }
-}
-
-# Serve the dashboard HTML
-resource "aws_s3_object" "index_html" {
   bucket        = aws_s3_bucket.frontend.id
   key           = "index.html"
   content       = data.template_file.html.rendered
@@ -382,11 +377,11 @@ resource "aws_s3_object" "index_html" {
   cache_control = "no-cache"
 }
 
-# Serve the JS app logic
+# >>> NEW: Upload JS bundle
 resource "aws_s3_object" "app_js" {
   bucket        = aws_s3_bucket.frontend.id
   key           = "app.js"
-  source        = "${path.module}/html/app.js"
+  source        = "${local.web_dir}/app.js"
   content_type  = "application/javascript"
   cache_control = "max-age=60"
 }
