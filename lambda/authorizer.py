@@ -1,51 +1,36 @@
-# lambda/authorizer.py
 import base64
-import json
+import boto3
+import os
 
-HARDCODED_USERNAME = "pnamilak"
-HARDCODED_PASSWORD = "Pravan@12"
+_ssm = boto3.client('ssm')
 
-def lambda_handler(event, context):
-    # Debug log (shows up in CloudWatch)
-    print("EVENT:", json.dumps(event))
+PARAM_USER = os.environ.get('PARAM_USER','/ec2dash/auth/username')
+PARAM_PASS = os.environ.get('PARAM_PASS','/ec2dash/auth/password')
 
-    headers = event.get("headers") or {}
-    # normalize header keys to lowercase to avoid casing issues
-    headers_lc = { (k or "").lower(): v for k, v in headers.items() }
-    token = headers_lc.get("authorization", "")
+def _get_param(name):
+    return _ssm.get_parameter(Name=name, WithDecryption=True)['Parameter']['Value']
 
-    if not token:
-        return _deny("Missing Authorization header")
+def _deny(routeArn):
+    return {'isAuthorized': False, 'context': {'reason': 'unauthorized'}, 'routeArn': routeArn}
 
-    # accept both "Basic <b64>" and raw base64 (some clients send raw)
-    if token.lower().startswith("basic "):
-        token = token[6:].strip()
+def _allow(routeArn):
+    return {'isAuthorized': True, 'context': {'scope': 'basic'}, 'routeArn': routeArn}
+
+def authorizer(event, context):
+    routeArn = event.get('routeArn')
+    hdrs = (event.get('headers') or {})
+    hdr = hdrs.get('authorization') or hdrs.get('Authorization')
+    if not hdr or not hdr.startswith('Basic '):
+        return _deny(routeArn)
+    try:
+        enc = hdr.split(' ',1)[1]
+        user, pwd = base64.b64decode(enc).decode('utf-8').split(':',1)
+    except Exception:
+        return _deny(routeArn)
 
     try:
-        decoded = base64.b64decode(token).decode("utf-8", errors="strict")
-        # allow ':' inside password
-        username, password = decoded.split(":", 1)
-        print(f"DECODED user={username}")
-
-        if username == HARDCODED_USERNAME and password == HARDCODED_PASSWORD:
-            print("AUTHORIZED")
-            return _allow(event.get("routeArn", ""), username)
-
-        print("INVALID_CREDENTIALS")
-        return _deny("Invalid credentials")
-
-    except Exception as e:
-        print("EXCEPTION:", str(e))
-        return _deny(str(e))
-
-def _allow(method_arn, principal):
-    return {
-        "isAuthorized": True,
-        "context": {"user": principal}
-    }
-
-def _deny(reason):
-    return {
-        "isAuthorized": False,
-        "context": {"error": reason}
-    }
+        u = _get_param(PARAM_USER)
+        p = _get_param(PARAM_PASS)
+        return _allow(routeArn) if (user == u and pwd == p) else _deny(routeArn)
+    except Exception:
+        return _deny(routeArn)

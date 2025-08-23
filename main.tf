@@ -365,6 +365,32 @@ resource "aws_s3_object" "index_html" {
   content_type = "text/html"
 }
 
+# Inject API URL into HTML template
+data "template_file" "html" {
+  template = file("${path.module}/html/index.html.tpl")
+  vars = {
+    api_url = aws_apigatewayv2_stage.default.invoke_url
+  }
+}
+
+# Serve the dashboard HTML
+resource "aws_s3_object" "index_html" {
+  bucket        = aws_s3_bucket.frontend.id
+  key           = "index.html"
+  content       = data.template_file.html.rendered
+  content_type  = "text/html"
+  cache_control = "no-cache"
+}
+
+# Serve the JS app logic
+resource "aws_s3_object" "app_js" {
+  bucket        = aws_s3_bucket.frontend.id
+  key           = "app.js"
+  source        = "${path.module}/html/app.js"
+  content_type  = "application/javascript"
+  cache_control = "max-age=60"
+}
+
 ##########################
 # (Optional) SSM VPC Interface Endpoints
 ##########################

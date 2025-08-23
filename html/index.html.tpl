@@ -2,334 +2,127 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>EC2 Control Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EC2 Control Dashboard</title>
   <style>
     :root{
-      --bg1:#0b1020; --bg2:#0a122b;
-      --card:#0f172a; --card2:#0b1326;
-      --text:#eaf2ff; --muted:#9bb2d8;
-      --brand1:#22d3ee; --brand2:#6366f1; --brand3:#06b6d4;
-      --green:#22c55e; --red:#ef4444; --amber:#f59e0b;
-      --border:rgba(255,255,255,.12);
-      --shadow-lg: 0 20px 50px rgba(3,8,35,.55);
-      --shadow-sm: 0 8px 24px rgba(3,8,35,.35);
-      --radius:18px;
-      --ring: 0 0 0 4px rgba(99,102,241,.22);
+      --bg:#0e1420; --panel:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb;
+      --brand:#60a5fa; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --chip:#1f2937;
+      --shadow: 0 10px 30px rgba(0,0,0,.35); --radius: 16px;
     }
-    body{
-      margin:0; min-height:100vh; color:var(--text);
-      background:
-        radial-gradient(900px 600px at 15% -10%, rgba(34,211,238,.22), transparent 55%),
-        radial-gradient(800px 650px at 110% 10%, rgba(99,102,241,.18), transparent 60%),
-        linear-gradient(180deg, var(--bg1), var(--bg2));
-      font-family: Inter, system-ui, Segoe UI, Arial, sans-serif;
-    }
-    body::before{
-      content:""; position:fixed; inset:0; pointer-events:none; opacity:.08;
-      background:
-        linear-gradient(90deg, #fff 1px, transparent 1px) 0 0/34px 34px,
-        linear-gradient(#fff 1px, transparent 1px) 0 0/34px 34px;
-      mix-blend-mode:overlay;
-    }
-    .container{ width:min(1150px, calc(100% - 40px)); margin:42px auto; }
-
-    .hero{
-      display:flex; align-items:center; justify-content:space-between; gap:16px;
-      padding:18px 22px; border-radius:20px;
-      background:linear-gradient(180deg, #111a3c, #0c1530);
-      border:1px solid var(--border); box-shadow:var(--shadow-lg);
-      position:relative; overflow:hidden;
-    }
-    .hero::after{ content:""; position:absolute; right:-120px; top:-120px; width:240px; height:240px;
-      background: radial-gradient(closest-side, rgba(34,211,238,.16), transparent); }
-    .brand{ display:flex; align-items:center; gap:12px; }
-    .logo{ width:42px; height:42px; border-radius:12px;
-      background: conic-gradient(from 220deg, var(--brand2), var(--brand1), var(--brand3), var(--brand2));
-      box-shadow: 0 0 32px rgba(34,211,238,.25); }
-    .title{ font-size:22px; font-weight:800; letter-spacing:.2px;
-      background:linear-gradient(90deg, var(--brand1), var(--brand2));
-      -webkit-background-clip:text; background-clip:text; color:transparent; }
-    .subtitle{ color:var(--muted); font-size:14px; }
-
-    .card{ margin-top:18px; background:linear-gradient(180deg, var(--card), var(--card2));
-      border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); padding:22px; }
-
-    /* Login */
-    #loginForm label{ display:block; margin:10px 0 8px; font-weight:600; color:#c2d3f3; }
-    #loginForm input{ width:100%; padding:12px 14px; border-radius:12px; border:1px solid #25345f;
-      background:#0d1a36; color:#eaf2ff; outline:0; transition:.18s; box-shadow:var(--shadow-sm); }
-    #loginForm input:focus{ border-color:#4f6cf7; box-shadow:var(--ring); }
-    .btn{ display:inline-block; padding:10px 18px; border-radius:999px; border:0; cursor:pointer; font-weight:800;
-      background:linear-gradient(180deg, var(--brand1), var(--brand2)); color:#041127;
-      box-shadow:0 2px 0 rgba(2,6,23,.28), 0 14px 28px rgba(11,25,70,.5); transition:transform .08s ease, filter .18s ease; }
-    .btn:hover{ filter:brightness(1.04); } .btn:active{ transform:translateY(2px); }
-    .btn-start{ background:linear-gradient(180deg, #7df0a3, var(--green)); color:#062013; }
-    .btn-stop { background:linear-gradient(180deg, #ff9b9b, var(--red));  color:#210707; }
-    .btn-ghost{ background:transparent; border:1px dashed var(--border); color:#cfe6ff; }
-
-    /* Tabs */
-    .tabs{ display:flex; flex-wrap:wrap; gap:8px; margin:-6px 0 14px 0; padding-bottom:12px; border-bottom:1px dashed var(--border); }
-    .tab{ padding:10px 14px; border-radius:12px; border:1px solid var(--border);
-      background:#0f1c3a; color:#cfe6ff; cursor:pointer; font-weight:700; font-size:14px; transition: all .15s ease; }
-    .tab:hover{ box-shadow: var(--shadow-sm); }
-    .tab.active{ color:#031230; background:linear-gradient(180deg, var(--brand1), var(--brand2)); border-color: transparent; }
-
-    /* Table */
-    table{ width:100%; border-collapse:separate; border-spacing:0; margin-top:6px; }
-    thead th{ text-align:left; font-size:14px; color:#cfe0ff; background:#0a1837;
-      padding:12px 14px; border-bottom:1px solid #223055; position:sticky; top:0; z-index:1; }
-    tbody td{ padding:12px 14px; border-bottom:1px dashed #213055; font-size:15px; color:#eaf2ff; }
-
-    .badge{ display:inline-block; padding:6px 10px; border-radius:999px; font-weight:800; font-size:12px; }
-    .ok{   background:rgba(34,197,94,.18); color:#9af0b7; border:1px solid rgba(34,197,94,.35); }
-    .stop{ background:rgba(239,68,68,.18); color:#ffb2b2; border:1px solid rgba(239,68,68,.32); }
-    .pend{ background:rgba(245,158,11,.18); color:#ffd79a; border:1px solid rgba(245,158,11,.35); }
-
-    .status-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
-    .dot-ok{ background:#22c55e; } .dot-stop{ background:#ef4444; } .dot-pend{ background:#f59e0b; }
-
-    .row-actions{ display:flex; gap:8px; }
-    .hidden{ display:none; }
-    .foot{ margin-top:10px; color:#9ab0d6; font-size:12px; text-align:right; opacity:.85; }
-
-    /* Modal */
-    .modal{
-      position:fixed; inset:0; background:rgba(0,0,0,.5);
-      display:flex; align-items:center; justify-content:center; z-index:50;
-    }
-    /* keep modal hidden until opened */
-    .modal.hidden { display: none !important; }
-
-    .modal-card{ width:min(560px, calc(100% - 28px)); background:linear-gradient(180deg, #0e1731, #0b1227);
-      border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow-lg); padding:18px; }
-    .modal-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
-    .close{ background:transparent; color:#cfe0ff; border:1px dashed var(--border); border-radius:10px; padding:6px 10px; cursor:pointer; }
-    .kv{ display:grid; grid-template-columns: 140px 1fr; gap:8px; margin:8px 0; color:#cfe6ff; }
-    .svc-row{ display:flex; gap:8px; align-items:center; margin:12px 0; }
-    .svc-row input{ flex:1; padding:10px 12px; border-radius:10px; border:1px solid #25345f; background:#0d1a36; color:#eaf2ff; }
+    *{box-sizing:border-box}
+    body{margin:0; background:radial-gradient(1200px 800px at 20% -10%, #16223a 0%, #0e1420 50%, #0b1020 100%); color:var(--text); font:14px/1.35 system-ui,Segoe UI,Inter,Arial}
+    header{position:sticky;top:0;z-index:5; backdrop-filter: blur(6px); background:rgba(17,24,39,.7); border-bottom:1px solid #1f2937}
+    .bar{display:flex; align-items:center; gap:14px; padding:14px 18px; max-width:1200px; margin:0 auto}
+    .brand{font-weight:700; letter-spacing:.2px}
+    .grow{flex:1}
+    .btn{cursor:pointer; border:1px solid #273449; background:#0f172a; padding:8px 12px; border-radius:10px; color:#e5e7eb; box-shadow:var(--shadow)}
+    .btn[disabled]{opacity:.45; cursor:not-allowed}
+    .btn.primary{background-image:linear-gradient(180deg,#1d4ed8,#143aa6); border-color:#23408a}
+    .btn.ghost{background:transparent; border-color:#28364c}
+    main{max-width:1200px; margin:24px auto; padding:0 18px 60px}
+    .filters{display:grid; grid-template-columns:1fr auto auto auto; gap:12px; align-items:center; margin:8px 0 18px}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap}
+    .tab{padding:8px 10px; border-radius:999px; background:var(--chip); border:1px solid #263245; cursor:pointer}
+    .tab.active{outline:2px solid var(--brand)}
+    .search{width:100%; padding:10px 12px; border-radius:10px; border:1px solid #263245; background:#0b1222; color:#e5e7eb}
+    .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px}
+    .card{background:linear-gradient(180deg,#0e1628,#0b1322); border:1px solid #1f2a3f; border-radius:var(--radius); box-shadow:var(--shadow)}
+    .card > header{position:relative; top:auto; background:transparent; border-bottom:1px solid #1d2a40}
+    .card .head{display:flex; gap:10px; align-items:center; padding:12px 14px}
+    .name{font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .pill{padding:2px 8px; border-radius:999px; border:1px solid #274061; background:#0c1628; font-size:11px; color:#c9dbff}
+    .env{font-size:12px; color:var(--muted)}
+    .meta{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:10px 14px; color:#cbd5e1}
+    .kv{font-size:12px; opacity:.9}
+    .status{display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px dashed #22314a}
+    .dot{width:10px; height:10px; border-radius:50%; background:var(--warn)}
+    .stopped .dot{background:var(--bad)}
+    .running .dot{background:var(--ok)}
+    .actions{display:flex; gap:8px; flex-wrap:wrap; padding:12px 14px; border-top:1px solid #1d2a40}
+    .chip-btn{font-size:12px; padding:7px 10px; border-radius:999px; border:1px solid #2a3a58; background:#0e172a; cursor:pointer}
+    .chip-btn:hover{filter:brightness(1.2)}
+    .empty, .error{padding:30px; text-align:center; color:#cbd5e1; border:1px dashed #25324a; border-radius:var(--radius)}
+    .modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(3,6,20,.7)}
+    .card-lg{width:720px; background:#0c1424; border:1px solid #24324c; border-radius:18px; box-shadow:var(--shadow); padding:18px}
+    .card-lg h2{margin:6px 0 12px; font-size:18px}
+    .field{display:flex; flex-direction:column; gap:6px; margin:8px 0}
+    .field input{padding:10px 12px; border:1px solid #293753; border-radius:10px; background:#0a1020; color:#e6eefc}
+    .hint{font-size:12px; color:#9fb1d0}
+    .err{font-size:12px; color:#ff9aa3; margin-top:6px}
+    .right{margin-left:auto}
+    .spinner{width:16px; height:16px; border:2px solid #3b4c6e; border-top-color:#7fb0ff; border-radius:50%; animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(1turn)}}
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="hero">
-      <div class="brand">
-        <div class="logo"></div>
-        <div>
-          <div class="title">EC2 Instance Control</div>
-          <div class="subtitle">Start / Stop by environment with one click</div>
-        </div>
-      </div>
+  <header>
+    <div class="bar">
+      <div class="brand">EC2 Control Dashboard</div>
+      <div class="pill" id="api-pill">API: <span id="api-base">${api_url}</span></div>
+      <div class="grow"></div>
+      <button class="btn ghost" id="refreshBtn">Refresh</button>
+      <button class="btn" id="logoutBtn">Logout</button>
     </div>
+  </header>
 
-    <!-- Login -->
-    <form class="card" id="loginForm" onsubmit="login(); return false;">
-      <label>Username</label>
-      <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
-      <label>Password</label>
-      <input type="password" id="password" placeholder="Enter password" autocomplete="current-password" />
-      <div style="margin-top:14px; display:flex; gap:12px; align-items:center;">
-        <button class="btn" type="submit">Sign in</button>
-        <span id="loginStatus" style="color:#ffb2b2; font-weight:700;"></span>
-      </div>
-    </form>
-
-    <!-- Dashboard -->
-    <div id="dashboard" class="card hidden">
+  <main>
+    <section class="filters">
+      <input id="search" class="search" placeholder="Search by name, id, env, tag, ip…" />
       <div class="tabs" id="envTabs"></div>
+      <div class="tabs" id="svcTabs"></div>
+      <div class="tabs" id="stateTabs"></div>
+    </section>
 
-      <table id="instTable">
-        <thead>
-          <tr>
-            <th style="width:34%">Name</th>
-            <th style="width:32%">Instance ID</th>
-            <th style="width:14%">Status</th>
-            <th style="width:20%">Action</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <div id="info"></div>
+    <section class="grid" id="grid"></section>
+  </main>
 
-      <div class="foot">Tip: Click a tab to switch environments. Actions update live.</div>
+  <!-- Login Modal -->
+  <div class="modal" id="login" hidden>
+    <div class="card-lg" style="width:380px">
+      <h2>Sign in</h2>
+      <div class="hint">Enter the Basic Auth credentials configured in SSM.</div>
+      <div class="field">
+        <label for="user">Username</label>
+        <input id="user" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label for="pass">Password</label>
+        <input id="pass" type="password" autocomplete="current-password" />
+      </div>
+      <div class="err" id="loginErr" hidden></div>
+      <div style="display:flex; gap:10px; margin-top:10px; align-items:center">
+        <button class="btn primary" id="signinBtn">Sign In</button>
+        <div id="loginSpin" class="spinner" style="display:none"></div>
+        <div class="hint right">Your token is stored in session only.</div>
+      </div>
     </div>
   </div>
 
-  <!-- Details Modal -->
-  <div id="detailsModal" class="modal hidden" aria-hidden="true">
-    <div class="modal-card">
-      <div class="modal-head">
-        <div style="font-weight:800; font-size:16px;">Instance details</div>
-        <button class="close" onclick="closeDetails()">Close</button>
+  <!-- Service Explorer Modal -->
+  <div class="modal" id="svcModal" hidden>
+    <div class="card-lg">
+      <h2>Service Explorer</h2>
+      <div class="hint">
+        Filter by comma-separated patterns (matches Name or DisplayName on Windows). Example:
+        <code>SQL,SQLServer,SQLSERVERAGENT,ServiceManagement</code>
       </div>
-      <div class="kv"><div>Name</div><div id="dName"></div></div>
-      <div class="kv"><div>Instance ID</div><div id="dId"></div></div>
-      <div class="kv"><div>State</div><div id="dState"></div></div>
-
-      <div style="margin-top:10px; font-weight:700; color:#cfe6ff;">Service status</div>
-      <div class="svc-row">
-        <input id="svcName" placeholder="Service name (e.g., MSSQLSERVER)" value="MSSQLSERVER" />
-        <button class="btn-ghost" onclick="refreshService();return false;">Refresh</button>
-        <button class="btn-start" onclick="serviceStart();return false;">Start</button>
-        <button class="btn-stop"  onclick="serviceStop();return false;">Stop</button>
+      <div class="field">
+        <label for="svcPattern">Patterns</label>
+        <input id="svcPattern" placeholder="SQL,SQLServer,ServiceManagement" value="SQL,SQLServer,ServiceManagement" />
       </div>
-      <div class="kv"><div>Status</div><div id="svcStatus">—</div></div>
-      <div class="kv"><div>OS</div><div id="svcOS">—</div></div>
+      <div class="pill" id="svcMeta"></div>
+      <div id="svcErr" class="err" hidden></div>
+      <div id="svcList" style="margin-top:8px"></div>
+      <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end">
+        <button class="btn ghost" id="svcClose">Close</button>
+        <button class="btn primary" id="svcRefresh">Refresh</button>
+      </div>
     </div>
   </div>
 
-  <script>
-    const API_ENDPOINT = "${api_url}/instances";
-    const ENVIRONMENTS = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1"];
-
-    let encodedToken = "";
-    let activeEnv = "";
-    let currentInstance = { id:"", name:"", state:"" };
-
-    document.addEventListener('DOMContentLoaded', function () {
-      var dash = document.getElementById('dashboard');
-      if (dash) dash.classList.add('hidden');
-
-      // keep modal hidden at start (belt & suspenders)
-      var modal = document.getElementById('detailsModal');
-      if (modal) modal.classList.add('hidden');
-
-      if (modal) {
-        modal.addEventListener('click', function(e){
-          if (e.target.id === 'detailsModal') closeDetails();
-        });
-      }
-    });
-
-    function login() {
-      var user = document.getElementById("username").value.trim();
-      var pass = document.getElementById("password").value.trim();
-      if (!user || !pass) { document.getElementById("loginStatus").innerText = "Enter username and password"; return; }
-
-      // FIXED: removed stray quote
-      encodedToken = btoa(user + ":" + pass);
-
-      var form = document.getElementById("loginForm"); if (form) form.remove();
-      var dash = document.getElementById("dashboard"); dash.classList.remove("hidden");
-
-      buildTabs(); setActiveEnv(ENVIRONMENTS[0]);
-    }
-
-    function buildTabs(){
-      var tabs = document.getElementById("envTabs"); tabs.innerHTML = "";
-      for (var i=0;i<ENVIRONMENTS.length;i++){
-        (function(env){
-          var btn = document.createElement("button"); btn.className = "tab"; btn.textContent = env;
-          btn.onclick = function(){ setActiveEnv(env); }; tabs.appendChild(btn);
-        })(ENVIRONMENTS[i]);
-      }
-    }
-    function markActiveTab(){
-      var tabEls = document.querySelectorAll(".tab");
-      for (var i=0;i<tabEls.length;i++){
-        if (tabEls[i].textContent === activeEnv) tabEls[i].classList.add("active");
-        else tabEls[i].classList.remove("active");
-      }
-    }
-    function setActiveEnv(env){ activeEnv = env; markActiveTab(); fetchInstances(); }
-
-    async function fetchInstances() {
-      if (!activeEnv) return;
-      var tbody = document.querySelector("#instTable tbody");
-      tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>Loading "+ activeEnv +"…</td></tr>";
-      try{
-        var res = await fetch(API_ENDPOINT + "?action=list&env=" + encodeURIComponent(activeEnv), { headers: { "Authorization": encodedToken }});
-        var data = await res.json();
-        tbody.innerHTML = "";
-        for (var i=0; i<data.length; i++){
-          var inst = data[i]; var state = (inst.State || "").toLowerCase();
-          var dotClass  = (state === "running") ? "dot-ok" : (state.indexOf("pending") !== -1 ? "dot-pend" : "dot-stop");
-          var pillClass = (state === "running") ? "ok"     : (state.indexOf("pending") !== -1 ? "pend"     : "stop");
-          var actionTxt = (state === "running") ? "Stop" : "Start";
-          var btnClass  = (state === "running") ? "btn btn-stop" : "btn btn-start";
-
-          var row = document.createElement("tr");
-
-          var tdName = document.createElement("td"); tdName.textContent = inst.Name || ""; row.appendChild(tdName);
-          var tdId   = document.createElement("td"); tdId.textContent   = inst.InstanceId || ""; row.appendChild(tdId);
-
-          var tdState = document.createElement("td");
-          var dot = document.createElement("span"); dot.className = "status-dot " + dotClass;
-          var pill= document.createElement("span"); pill.className= "badge " + pillClass; pill.textContent = inst.State || "";
-          tdState.appendChild(dot); tdState.appendChild(pill); row.appendChild(tdState);
-
-          var tdAction = document.createElement("td"); tdAction.className = "row-actions";
-          var btn = document.createElement("button"); btn.className = btnClass; btn.textContent = actionTxt;
-          (function(instanceId, currentState){ btn.onclick = function(){ toggleInstance(instanceId, currentState); }; })(inst.InstanceId, inst.State);
-          tdAction.appendChild(btn);
-
-          var details = document.createElement("button"); details.className = "btn-ghost"; details.textContent = "Details";
-          (function(i){ details.onclick = function(){ openDetails(i); }; })(inst);
-          tdAction.appendChild(details);
-
-          row.appendChild(tdAction);
-          tbody.appendChild(row);
-        }
-        if (data.length === 0){
-          tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#9db4d6;'>No instances found for "+ activeEnv +".</td></tr>";
-        }
-      }catch(e){
-        tbody.innerHTML = "<tr><td colspan='4' style='padding:18px;color:#ffb2b2;'>Failed to load instances for "+ activeEnv +".</td></tr>";
-      }
-    }
-
-    async function toggleInstance(id, state) {
-      var action = (state && state.toLowerCase() === "running") ? "stop" : "start";
-      try{
-        await fetch(API_ENDPOINT + "?action=" + action + "&instance_id=" + encodeURIComponent(id), { headers: { "Authorization": encodedToken }});
-        setTimeout(fetchInstances, 900);
-      }catch(e){ alert("Action failed."); }
-    }
-
-    /* ---- Details modal + service controls ---- */
-    function openDetails(inst){
-      currentInstance = { id: inst.InstanceId || "", name: inst.Name || "", state: inst.State || "" };
-      document.getElementById("dName").textContent  = currentInstance.name;
-      document.getElementById("dId").textContent    = currentInstance.id;
-      document.getElementById("dState").textContent = currentInstance.state;
-      document.getElementById("svcStatus").textContent = "—";
-      document.getElementById("svcOS").textContent = "—";
-      var modal = document.getElementById("detailsModal");
-      if (modal) modal.classList.remove("hidden");
-      refreshService();
-    }
-    function closeDetails(){
-      var modal = document.getElementById("detailsModal");
-      if (modal && !modal.classList.contains("hidden")) modal.classList.add("hidden");
-    }
-
-    async function refreshService(){
-      var svc = document.getElementById("svcName").value.trim() || "MSSQLSERVER";
-      document.getElementById("svcStatus").textContent = "Checking…";
-      try{
-        var res = await fetch(API_ENDPOINT + "?action=service_status&instance_id=" + encodeURIComponent(currentInstance.id) + "&service=" + encodeURIComponent(svc), { headers: { "Authorization": encodedToken }});
-        var data = await res.json();
-        document.getElementById("svcStatus").textContent = data.Status || "unknown";
-        document.getElementById("svcOS").textContent     = data.OS || "—";
-      }catch(e){
-        document.getElementById("svcStatus").textContent = "error";
-      }
-    }
-    async function serviceStart(){
-      var svc = document.getElementById("svcName").value.trim() || "MSSQLSERVER";
-      document.getElementById("svcStatus").textContent = "Starting…";
-      try{
-        await fetch(API_ENDPOINT + "?action=service_start&instance_id=" + encodeURIComponent(currentInstance.id) + "&service=" + encodeURIComponent(svc), { headers: { "Authorization": encodedToken }});
-        setTimeout(refreshService, 1200);
-      }catch(e){ document.getElementById("svcStatus").textContent = "error"; }
-    }
-    async function serviceStop(){
-      var svc = document.getElementById("svcName").value.trim() || "MSSQLSERVER";
-      document.getElementById("svcStatus").textContent = "Stopping…";
-      try{
-        await fetch(API_ENDPOINT + "?action=service_stop&instance_id=" + encodeURIComponent(currentInstance.id) + "&service=" + encodeURIComponent(svc), { headers: { "Authorization": encodedToken }});
-        setTimeout(refreshService, 1200);
-      }catch(e){ document.getElementById("svcStatus").textContent = "error"; }
-    }
-  </script>
+  <script>window.API_URL='${api_url}'.replace(/\/$/,'');</script>
+  <script src="/app.js" defer></script>
 </body>
 </html>
