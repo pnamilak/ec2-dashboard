@@ -42,7 +42,7 @@
     .chip-btn{font-size:12px; padding:7px 10px; border-radius:999px; border:1px solid #2a3a58; background:#0e172a; cursor:pointer}
     .chip-btn:hover{filter:brightness(1.2)}
     .empty, .error{padding:30px; text-align:center; color:#cbd5e1; border:1px dashed #25324a; border-radius:var(--radius)}
-    .modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(3,6,20,.7)}
+    .modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(3,6,20,.7); z-index:9999}
     .card-lg{width:720px; background:#0c1424; border:1px solid #24324c; border-radius:18px; box-shadow:var(--shadow); padding:18px}
     .card-lg h2{margin:6px 0 12px; font-size:18px}
     .field{display:flex; flex-direction:column; gap:6px; margin:8px 0}
@@ -80,7 +80,7 @@
   <div class="modal" id="login" hidden>
     <div class="card-lg" style="width:380px">
       <h2>Sign in</h2>
-      <div class="hint">Enter the Basic Auth credentials configured in SSM.</div>
+      <div class="hint">Enter the Basic Auth credentials stored in SSM.</div>
       <div class="field">
         <label for="user">Username</label>
         <input id="user" autocomplete="username" />
@@ -93,7 +93,7 @@
       <div style="display:flex; gap:10px; margin-top:10px; align-items:center">
         <button class="btn primary" id="signinBtn">Sign In</button>
         <div id="loginSpin" class="spinner" style="display:none"></div>
-        <div class="hint right">Your token is stored in session only.</div>
+        <div class="hint right">Token is kept in session only.</div>
       </div>
     </div>
   </div>
@@ -103,17 +103,18 @@
     <div class="card-lg">
       <h2>Details</h2>
       <div id="svcMeta" class="pill"></div>
-      <div style="display:flex; gap:10px; margin-top:10px">
+      <div style="display:flex; gap:10px; margin-top:10px; align-items:center;">
         <div class="pill" id="osBadge">OS: -</div>
         <div class="pill" id="sqlBadge">SQL: -</div>
+        <button class="btn" id="btnIIS" style="display:none">IIS Reset</button>
       </div>
       <div class="hint" style="margin-top:10px">
-        Filter services by comma-separated text (matches Name or DisplayName on Windows).
-        Example: <code>SQL,SQLServer,SQLSERVERAGENT,ServiceManagement</code>
+        Filter services by comma-separated text (matches Name or DisplayName on Windows). Example:
+        <code>SQL,SQLServer,SQLSERVERAGENT,ServiceManagement</code>
       </div>
       <div class="field">
         <label for="svcPattern">Patterns</label>
-        <input id="svcPattern" placeholder="SQL,SQLServer,ServiceManagement" value="SQL,SQLServer,ServiceManagement" />
+        <input id="svcPattern" placeholder="Type a service keyword…" />
       </div>
       <div id="svcErr" class="err" hidden></div>
       <div id="svcList" style="margin-top:8px"></div>

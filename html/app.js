@@ -16,7 +16,11 @@
 
   async function api(path, opts={}){
     const res = await fetch(API + path, { ...opts, headers: { 'Content-Type':'application/json', ...(opts.headers||{}), ...authHeader() }});
-    if (res.status === 401 || res.status === 403){ throw new Error('AUTH'); }
+    if (res.status === 401 || res.status === 403){
+      // force re-login on any auth failure
+      sessionStorage.removeItem(LS_KEY);
+      throw new Error('AUTH');
+    }
     if (!res.ok){ const text = await res.text(); throw new Error(text||res.statusText); }
     return res.json();
   }
@@ -50,7 +54,6 @@
       return;
     }
 
-    // env list
     const env = state.selectedEnv;
     const list = state.raw.filter(x =>
       (x.env===env) && (!q || `${x.name} ${x.id} ${x.env} ${x.service} ${x.ip} ${x.az} ${x.os}`.toLowerCase().includes(q))
@@ -67,10 +70,9 @@
   }
 
   function cardHtml(x){
-    const cls = x.state;
     const startDisabled = x.state!=='stopped';
     const stopDisabled  = x.state!=='running';
-    return `<article class="card ${cls}">
+    return `<article class="card ${x.state}">
       <header class="head">
         <div class="dot"></div>
         <div class="name" title="${x.name}">${x.name||'(no-name)'}</div>
@@ -96,16 +98,18 @@
   // --------- data load & login ----------
   async function load(){
     qs('#info').innerHTML = '<div class="pill">Loading…</div>';
+    const token = sessionStorage.getItem(LS_KEY);
+    if (!token){ showLogin(); qs('#info').innerHTML=''; return; } // <- do NOT call API before login
     try{
       const data = await api('/instances');
       state.raw = data.instances || [];
       state.summary = data.summary || { total: 0, running: 0, stopped: 0 };
       state.envs = new Set();
       state.raw.forEach(x=>{ if (x.env) state.envs.add(x.env); });
+      if (state.selectedEnv !== 'Summary' && !state.envs.has(state.selectedEnv)) state.selectedEnv = 'Summary';
       renderEnvTabs();
       draw();
     }catch(err){
-      // if unauthorized, show login; else show error
       if (err.message === 'AUTH'){ showLogin('Please sign in.'); }
       else qs('#info').innerHTML = `<div class="error">${err.message||'Failed loading'}</div>`;
     }
@@ -142,16 +146,32 @@
     try{
       await api('/instances', {method:'POST', body:JSON.stringify({ action:act, instance_id:id })});
       await load();
-    }catch(err){ alert(err.message||String(err)); }
-    finally{ btns.forEach(b=>b.disabled=false); }
+    }catch(err){
+      if (err.message==='AUTH'){ showLogin('Session expired. Please sign in.'); }
+      else alert(err.message||String(err));
+    }finally{ btns.forEach(b=>b.disabled=false); }
   }
 
-  let svcCtx = { id:'', name:'' };
+  function byId(id){ return state.raw.find(x=>x.id===id); }
+
+  let svcCtx = { id:'', name:'', role:'', lastOS:'', isWindows:false };
+
+  function defaultPatternsFor(inst){
+    const key = (inst.service || inst.name || '').toLowerCase();
+    if (key.includes('sql')) return 'MSSQL,SQLServer,SQLSERVERAGENT,SQLAgent';
+    if (key.includes('web') || key.includes('svc') || key.includes('iis')) return 'W3SVC,AppHostSvc,was,IIS';
+    if (key.includes('redis')) return 'redis';
+    return '';
+  }
 
   async function openDetails(instanceId, name){
-    svcCtx = { id: instanceId, name: name };
+    const inst = byId(instanceId) || { service: '', os:'' };
+    svcCtx = { id: instanceId, name: name, role: (inst.service||'').toLowerCase(), lastOS: inst.os||'', isWindows:false };
     qs('#svcMeta').textContent = `Instance: ${name||instanceId}`;
+    const def = defaultPatternsFor(inst);
+    qs('#svcPattern').value = def;
     qs('#svcErr').hidden = true; qs('#svcList').innerHTML = '';
+    qs('#btnIIS').style.display = 'none';
     qs('#svcModal').hidden = false;
     await refreshDetails();
   }
@@ -163,8 +183,13 @@
       // badges
       qs('#osBadge').textContent = 'OS: ' + (res.OS || '-');
       qs('#sqlBadge').textContent = 'SQL: ' + (res.SQL || '-');
+      svcCtx.isWindows = !!res.isWindows;
+      // IIS Reset button visibility: Windows + role indicates web/SVC/IIS
+      const showIIS = svcCtx.isWindows && (svcCtx.role.includes('web') || svcCtx.role.includes('svc') || svcCtx.role.includes('iis'));
+      qs('#btnIIS').style.display = showIIS ? 'inline-block' : 'none';
       renderSvcList(res.Services || []);
     }catch(err){
+      if (err.message==='AUTH'){ showLogin('Please sign in.'); qs('#svcModal').hidden=false; return; }
       qs('#svcErr').hidden = false; qs('#svcErr').textContent = err.message||'Failed to load details';
     }
   }
@@ -199,16 +224,29 @@
     try{
       await api('/instances', { method:'POST', body: JSON.stringify({ action: act==='start'?'service_start':'service_stop', instance_id: svcCtx.id, service: svc }) });
       await refreshDetails();
-    }catch(err){ alert(err.message||'Action failed'); }
-    finally{ e.currentTarget.disabled = false; }
+    }catch(err){
+      if (err.message==='AUTH'){ showLogin('Please sign in.'); }
+      else alert(err.message||'Action failed');
+    }finally{ e.currentTarget.disabled = false; }
   }
+
+  // IIS Reset
+  qs('#btnIIS').onclick = async ()=>{
+    try{
+      await api('/instances', { method:'POST', body: JSON.stringify({ action:'iis_reset', instance_id: svcCtx.id }) });
+      alert('IIS reset command sent.');
+    }catch(err){
+      if (err.message==='AUTH'){ showLogin('Please sign in.'); }
+      else alert(err.message||'IIS reset failed');
+    }
+  };
 
   qs('#svcClose').onclick = ()=>{ qs('#svcModal').hidden = true; };
   qs('#svcRefresh').onclick = ()=>{ refreshDetails(); };
 
-  // boot
+  // boot: do not touch API until we have a token
   (async function(){
-    if (!sessionStorage.getItem(LS_KEY)) showLogin();
+    if (!sessionStorage.getItem(LS_KEY)) { showLogin(); return; }
     await load();
   })();
 })();

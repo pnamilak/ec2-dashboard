@@ -38,7 +38,7 @@ def _infer_service(name, tags):
     svc = t.get('Service') or t.get('Svc') or t.get('service') or ''
     if svc: return svc
     lname = (name or '').lower()
-    for key in ['sql','web','app','api','etl','batch']:
+    for key in ['sql','web','svc','iis','redis','app','api','etl','batch']:
         if key in lname: return key
     return ''
 
@@ -55,7 +55,7 @@ def _send_ssm(instance_id: str, commands, is_windows: bool):
         return {'Status': 'Error', 'Error': f'SendCommand: {e}'}
 
     cmd_id = resp['Command']['CommandId']
-    # wait up to 45s
+    # wait up to ~45s
     for _ in range(45):
         time.sleep(1)
         try:
@@ -74,7 +74,7 @@ def _is_windows(instance_id: str) -> bool:
     return plat == 'windows' or 'windows' in pdet
 
 def _ssm_info_map():
-    """Map InstanceId -> {PingStatus, PlatformName, PlatformVersion} for all SSM-managed instances."""
+    """Map InstanceId -> {PingStatus, PlatformName, PlatformVersion} for SSM-managed instances."""
     out = {}
     token = None
     while True:
@@ -114,15 +114,14 @@ def list_instances():
                     'name': name,
                     'state': st,
                     'env': env,
-                    'service': svc,
+                    'service': svc,  # used by UI to pick default service patterns
                     'az': i.get('Placement',{}).get('AvailabilityZone'),
                     'ip': i.get('PrivateIpAddress'),
                     'type': i.get('InstanceType'),
                     'ping': ssm.get('ping', '-'),
-                    'os': os_full,  # << actual OS string
+                    'os': os_full,
                 })
 
-        # summary counts
         total = len(items)
         running = sum(1 for x in items if x['state'] == 'running')
         stopped = sum(1 for x in items if x['state'] == 'stopped')
@@ -155,7 +154,6 @@ def _split_patterns(patt: str):
     return [p for p in raw if p]
 
 def _sql_version_windows(instance_id: str):
-    # Enumerate instances -> Setup -> Version/Edition
     ps = r"""
 $results = @()
 $roots = @("HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server")
@@ -183,7 +181,6 @@ if ($results.Count -eq 0) { "[]" } else { $results | ConvertTo-Json -Compress }
         data = json.loads(txt) if txt else []
         if isinstance(data, dict): data = [data]
         if not data: return ''
-        # join concise string
         return '; '.join([f"{d.get('Name','MSSQL')} {d.get('Version','')}".strip() for d in data])
     except Exception:
         return ''
@@ -201,7 +198,6 @@ rpm -q mssql-server --qf "%{VERSION}-%{RELEASE}\n" 2>/dev/null \
     return ver[0] if ver else ''
 
 def _get_os_string(instance_id: str):
-    # Use SSM DescribeInstanceInformation for name/version
     mp = _ssm_info_map()
     s = mp.get(instance_id, {})
     os_s = (s.get('os_name') or '').strip()
@@ -209,10 +205,10 @@ def _get_os_string(instance_id: str):
     return (os_s + (' ' + os_v if os_v else '')).strip()
 
 def details_services(instance_id: str, pattern_text: str):
-    pats = _split_patterns(pattern_text) or ['SQL','SQLServer','ServiceManagement','MSSQL']
+    pats = _split_patterns(pattern_text) or ['SQL','SQLServer','ServiceManagement','MSSQL','IIS','W3SVC','AppHostSvc','redis']
     win = _is_windows(instance_id)
 
-    # service query
+    # list matching services
     if win:
         or_filters = ' -or '.join([f"$_.Name -like '*{p}*' -or $_.DisplayName -like '*{p}*'" for p in pats])
         ps = (
@@ -252,11 +248,10 @@ def details_services(instance_id: str, pattern_text: str):
                 status = parts[3] if len(parts) > 3 else (parts[2] if len(parts) > 2 else 'unknown')
                 services.append({'name': unit, 'displayName': unit, 'status': status})
 
-    # os/sql fields
     os_full = _get_os_string(instance_id) or ('Windows' if win else 'Linux')
     sql_ver = _sql_version_windows(instance_id) if win else _sql_version_linux(instance_id)
 
-    return {'OS': os_full, 'SQL': (sql_ver or '-'), 'Services': services}
+    return {'OS': os_full, 'isWindows': win, 'SQL': (sql_ver or '-'), 'Services': services}
 
 def service_toggle(instance_id: str, service_name: str, target: str):
     win = _is_windows(instance_id)
@@ -293,6 +288,14 @@ def service_toggle(instance_id: str, service_name: str, target: str):
 
     return status
 
+def iis_reset(instance_id: str):
+    if not _is_windows(instance_id):
+        return {'ok': False, 'note': 'IIS reset supported only on Windows'}
+    ps = 'iisreset /restart'
+    inv = _send_ssm(instance_id, [ps], True)
+    ok = inv.get('Status') == 'Success'
+    return {'ok': ok, 'note': inv.get('StandardErrorContent') or ''}
+
 # ---------------- router ----------------
 
 def lambda_handler(event, context):
@@ -317,7 +320,7 @@ def lambda_handler(event, context):
             if act in ('start','stop','reboot','status'):
                 return mutate_instance(act, iid)
 
-            if act == 'details':  # services + os + sql
+            if act == 'details':
                 patt = body.get('pattern') or ''
                 data = details_services(iid, patt)
                 return _http(200, data)
@@ -329,6 +332,10 @@ def lambda_handler(event, context):
             if act == 'service_stop':
                 st = service_toggle(iid, body.get('service',''), 'stop')
                 return _http(200, {'Service': body.get('service',''), 'Status': st})
+
+            if act == 'iis_reset':
+                res = iis_reset(iid)
+                return _http(200, res)
 
             return _http(400, {'error': 'Unsupported action'})
 
