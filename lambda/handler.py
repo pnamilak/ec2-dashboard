@@ -1,11 +1,13 @@
-import json, os, time
+import json, time, re
 import boto3
 from botocore.exceptions import ClientError
 
 _ec2 = boto3.client('ec2')
 _ssm = boto3.client('ssm')
 
-def _resp(status, body):
+# ---------------- basics ----------------
+
+def _http(status, body):
     return {
         'statusCode': status,
         'headers': {
@@ -17,42 +19,11 @@ def _resp(status, body):
         'body': json.dumps(body)
     }
 
-def _is_windows(instance_id: str) -> bool:
-    di = _ec2.describe_instances(InstanceIds=[instance_id])
-    inst = di['Reservations'][0]['Instances'][0]
-    plat = (inst.get('Platform') or '').lower()
-    pdet = (inst.get('PlatformDetails') or '').lower()
-    return plat == 'windows' or 'windows' in pdet
-
-def _send_ssm(instance_id: str, commands, is_windows: bool):
-    doc = 'AWS-RunPowerShellScript' if is_windows else 'AWS-RunShellScript'
-    try:
-        resp = _ssm.send_command(
-            InstanceIds=[instance_id],
-            DocumentName=doc,
-            Parameters={'commands': commands},
-            CloudWatchOutputConfig={'CloudWatchOutputEnabled': False}
-        )
-    except Exception as e:
-        return {'Status': 'Error', 'Error': f'SendCommand: {e}'}
-
-    cmd_id = resp['Command']['CommandId']
-    for _ in range(45):         # ~45s
-        time.sleep(1)
-        try:
-            inv = _ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
-        except Exception as e:
-            return {'Status': 'Error', 'Error': f'GetCommandInvocation: {e}'}
-        if inv['Status'] in ('Success', 'Failed', 'Cancelled', 'TimedOut'):
-            return inv
-    return {'Status': 'TimedOut', 'StandardOutputContent': '', 'StandardErrorContent': 'Command timed out'}
-
 def _tags_to_map(tags):
     return {t.get('Key'): t.get('Value') for t in (tags or [])}
 
-def _first_group(s, regex):
-    import re
-    m = re.search(regex, s or '', re.I)
+def _first_group(s, pattern):
+    m = re.search(pattern, s or '', re.I)
     return m.group(1) if m else ''
 
 def _infer_env(name, tags):
@@ -65,51 +36,100 @@ def _infer_env(name, tags):
 def _infer_service(name, tags):
     t = _tags_to_map(tags)
     svc = t.get('Service') or t.get('Svc') or t.get('service') or ''
-    if svc:
-        return svc
+    if svc: return svc
     lname = (name or '').lower()
     for key in ['sql','web','app','api','etl','batch']:
-        if key in lname:
-            return key
+        if key in lname: return key
     return ''
+
+def _send_ssm(instance_id: str, commands, is_windows: bool):
+    doc = 'AWS-RunPowerShellScript' if is_windows else 'AWS-RunShellScript'
+    try:
+        resp = _ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName=doc,
+            Parameters={'commands': commands},
+            CloudWatchOutputConfig={'CloudWatchOutputEnabled': False},
+        )
+    except Exception as e:
+        return {'Status': 'Error', 'Error': f'SendCommand: {e}'}
+
+    cmd_id = resp['Command']['CommandId']
+    # wait up to 45s
+    for _ in range(45):
+        time.sleep(1)
+        try:
+            inv = _ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        except Exception as e:
+            return {'Status': 'Error', 'Error': f'GetCommandInvocation: {e}'}
+        if inv['Status'] in ('Success', 'Failed', 'Cancelled', 'TimedOut'):
+            return inv
+    return {'Status': 'TimedOut', 'StandardOutputContent': '', 'StandardErrorContent': 'Command timed out'}
+
+def _is_windows(instance_id: str) -> bool:
+    di = _ec2.describe_instances(InstanceIds=[instance_id])
+    inst = di['Reservations'][0]['Instances'][0]
+    plat = (inst.get('Platform') or '').lower()
+    pdet = (inst.get('PlatformDetails') or '').lower()
+    return plat == 'windows' or 'windows' in pdet
+
+def _ssm_info_map():
+    """Map InstanceId -> {PingStatus, PlatformName, PlatformVersion} for all SSM-managed instances."""
+    out = {}
+    token = None
+    while True:
+        kw = {'MaxResults': 50}
+        if token: kw['NextToken'] = token
+        resp = _ssm.describe_instance_information(**kw)
+        for it in resp.get('InstanceInformationList', []):
+            out[it['InstanceId']] = {
+                'ping': it.get('PingStatus', '-'),
+                'os_name': it.get('PlatformName') or it.get('PlatformType') or '',
+                'os_ver': it.get('PlatformVersion') or ''
+            }
+        token = resp.get('NextToken')
+        if not token: break
+    return out
+
+# ---------------- list & power ----------------
 
 def list_instances():
     try:
+        ssm_map = _ssm_info_map()
         ec2 = _ec2.describe_instances()
-        out = []
-        # SSM ping map (optional)
-        ping = {}
-        try:
-            next_token = None
-            while True:
-                kw = {'MaxResults': 50}
-                if next_token: kw['NextToken'] = next_token
-                resp = _ssm.describe_instance_information(**kw)
-                for it in resp.get('InstanceInformationList', []):
-                    ping[it['InstanceId']] = it.get('PingStatus')
-                next_token = resp.get('NextToken')
-                if not next_token: break
-        except Exception:
-            ping = {}
-
+        items = []
         for r in ec2.get('Reservations', []):
             for i in r.get('Instances', []):
-                st = i.get('State',{}).get('Name')
+                iid  = i['InstanceId']
                 name = next((t['Value'] for t in i.get('Tags',[]) if t['Key']=='Name'), '')
-                out.append({
-                    'id': i['InstanceId'],
+                env  = _infer_env(name, i.get('Tags'))
+                svc  = _infer_service(name, i.get('Tags'))
+                st   = i.get('State',{}).get('Name')
+                ssm  = ssm_map.get(iid, {})
+                os_s = (ssm.get('os_name') or '').strip()
+                os_v = (ssm.get('os_ver') or '').strip()
+                os_full = (os_s + (' ' + os_v if os_v else '')).strip() or '-'
+                items.append({
+                    'id': iid,
                     'name': name,
                     'state': st,
-                    'env': _infer_env(name, i.get('Tags')),
-                    'service': _infer_service(name, i.get('Tags')),
+                    'env': env,
+                    'service': svc,
                     'az': i.get('Placement',{}).get('AvailabilityZone'),
                     'ip': i.get('PrivateIpAddress'),
-                    'desc': i.get('InstanceType'),
-                    'ping': ping.get(i['InstanceId'], '-')
+                    'type': i.get('InstanceType'),
+                    'ping': ssm.get('ping', '-'),
+                    'os': os_full,  # << actual OS string
                 })
-        return _resp(200, {'instances': out})
+
+        # summary counts
+        total = len(items)
+        running = sum(1 for x in items if x['state'] == 'running')
+        stopped = sum(1 for x in items if x['state'] == 'stopped')
+
+        return _http(200, {'instances': items, 'summary': {'total': total, 'running': running, 'stopped': stopped}})
     except ClientError as e:
-        return _resp(500, {'error': str(e)})
+        return _http(500, {'error': str(e)})
 
 def mutate_instance(action, instance_id):
     try:
@@ -122,32 +142,86 @@ def mutate_instance(action, instance_id):
         elif action == 'status':
             pass
         else:
-            return _resp(400, {'error': f'Unsupported action: {action}'})
-        return _resp(200, {'ok': True})
+            return _http(400, {'error': f'Unsupported action: {action}'})
+        return _http(200, {'ok': True})
     except ClientError as e:
-        return _resp(400, {'error': str(e)})
+        return _http(400, {'error': str(e)})
+
+# ---------------- details: OS/SQL + services ----------------
 
 def _split_patterns(patt: str):
     if not patt: return []
     raw = [p.strip() for p in patt.replace(';', ',').split(',')]
     return [p for p in raw if p]
 
-def services_query(instance_id: str, pattern_text: str):
-    if not instance_id:
-        return _resp(400, {'error': 'instance_id required'})
+def _sql_version_windows(instance_id: str):
+    # Enumerate instances -> Setup -> Version/Edition
+    ps = r"""
+$results = @()
+$roots = @("HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Microsoft SQL Server")
+foreach ($root in $roots) {
+  try {
+    $instKey = Join-Path $root "Instance Names\SQL"
+    $map = Get-ItemProperty -Path $instKey -ErrorAction Stop
+    foreach ($p in $map.PSObject.Properties) {
+      $instName = $p.Name
+      $instId = $p.Value
+      $setup = Join-Path $root "$instId\Setup"
+      $v = (Get-ItemProperty -Path $setup -ErrorAction SilentlyContinue)
+      if ($v) {
+        $results += [pscustomobject]@{ Name=$instName; Version=$($v.Version); Edition=$($v.Edition) }
+      }
+    }
+  } catch {}
+}
+if ($results.Count -eq 0) { "[]" } else { $results | ConvertTo-Json -Compress }
+""".strip()
+    inv = _send_ssm(instance_id, [ps], True)
+    if inv.get('Status') != 'Success': return ''
+    txt = (inv.get('StandardOutputContent') or '').strip()
+    try:
+        data = json.loads(txt) if txt else []
+        if isinstance(data, dict): data = [data]
+        if not data: return ''
+        # join concise string
+        return '; '.join([f"{d.get('Name','MSSQL')} {d.get('Version','')}".strip() for d in data])
+    except Exception:
+        return ''
 
-    pats = _split_patterns(pattern_text) or ['SQL','SQLServer','ServiceManagement']
+def _sql_version_linux(instance_id: str):
+    sh = r"""
+rpm -q mssql-server --qf "%{VERSION}-%{RELEASE}\n" 2>/dev/null \
+ || dpkg-query -W -f='${Version}\n' mssql-server 2>/dev/null \
+ || echo ""
+""".strip()
+    inv = _send_ssm(instance_id, [sh], False)
+    if inv.get('Status') != 'Success': return ''
+    ver = (inv.get('StandardOutputContent') or '').strip().splitlines()
+    ver = [x for x in ver if x.strip()]
+    return ver[0] if ver else ''
+
+def _get_os_string(instance_id: str):
+    # Use SSM DescribeInstanceInformation for name/version
+    mp = _ssm_info_map()
+    s = mp.get(instance_id, {})
+    os_s = (s.get('os_name') or '').strip()
+    os_v = (s.get('os_ver') or '').strip()
+    return (os_s + (' ' + os_v if os_v else '')).strip()
+
+def details_services(instance_id: str, pattern_text: str):
+    pats = _split_patterns(pattern_text) or ['SQL','SQLServer','ServiceManagement','MSSQL']
     win = _is_windows(instance_id)
 
+    # service query
     if win:
         or_filters = ' -or '.join([f"$_.Name -like '*{p}*' -or $_.DisplayName -like '*{p}*'" for p in pats])
         ps = (
-            f"$svcs = Get-Service | Where-Object {{ {or_filters} }} | "
-            f"Select-Object Name,DisplayName,Status; $svcs | ConvertTo-Json -Compress"
+            f"$svcs = Get-Service | Where-Object {{ {or_filters} }} "
+            f"| Select-Object Name,DisplayName,Status; $svcs | ConvertTo-Json -Compress"
         )
         cmd = [ps]
     else:
-        patt = '|'.join([p.replace('"','').replace("'",'') for p in pats])
+        patt = '|'.join([p.replace('\"','').replace(\"'\",'') for p in pats])
         sh = (
             "systemctl list-units --type=service --all --no-legend | "
             f"egrep -i '\\b({patt})' || true"
@@ -155,48 +229,36 @@ def services_query(instance_id: str, pattern_text: str):
         cmd = [sh]
 
     inv = _send_ssm(instance_id, cmd, win)
-    if inv.get('Status') != 'Success':
-        return _resp(200, {
-            'InstanceId': instance_id,
-            'OS': 'Windows' if win else 'Linux',
-            'Services': [],
-            'Note': inv.get('StandardErrorContent') or inv.get('Error') or 'Command did not complete'
-        })
-
-    out = (inv.get('StandardOutputContent') or '').strip()
     services = []
-    if win:
-        text = out if out else '[]'
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict): data = [data]
-            for s in data:
-                services.append({
-                    'name': s.get('Name'),
-                    'displayName': s.get('DisplayName') or s.get('Name'),
-                    'status': (s.get('Status') or '').lower()
-                })
-        except Exception:
-            services = []
-    else:
-        for line in out.splitlines():
-            parts = line.split()
-            if not parts: continue
-            unit = parts[0]
-            status = parts[3] if len(parts) > 3 else (parts[2] if len(parts) > 2 else 'unknown')
-            services.append({'name': unit, 'displayName': unit, 'status': status})
+    if inv.get('Status') == 'Success':
+        out = (inv.get('StandardOutputContent') or '').strip()
+        if win:
+            try:
+                data = json.loads(out) if out else []
+                if isinstance(data, dict): data = [data]
+                for s in data:
+                    services.append({
+                        'name': s.get('Name'),
+                        'displayName': s.get('DisplayName') or s.get('Name'),
+                        'status': (s.get('Status') or '').lower()
+                    })
+            except Exception:
+                services = []
+        else:
+            for line in out.splitlines():
+                parts = line.split()
+                if not parts: continue
+                unit = parts[0]
+                status = parts[3] if len(parts) > 3 else (parts[2] if len(parts) > 2 else 'unknown')
+                services.append({'name': unit, 'displayName': unit, 'status': status})
 
-    return _resp(200, {
-        'InstanceId': instance_id,
-        'OS': 'Windows' if win else 'Linux',
-        'Patterns': pats,
-        'Services': services
-    })
+    # os/sql fields
+    os_full = _get_os_string(instance_id) or ('Windows' if win else 'Linux')
+    sql_ver = _sql_version_windows(instance_id) if win else _sql_version_linux(instance_id)
+
+    return {'OS': os_full, 'SQL': (sql_ver or '-'), 'Services': services}
 
 def service_toggle(instance_id: str, service_name: str, target: str):
-    if not instance_id or not service_name:
-        return _resp(400, {'error': 'instance_id and service required'})
-
     win = _is_windows(instance_id)
     if win:
         if target == 'start':
@@ -217,7 +279,7 @@ def service_toggle(instance_id: str, service_name: str, target: str):
 
     _send_ssm(instance_id, commands, win)
 
-    # re-check the status after toggle
+    # re-check status
     if win:
         qps = (
             f'try {{ (Get-Service -Name "{service_name}").Status }} '
@@ -229,16 +291,18 @@ def service_toggle(instance_id: str, service_name: str, target: str):
         inv = _send_ssm(instance_id, [f'systemctl is-active {service_name} || echo NotFound'], win)
         status = (inv.get('StandardOutputContent') or '').strip() if inv.get('Status')=='Success' else 'unknown'
 
-    return _resp(200, {'InstanceId': instance_id, 'Service': service_name, 'Status': status})
+    return status
 
-def handler(event, context):
+# ---------------- router ----------------
+
+def lambda_handler(event, context):
     method = event.get('requestContext',{}).get('http',{}).get('method','GET')
-    route  = event.get('requestContext',{}).get('http',{}).get('path','/')
+    path   = event.get('requestContext',{}).get('http',{}).get('path','/')
 
     if method == 'OPTIONS':
-        return _resp(200, {'ok': True})
+        return _http(200, {'ok': True})
 
-    if route.endswith('/instances'):
+    if path.endswith('/instances'):
         if method == 'GET':
             return list_instances()
 
@@ -247,18 +311,25 @@ def handler(event, context):
                 body = json.loads(event.get('body') or '{}')
             except Exception:
                 body = {}
-            act = body.get('action')
+            act = body.get('action', '')
             iid = body.get('instance_id')
 
             if act in ('start','stop','reboot','status'):
                 return mutate_instance(act, iid)
-            if act == 'services_query':
-                return services_query(iid, body.get('pattern') or '')
+
+            if act == 'details':  # services + os + sql
+                patt = body.get('pattern') or ''
+                data = details_services(iid, patt)
+                return _http(200, data)
+
             if act == 'service_start':
-                return service_toggle(iid, body.get('service'), 'start')
+                st = service_toggle(iid, body.get('service',''), 'start')
+                return _http(200, {'Service': body.get('service',''), 'Status': st})
+
             if act == 'service_stop':
-                return service_toggle(iid, body.get('service'), 'stop')
+                st = service_toggle(iid, body.get('service',''), 'stop')
+                return _http(200, {'Service': body.get('service',''), 'Status': st})
 
-            return _resp(400, {'error':'Unsupported action'})
+            return _http(400, {'error': 'Unsupported action'})
 
-    return _resp(404, {'error':'Not found'})
+    return _http(404, {'error': 'Not found'})

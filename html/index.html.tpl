@@ -21,7 +21,7 @@
     .btn.primary{background-image:linear-gradient(180deg,#1d4ed8,#143aa6); border-color:#23408a}
     .btn.ghost{background:transparent; border-color:#28364c}
     main{max-width:1200px; margin:24px auto; padding:0 18px 60px}
-    .filters{display:grid; grid-template-columns:1fr auto auto auto; gap:12px; align-items:center; margin:8px 0 18px}
+    .filters{display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; margin:8px 0 18px}
     .tabs{display:flex; gap:8px; flex-wrap:wrap}
     .tab{padding:8px 10px; border-radius:999px; background:var(--chip); border:1px solid #263245; cursor:pointer}
     .tab.active{outline:2px solid var(--brand)}
@@ -32,7 +32,6 @@
     .card .head{display:flex; gap:10px; align-items:center; padding:12px 14px}
     .name{font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
     .pill{padding:2px 8px; border-radius:999px; border:1px solid #274061; background:#0c1628; font-size:11px; color:#c9dbff}
-    .env{font-size:12px; color:var(--muted)}
     .meta{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:10px 14px; color:#cbd5e1}
     .kv{font-size:12px; opacity:.9}
     .status{display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px dashed #22314a}
@@ -51,8 +50,9 @@
     .hint{font-size:12px; color:#9fb1d0}
     .err{font-size:12px; color:#ff9aa3; margin-top:6px}
     .right{margin-left:auto}
-    .spinner{width:16px; height:16px; border:2px solid #3b4c6e; border-top-color:#7fb0ff; border-radius:50%; animation:spin .8s linear infinite}
-    @keyframes spin{to{transform:rotate(1turn)}}
+    .summary{display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:14px}
+    .summary .tile{padding:18px; border-radius:16px; background:#0c1424; border:1px solid #24324c; box-shadow:var(--shadow); text-align:center}
+    .big{font-size:28px; font-weight:700}
   </style>
 </head>
 <body>
@@ -70,8 +70,6 @@
     <section class="filters">
       <input id="search" class="search" placeholder="Search by name, id, env, tag, ip…" />
       <div class="tabs" id="envTabs"></div>
-      <div class="tabs" id="svcTabs"></div>
-      <div class="tabs" id="stateTabs"></div>
     </section>
 
     <div id="info"></div>
@@ -100,19 +98,23 @@
     </div>
   </div>
 
-  <!-- Service Explorer Modal -->
+  <!-- Details Modal -->
   <div class="modal" id="svcModal" hidden>
     <div class="card-lg">
-      <h2>Service Explorer</h2>
-      <div class="hint">
-        Filter by comma-separated patterns (matches Name or DisplayName on Windows). Example:
-        <code>SQL,SQLServer,SQLSERVERAGENT,ServiceManagement</code>
+      <h2>Details</h2>
+      <div id="svcMeta" class="pill"></div>
+      <div style="display:flex; gap:10px; margin-top:10px">
+        <div class="pill" id="osBadge">OS: -</div>
+        <div class="pill" id="sqlBadge">SQL: -</div>
+      </div>
+      <div class="hint" style="margin-top:10px">
+        Filter services by comma-separated text (matches Name or DisplayName on Windows).
+        Example: <code>SQL,SQLServer,SQLSERVERAGENT,ServiceManagement</code>
       </div>
       <div class="field">
         <label for="svcPattern">Patterns</label>
         <input id="svcPattern" placeholder="SQL,SQLServer,ServiceManagement" value="SQL,SQLServer,ServiceManagement" />
       </div>
-      <div class="pill" id="svcMeta"></div>
       <div id="svcErr" class="err" hidden></div>
       <div id="svcList" style="margin-top:8px"></div>
       <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end">
