@@ -1,12 +1,9 @@
 output "s3_website_url" {
-  value       = "http://${aws_s3_bucket.frontend.bucket}.s3-website.${var.aws_region}.amazonaws.com/"
-  description = "Public S3 static website URL"
+  value = "http://${aws_s3_bucket.frontend.bucket}.s3-website.${data.aws_region.current.name}.amazonaws.com/"
 }
 
-# Base API endpoint (no stage suffix); your HTML uses stage.invoke_url internally.
 output "api_gateway_url" {
-  value       = aws_apigatewayv2_api.api.api_endpoint
-  description = "Base API endpoint (without stage)"
+  value = aws_apigatewayv2_stage.default.invoke_url
 }
 
 output "lambda_handler_name" {
@@ -22,6 +19,5 @@ output "lambda_role_name" {
 }
 
 output "ec2_ssm_instance_profile_name" {
-  description = "Name of the SSM instance profile created for EC2."
-  value       = aws_iam_instance_profile.ec2_ssm_profile.name
+  value = aws_iam_instance_profile.ec2_ssm_profile.name
 }

@@ -1,249 +1,294 @@
-(() => {
-  const API = (window.API_URL || '').replace(/\/$/, '');
+(function(){
+  const $ = (id)=>document.getElementById(id);
+  const API = window.API_URL;
   const LS_KEY = 'ec2dash.basic';
-  const qs = sel => document.querySelector(sel);
-  const qsa = sel => Array.from(document.querySelectorAll(sel));
 
   const state = {
-    raw: [],
-    summary: { total: 0, running: 0, stopped: 0 },
-    selectedEnv: 'Summary',
-    filters: { q: '' },
-    envs: new Set()
+    all: [],
+    envs: [],
+    activeEnv: 'ALL',
+    filterText: ''
   };
 
-  function setHidden(el, val){ el.hidden = !!val; }
-  function ensureHidden(sel){ const el = qs(sel); if (el) setHidden(el, true); }
-  function authHeader(){ return { 'Authorization': sessionStorage.getItem(LS_KEY) || '' }; }
+  // ---------- Auth ----------
+  function token(){ return sessionStorage.getItem(LS_KEY) || ''; }
+  function setToken(t){ sessionStorage.setItem(LS_KEY, t); }
+  function clearToken(){ sessionStorage.removeItem(LS_KEY); }
 
-  async function api(path, opts={}){
-    const res = await fetch(API + path, { ...opts, headers: { 'Content-Type':'application/json', ...(opts.headers||{}), ...authHeader() }});
-    if (res.status === 401 || res.status === 403){
-      sessionStorage.removeItem(LS_KEY);
-      throw new Error('AUTH');
+  function ui_login(show, msg){
+    $('login').hidden = !show;
+    if (msg){ const e=$('loginErr'); e.hidden=false; e.textContent=msg; }
+    if (show){ $('user').focus(); }
+  }
+
+  async function signIn(ev){
+    if (ev) ev.preventDefault();
+    const user = $('user').value.trim();
+    const pass = $('pass').value;
+    const tok  = 'Basic ' + btoa(user + ':' + pass);
+    setToken(tok);
+    // quick probe to validate
+    try{
+      await loadInstances(true);
+      ui_login(false);
+    }catch(err){
+      clearToken();
+      ui_login(true, 'Invalid username or password.');
     }
-    if (!res.ok){ const text = await res.text(); throw new Error(text||res.statusText); }
+  }
+
+  // submit on Enter
+  $('loginForm').addEventListener('submit', signIn);
+  $('signinBtn').addEventListener('click', signIn);
+
+  $('logoutBtn').addEventListener('click', ()=>{
+    clearToken();
+    ui_login(true);
+  });
+
+  $('refreshBtn').addEventListener('click', ()=>{
+    loadInstances(false);
+  });
+
+  $('search').addEventListener('input', (e)=>{
+    state.filterText = e.target.value.trim().toLowerCase();
+    render();
+  });
+
+  // ---------- Fetch ----------
+  async function api(path, opts={}){
+    const headers = Object.assign({
+      'Authorization': token(),
+      'Content-Type': 'application/json'
+    }, opts.headers || {});
+    const res = await fetch(API + path, Object.assign({}, opts, {headers}));
+    if (res.status === 401 || res.status === 403){
+      throw new Error('unauthorized');
+    }
+    if (!res.ok){
+      const txt = await res.text();
+      throw new Error(txt || `HTTP ${res.status}`);
+    }
     return res.json();
   }
 
-  function renderEnvTabs(){
-    const envTabs = qs('#envTabs');
-    const envs = ['Summary', ...Array.from(state.envs).sort()];
-    envTabs.innerHTML = '';
-    envs.forEach(v=>{
+  // ---------- Load + Render ----------
+  function envFromName(name){
+    const m = (name||'').toUpperCase().match(/DEV|DEMO|QA|UAT|SIT|STG|STAGE|PPE|PROD|PRD|DR|TEST/);
+    return m ? m[0] : 'OTHER';
+  }
+
+  async function loadInstances(isProbe){
+    $('info').innerHTML = `<div class="empty">Loading...</div>`;
+    try{
+      const data = await api('/instances');
+      state.all   = (data.items || []).map(x => ({...x, env: envFromName(x.name)}));
+      state.envs  = ['ALL', ...Array.from(new Set(state.all.map(x=>x.env))).sort()];
+      if (!isProbe) {
+        summary(data.summary || {});
+        tabs();
+        render();
+      }
+    }catch(e){
+      $('info').innerHTML = '';
+      ui_login(true, e.message.includes('unauthorized') ? 'Please sign in.' : ('Error: ' + e.message));
+      throw e;
+    }
+  }
+
+  function summary(s){
+    const { total=0, running=0, stopped=0 } = s;
+    $('info').innerHTML = `
+      <div class="summary">
+        <div class="tile"><div class="big">${total}</div><div>Total</div></div>
+        <div class="tile"><div class="big">${running}</div><div>Running</div></div>
+        <div class="tile"><div class="big">${stopped}</div><div>Stopped</div></div>
+      </div>`;
+  }
+
+  function tabs(){
+    const box = $('envTabs');
+    box.innerHTML = '';
+    state.envs.forEach(e=>{
       const b = document.createElement('button');
-      b.className = 'tab' + (state.selectedEnv===v?' active':'');
-      b.textContent = v;
-      b.onclick = ()=>{ state.selectedEnv = v; draw(); };
-      envTabs.appendChild(b);
+      b.className = 'tab' + (state.activeEnv===e ? ' active':'');
+      b.textContent = e;
+      b.onclick = ()=>{ state.activeEnv=e; render(); };
+      box.appendChild(b);
     });
   }
 
-  function draw(){
-    const grid = qs('#grid'); const info = qs('#info');
-    const q = state.filters.q.toLowerCase();
+  function render(){
+    const grid = $('grid');
+    let list = state.all.slice();
 
-    if (state.selectedEnv === 'Summary'){
-      info.innerHTML = '';
-      grid.innerHTML = `
-        <div class="summary">
-          <div class="tile"><div>Total</div><div class="big">${state.summary.total}</div></div>
-          <div class="tile"><div>Running</div><div class="big">${state.summary.running}</div></div>
-          <div class="tile"><div>Stopped</div><div class="big">${state.summary.stopped}</div></div>
-        </div>`;
-      return;
+    if (state.activeEnv !== 'ALL'){
+      list = list.filter(x=>x.env===state.activeEnv);
     }
-
-    const env = state.selectedEnv;
-    const list = state.raw.filter(x =>
-      (x.env===env) && (!q || `${x.name} ${x.id} ${x.env} ${x.service} ${x.ip} ${x.az} ${x.os}`.toLowerCase().includes(q))
-    );
+    if (state.filterText){
+      const t = state.filterText;
+      list = list.filter(x => (x.name||'').toLowerCase().includes(t) || (x.id||'').toLowerCase().includes(t));
+    }
 
     if (!list.length){
-      info.innerHTML = `<div class="empty">No instances in <b>${env}</b>.</div>`;
-      grid.innerHTML = '';
+      grid.innerHTML = `<div class="empty" style="grid-column:1/-1">No instances match.</div>`;
       return;
     }
-    info.innerHTML = `<div class="pill">Showing ${list.length} in ${env}</div>`;
-    grid.innerHTML = list.map(cardHtml).join('');
-    qsa('[data-action]').forEach(el=> el.onclick = onAction);
+
+    grid.innerHTML = list.map(x => card(x)).join('');
+    // wire events
+    list.forEach(x=>{
+      const start = $('start-'+x.id);
+      const stop  = $('stop-'+x.id);
+      const det   = $('det-'+x.id);
+      if (start) start.onclick = ()=> instAction(x.id, 'start');
+      if (stop)  stop.onclick  = ()=> instAction(x.id, 'stop');
+      if (det)   det.onclick   = ()=> openDetails(x);
+    });
   }
 
-  function cardHtml(x){
-    const startDisabled = x.state!=='stopped';
-    const stopDisabled  = x.state!=='running';
-    return `<article class="card ${x.state}">
+  function pill(st){
+    const c = st==='running' ? 'style="border-color:#14532d;background:#0a1f12;color:#a7f3d0"' :
+              st==='stopped' ? 'style="border-color:#4b1d1d;background:#1a0b0b;color:#fecaca"' :
+              '';
+    return `<span class="pill" ${c}>${st}</span>`;
+  }
+
+  function card(x){
+    const canStart = x.state==='stopped';
+    const canStop  = x.state==='running';
+    return `
+    <article class="card">
       <header class="head">
-        <div class="dot" style="width:10px;height:10px;border-radius:50%;background:${x.state==='running'?'#22c55e':(x.state==='stopped'?'#ef4444':'#f59e0b')}"></div>
-        <div class="name" title="${x.name}">${x.name||'(no-name)'}</div>
-        <div class="pill right">${x.env||'—'}</div>
+        <div class="name" title="${x.name}">${x.name}</div>
+        <span class="pill">${x.env}</span>
+        ${pill(x.state)}
+        <div class="grow"></div>
+        <button class="btn ghost" id="det-${x.id}">Details</button>
+        ${canStart ? `<button class="btn primary" id="start-${x.id}">Start</button>`:''}
+        ${canStop  ? `<button class="btn" id="stop-${x.id}">Stop</button>`:''}
       </header>
       <div class="meta">
-        <div class="kv">ID<br><b>${x.id}</b></div>
-        <div class="kv">State<br><b>${x.state}</b></div>
-        <div class="kv">OS<br><b>${x.os||'-'}</b></div>
-        <div class="kv">Type<br><b>${x.type||'-'}</b></div>
-        <div class="kv">AZ<br><b>${x.az||'—'}</b></div>
-        <div class="kv">IP<br><b>${x.ip||'—'}</b></div>
-      </div>
-      <div class="actions">
-        <button class="chip-btn" data-action="start"  data-id="${x.id}" ${startDisabled?'disabled':''}>Start</button>
-        <button class="chip-btn" data-action="stop"   data-id="${x.id}" ${stopDisabled?'disabled':''}>Stop</button>
-        <button class="chip-btn" data-action="reboot" data-id="${x.id}" ${stopDisabled?'':'disabled'}>Reboot</button>
-        <button class="chip-btn" data-action="details" data-id="${x.id}" data-name="${x.name}">Details</button>
+        <div class="kv">ID: ${x.id}</div>
+        <div class="kv">Platform: ${x.platform}</div>
+        <div class="kv">Private IP: ${x.privateIp||'-'}</div>
+        <div class="kv">Public IP: ${x.publicIp||'-'}</div>
       </div>
     </article>`;
   }
 
-  async function load(){
-    qs('#info').innerHTML = '<div class="pill">Loading…</div>';
-    const token = sessionStorage.getItem(LS_KEY);
-    if (!token){ showLogin(); qs('#info').innerHTML=''; return; }
+  async function instAction(id, action){
     try{
-      const data = await api('/instances');
-      state.raw = data.instances || [];
-      state.summary = data.summary || { total: 0, running: 0, stopped: 0 };
-      state.envs = new Set();
-      state.raw.forEach(x=>{ if (x.env) state.envs.add(x.env); });
-      if (state.selectedEnv !== 'Summary' && !state.envs.has(state.selectedEnv)) state.selectedEnv = 'Summary';
-      renderEnvTabs();
-      draw();
-    }catch(err){
-      if (err.message === 'AUTH'){ showLogin('Please sign in.'); }
-      else qs('#info').innerHTML = `<div class="error">${err.message||'Failed loading'}</div>`;
+      await api('/instances', {method:'POST', body:JSON.stringify({action, instanceId:id})});
+      await loadInstances(false);
+    }catch(e){
+      alert('Action failed: ' + e.message);
     }
   }
 
-  function showLogin(msg){
-    ensureHidden('#svcModal');
-    const el = qs('#login'); el && setHidden(el, false);
-    const err = qs('#loginErr'); if (err){ err.textContent = msg||''; err.hidden = !msg; }
-  }
-  function hideLogin(){ const el = qs('#login'); el && setHidden(el, true); }
+  // ---------- Details modal ----------
+  let current = null;
 
-  qs('#signinBtn').onclick = async ()=>{
-    const u = qs('#user').value.trim(); const p = qs('#pass').value;
-    if(!u||!p){ const e = qs('#loginErr'); e.hidden=false; e.textContent='Please enter username and password.'; return; }
-    qs('#loginSpin').style.display='inline-block'; qs('#loginErr').hidden=true;
+  function defaultPatternsFor(name){
+    const n = (name||'').toLowerCase();
+    if (n.includes('sql')) return 'SQL,SQLServer,SQLSERVERAGENT,MsDtsServer';
+    if (n.includes('web') || n.includes('svc') || n.includes('iis')) return 'W3SVC,World Wide Web Publishing,AppHostSvc';
+    if (n.includes('redis')) return 'redis';
+    if (n.includes('rabbit')) return 'rabbit';
+    return 'ServiceManagement';
+  }
+
+  function openDetails(x){
+    current = x;
+    $('svcMeta').textContent = `${x.name} (${x.id})`;
+    $('svcPattern').value = defaultPatternsFor(x.name);
+    $('btnIIS').style.display = /web|svc|iis/i.test(x.name) ? 'inline-block' : 'none';
+    $('osBadge').textContent = 'OS: -';
+    $('sqlBadge').textContent = 'SQL: -';
+    $('svcList').innerHTML = '';
+    $('svcErr').hidden = true;
+    $('svcModal').hidden = false;
+    refreshServices();
+  }
+
+  $('svcClose').onclick = ()=>{ $('svcModal').hidden = true; current = null; };
+  $('svcRefresh').onclick = refreshServices;
+  $('btnIIS').onclick = async ()=>{
+    if (!current) return;
     try{
-      const token = 'Basic ' + btoa(`${u}:${p}`); sessionStorage.setItem(LS_KEY, token);
-      await load(); hideLogin();
-    }catch(err){
-      sessionStorage.removeItem(LS_KEY);
-      const e = qs('#loginErr'); e.hidden=false; e.textContent = (err.message==='AUTH')? 'Invalid username or password.' : (err.message||'Login failed');
-    }finally{ qs('#loginSpin').style.display='none'; }
+      const r = await api('/instances', {method:'POST', body:JSON.stringify({action:'iis_reset', instanceId: current.id})});
+      alert(r.ok ? 'IIS Reset sent.' : ('IIS reset failed: ' + (r.stderr||'unknown')));
+    }catch(e){ alert('IIS reset error: ' + e.message); }
   };
 
-  qs('#logoutBtn').onclick = ()=>{ sessionStorage.removeItem(LS_KEY); showLogin(); };
-  qs('#refreshBtn').onclick = ()=> load();
-  qs('#search').oninput = (e)=>{ state.filters.q = e.target.value; draw(); };
-
-  async function onAction(e){
-    const id = e.currentTarget.dataset.id; const act = e.currentTarget.dataset.action; const name = e.currentTarget.dataset.name || '';
-    if (act === 'details') return openDetails(id, name);
-    const btns = qsa(`[data-id="${id}"]`);
-    btns.forEach(b=>b.disabled=true);
+  async function refreshServices(){
+    if (!current) return;
+    const pats = $('svcPattern').value.split(',').map(s=>s.trim()).filter(Boolean);
+    $('svcErr').hidden = true;
+    $('svcList').innerHTML = `<div class="hint">Querying services…</div>`;
     try{
-      await api('/instances', {method:'POST', body:JSON.stringify({ action:act, instance_id:id })});
-      await load();
-    }catch(err){
-      if (err.message==='AUTH'){ showLogin('Session expired. Please sign in.'); }
-      else alert(err.message||String(err));
-    }finally{ btns.forEach(b=>b.disabled=false); }
-  }
+      const res = await api('/instances', {method:'POST', body:JSON.stringify({action:'services_query', instanceId: current.id, patterns: pats})});
+      const data = res.data || {};
+      $('osBadge').textContent  = 'OS: ' + (data.os || '-');
+      $('sqlBadge').textContent = 'SQL: ' + (data.sql || '-');
 
-  function byId(id){ return state.raw.find(x=>x.id===id); }
-
-  let svcCtx = { id:'', name:'', role:'', isWindows:false };
-
-  function defaultPatternsFor(inst){
-    const key = (inst.service || inst.name || '').toLowerCase();
-    if (key.includes('sql')) return 'MSSQL,SQLServer,SQLSERVERAGENT,SQLAgent';
-    if (key.includes('web') || key.includes('svc') || key.includes('iis')) return 'W3SVC,AppHostSvc,was,IIS';
-    if (key.includes('redis')) return 'redis';
-    return '';
-    }
-
-  async function openDetails(instanceId, name){
-    const inst = byId(instanceId) || { service: '', os:'' };
-    svcCtx = { id: instanceId, name: name, role: (inst.service||'').toLowerCase(), isWindows:false };
-    qs('#svcMeta').textContent = `Instance: ${name||instanceId}`;
-    qs('#svcPattern').value = defaultPatternsFor(inst);
-    qs('#svcErr').hidden = true; qs('#svcList').innerHTML = '';
-    qs('#btnIIS').style.display = 'none';
-    qs('#svcModal').hidden = false;
-    await refreshDetails();
-  }
-
-  async function refreshDetails(){
-    const patt = qs('#svcPattern').value.trim();
-    try{
-      const res = await api('/instances', { method:'POST', body: JSON.stringify({ action:'details', instance_id: svcCtx.id, pattern: patt }) });
-      qs('#osBadge').textContent = 'OS: ' + (res.OS || '-');
-      qs('#sqlBadge').textContent = 'SQL: ' + (res.SQL || '-');
-      svcCtx.isWindows = !!res.isWindows;
-      const showIIS = svcCtx.isWindows && (svcCtx.role.includes('web') || svcCtx.role.includes('svc') || svcCtx.role.includes('iis'));
-      qs('#btnIIS').style.display = showIIS ? 'inline-block' : 'none';
-      renderSvcList(res.Services || []);
-    }catch(err){
-      if (err.message==='AUTH'){ showLogin('Please sign in.'); return; }
-      qs('#svcErr').hidden = false; qs('#svcErr').textContent = err.message||'Failed to load details';
+      const svcs = data.services || [];
+      if (!svcs.length){
+        $('svcList').innerHTML = `<div class="empty">No matching services.</div>`;
+      } else {
+        $('svcList').innerHTML =
+          `<div class="grid">` + svcs.map(svc => svcCard(svc)).join('') + `</div>`;
+        svcs.forEach(s => {
+          const sid = cssId(s.Name);
+          const start = $('svc-start-'+sid);
+          const stop  = $('svc-stop-'+sid);
+          if (start) start.onclick = ()=> svcAction(s.Name, 'service_start');
+          if (stop)  stop.onclick  = ()=> svcAction(s.Name, 'service_stop');
+        });
+      }
+    }catch(e){
+      $('svcErr').hidden = false;
+      $('svcErr').textContent = e.message;
+      $('svcList').innerHTML = '';
     }
   }
 
-  function renderSvcList(items){
-    if(!items.length){ qs('#svcList').innerHTML = '<div class="empty">No matching services.</div>'; return; }
-    const rows = items.map(s=>{
-      const st = (s.status||'').toLowerCase();
-      const running = (st==='running' || st==='active');
-      const btn = running
-        ? `<button class="chip-btn" data-svc-act="stop" data-svc-name="${s.name}">Stop</button>`
-        : `<button class="chip-btn" data-svc-act="start" data-svc-name="${s.name}">Start</button>`;
-      return `<tr>
-        <td style="padding:8px 10px; border-bottom:1px solid #23314a"><code>${s.name}</code></td>
-        <td style="padding:8px 10px; border-bottom:1px solid #23314a">${s.displayName||''}</td>
-        <td style="padding:8px 10px; border-bottom:1px solid #23314a">${s.status}</td>
-        <td style="padding:8px 10px; border-bottom:1px solid #23314a">${btn}</td>
-      </tr>`;
-    }).join('');
-    qs('#svcList').innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:13px"><thead><tr>
-      <th style="text-align:left; padding:8px 10px; border-bottom:1px solid #23314a">Name</th>
-      <th style="text-align:left; padding:8px 10px; border-bottom:1px solid #23314a">Display Name</th>
-      <th style="text-align:left; padding:8px 10px; border-bottom:1px solid #23314a">Status</th>
-      <th style="text-align:left; padding:8px 10px; border-bottom:1px solid #23314a">Action</th>
-    </tr></thead><tbody>${rows}</tbody></table>`;
-    qsa('[data-svc-act]').forEach(el=> el.onclick = onSvcToggle);
+  function cssId(s){ return (s||'').replace(/[^a-z0-9]/ig,'_'); }
+
+  function svcCard(s){
+    const canStart = (''+s.Status).toLowerCase() === 'stopped';
+    const canStop  = (''+s.Status).toLowerCase() === 'running';
+    const sid      = cssId(s.Name);
+    return `
+      <article class="card">
+        <header class="head">
+          <div class="name" title="${s.DisplayName||s.Name}">${s.DisplayName||s.Name}</div>
+          <span class="pill">${s.Name}</span>
+          <span class="pill">${s.Status}</span>
+          <div class="grow"></div>
+          ${canStart ? `<button class="btn primary" id="svc-start-${sid}">Start</button>`:''}
+          ${canStop  ? `<button class="btn" id="svc-stop-${sid}">Stop</button>`:''}
+        </header>
+      </article>`;
   }
 
-  async function onSvcToggle(e){
-    const act = e.currentTarget.dataset.svcAct; const svc = e.currentTarget.dataset.svcName;
-    e.currentTarget.disabled = true;
+  async function svcAction(name, action){
+    if (!current) return;
     try{
-      await api('/instances', { method:'POST', body: JSON.stringify({ action: act==='start'?'service_start':'service_stop', instance_id: svcCtx.id, service: svc }) });
-      await refreshDetails();
-    }catch(err){
-      if (err.message==='AUTH'){ showLogin('Please sign in.'); }
-      else alert(err.message||'Action failed');
-    }finally{ e.currentTarget.disabled = false; }
-  }
-
-  qs('#btnIIS').onclick = async ()=>{
-    try{
-      await api('/instances', { method:'POST', body: JSON.stringify({ action:'iis_reset', instance_id: svcCtx.id }) });
-      alert('IIS reset command sent.');
-    }catch(err){
-      if (err.message==='AUTH'){ showLogin('Please sign in.'); }
-      else alert(err.message||'IIS reset failed');
+      await api('/instances', {method:'POST', body:JSON.stringify({action, instanceId: current.id, name})});
+      await refreshServices();
+    }catch(e){
+      alert('Service action failed: ' + e.message);
     }
-  };
+  }
 
-  qs('#svcClose').onclick = ()=>{ qs('#svcModal').hidden = true; };
-  qs('#svcRefresh').onclick = ()=>{ refreshDetails(); };
-
-  (function boot(){
-    ensureHidden('#login');
-    ensureHidden('#svcModal');
-    if (!sessionStorage.getItem(LS_KEY)) { showLogin(); return; }
-    load();
+  // ---------- Boot ----------
+  (async function boot(){
+    if (token()) {
+      try { await loadInstances(false); $('login').hidden = true; }
+      catch { ui_login(true); }
+    } else {
+      ui_login(true);
+    }
   })();
 })();
