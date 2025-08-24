@@ -1,74 +1,68 @@
-import base64, json, os
-import boto3
+# lambda/authorizer.py
+import base64, json, boto3
 
-ssm = boto3.client('ssm')
+ssm = boto3.client("ssm")
 
-def _get_param(name: str):
+def _get(name):
     try:
-        resp = ssm.get_parameter(Name=name, WithDecryption=True)
-        return resp['Parameter']['Value']
+        return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
     except ssm.exceptions.ParameterNotFound:
         return None
 
-def _password_from_value(val: str):
-    # Accept a plain password, or {"password": "..."} JSON
-    v = val.strip()
+def _pw(val: str):
+    v = (val or "").strip()
     if not v:
         return None
-    if v.startswith('{'):
+    if v.startswith("{"):
         try:
             obj = json.loads(v)
-            pwd = str(obj.get('password', '')).strip()
-            return pwd or None
+            p = str(obj.get("password", "")).strip()
+            return p or None
         except Exception:
             return None
     return v
 
 def lambda_handler(event, _ctx):
-    # We’re a REQUEST authorizer with simple responses.
-    # Expect Basic auth in header.
-    auth = (event.get('headers') or {}).get('authorization') or (event.get('headers') or {}).get('Authorization')
-    if not auth or not auth.lower().startswith('basic '):
+    hdrs = event.get("headers") or {}
+    auth = hdrs.get("authorization") or hdrs.get("Authorization")
+    if not auth or not auth.lower().startswith("basic "):
+        print("AUTHZ: missing Basic header")
         return {"isAuthorized": False, "context": {"reason": "missing_basic"}}
 
     try:
-        decoded = base64.b64decode(auth.split(' ',1)[1]).decode('utf-8', 'ignore')
-        username, password = decoded.split(':', 1)
-    except Exception:
+        userpass = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8", "ignore")
+        username, password = userpass.split(":", 1)
+    except Exception as e:
+        print(f"AUTHZ: bad Basic format: {e}")
         return {"isAuthorized": False, "context": {"reason": "bad_basic_format"}}
 
-    username = username.strip()
-    password = password.strip()
+    username, password = username.strip(), password.strip()
+    print(f"AUTHZ: user={username}")
 
-    # Try both prefixes
-    prefixes = ["/ec2-auth/", "/ec2dash/auth/"]
-    param_name_used = None
-    stored_pwd = None
+    # 👉 Search ALL three prefixes
+    prefixes = ["/ec2-auth/", "/ec2dash/auth/", "/ec2-dashboard/auth/"]
 
+    used, stored = None, None
     for pref in prefixes:
         name = pref + username
-        v = _get_param(name)
-        if v is None:
+        raw = _get(name)
+        if raw is None:
+            print(f"AUTHZ: not found: {name}")
             continue
-        p = _password_from_value(v)
-        if p:
-            stored_pwd = p
-            param_name_used = name
-            break
+        pw = _pw(raw)
+        if not pw:
+            print(f"AUTHZ: unparsable value at {name} (expect plain or {{\"password\":\"...\"}})")
+            continue
+        used, stored = name, pw
+        break
 
-    if not stored_pwd:
-        # User not found or value unparsable
+    if not stored:
+        print("AUTHZ: no usable credential found")
         return {"isAuthorized": False, "context": {"reason": "user_not_found_or_bad_value"}}
 
-    if password != stored_pwd:
-        return {"isAuthorized": False, "context": {"reason": "bad_password", "param": param_name_used or ""}}
+    ok = (password == stored)
+    print(f"AUTHZ: compare={ok} param={used}")
+    if not ok:
+        return {"isAuthorized": False, "context": {"reason": "bad_password", "param": used or ""}}
 
-    # Authorized
-    # You can add arbitrary items to context; handler can read them.
-    return {
-        "isAuthorized": True,
-        "context": {
-            "principalId": username,
-            "param": param_name_used or ""
-        }
-    }
+    return {"isAuthorized": True, "context": {"principalId": username, "param": used or ""}}

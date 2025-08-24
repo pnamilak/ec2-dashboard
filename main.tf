@@ -194,14 +194,16 @@ resource "aws_iam_policy" "ssm_read_auth" {
     Version = "2012-10-17",
     Statement = [{
       Effect   = "Allow",
-      Action   = ["ssm:GetParameter","ssm:GetParameters","ssm:GetParameterHistory"],
+      Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
       Resource = [
+        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
         "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*"
+        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*" # <— NEW
       ]
     }]
   })
 }
+
 
 resource "aws_iam_role_policy_attachment" "lambda_ssm" {
   role       = aws_iam_role.lambda_role.name
