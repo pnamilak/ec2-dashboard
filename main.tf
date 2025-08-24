@@ -402,3 +402,12 @@ resource "aws_vpc_endpoint" "ssm_endpoints" {
   security_group_ids  = var.endpoint_sg_id != null ? [var.endpoint_sg_id] : []
   private_dns_enabled = true
 }
+
+# Upload the JS with a versioned key to bust caches
+resource "aws_s3_object" "app_v3_js" {
+  bucket        = aws_s3_bucket.frontend.id
+  key           = "app.v3.js"
+  source        = "${local.web_dir}/app.v3.js"
+  content_type  = "application/javascript"
+  cache_control = "max-age=31536000, immutable"
+}

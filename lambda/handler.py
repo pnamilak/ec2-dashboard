@@ -5,8 +5,6 @@ from botocore.exceptions import ClientError
 _ec2 = boto3.client('ec2')
 _ssm = boto3.client('ssm')
 
-# ---------------- basics ----------------
-
 def _http(status, body):
     return {
         'statusCode': status,
@@ -55,7 +53,6 @@ def _send_ssm(instance_id: str, commands, is_windows: bool):
         return {'Status': 'Error', 'Error': f'SendCommand: {e}'}
 
     cmd_id = resp['Command']['CommandId']
-    # wait up to ~45s
     for _ in range(45):
         time.sleep(1)
         try:
@@ -74,7 +71,6 @@ def _is_windows(instance_id: str) -> bool:
     return plat == 'windows' or 'windows' in pdet
 
 def _ssm_info_map():
-    """Map InstanceId -> {PingStatus, PlatformName, PlatformVersion} for SSM-managed instances."""
     out = {}
     token = None
     while True:
@@ -90,8 +86,6 @@ def _ssm_info_map():
         token = resp.get('NextToken')
         if not token: break
     return out
-
-# ---------------- list & power ----------------
 
 def list_instances():
     try:
@@ -114,7 +108,7 @@ def list_instances():
                     'name': name,
                     'state': st,
                     'env': env,
-                    'service': svc,  # used by UI to pick default service patterns
+                    'service': svc,
                     'az': i.get('Placement',{}).get('AvailabilityZone'),
                     'ip': i.get('PrivateIpAddress'),
                     'type': i.get('InstanceType'),
@@ -145,8 +139,6 @@ def mutate_instance(action, instance_id):
         return _http(200, {'ok': True})
     except ClientError as e:
         return _http(400, {'error': str(e)})
-
-# ---------------- details: OS/SQL + services ----------------
 
 def _split_patterns(patt: str):
     if not patt: return []
@@ -208,7 +200,6 @@ def details_services(instance_id: str, pattern_text: str):
     pats = _split_patterns(pattern_text) or ['SQL','SQLServer','ServiceManagement','MSSQL','IIS','W3SVC','AppHostSvc','redis']
     win = _is_windows(instance_id)
 
-    # list matching services
     if win:
         or_filters = ' -or '.join([f"$_.Name -like '*{p}*' -or $_.DisplayName -like '*{p}*'" for p in pats])
         ps = (
@@ -274,7 +265,6 @@ def service_toggle(instance_id: str, service_name: str, target: str):
 
     _send_ssm(instance_id, commands, win)
 
-    # re-check status
     if win:
         qps = (
             f'try {{ (Get-Service -Name "{service_name}").Status }} '
@@ -295,8 +285,6 @@ def iis_reset(instance_id: str):
     inv = _send_ssm(instance_id, [ps], True)
     ok = inv.get('Status') == 'Success'
     return {'ok': ok, 'note': inv.get('StandardErrorContent') or ''}
-
-# ---------------- router ----------------
 
 def lambda_handler(event, context):
     method = event.get('requestContext',{}).get('http',{}).get('method','GET')

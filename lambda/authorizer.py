@@ -4,7 +4,6 @@ import os
 
 _ssm = boto3.client('ssm')
 
-# Allow both naming schemes; env vars take precedence if set.
 PARAM_USER = os.environ.get('PARAM_USER')
 PARAM_PASS = os.environ.get('PARAM_PASS')
 
@@ -20,11 +19,7 @@ def _get_param_first(candidates):
     raise RuntimeError('no_param')
 
 def _resp(allow: bool, route_arn: str, reason: str = ''):
-    return {
-        "isAuthorized": allow,
-        "context": {"reason": reason} if reason else {},
-        "routeArn": route_arn
-    }
+    return {"isAuthorized": allow, "context": {"reason": reason} if reason else {}, "routeArn": route_arn}
 
 def lambda_handler(event, context):
     route_arn = event.get('routeArn')
@@ -43,6 +38,7 @@ def lambda_handler(event, context):
     try:
         u = PARAM_USER or _get_param_first(FALLBACK_USERS)
         p = PARAM_PASS or _get_param_first(FALLBACK_PASSW)
-        return _resp(user == u and pwd == p, route_arn, 'ok' if (user == u and pwd == p) else 'invalid_creds')
+        ok = (user == u and pwd == p)
+        return _resp(ok, route_arn, 'ok' if ok else 'invalid_creds')
     except Exception:
         return _resp(False, route_arn, 'ssm_error')

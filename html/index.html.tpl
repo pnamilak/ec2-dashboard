@@ -126,6 +126,6 @@
   </div>
 
   <script>window.API_URL='${api_url}'.replace(/\/$/,'');</script>
-  <script src="/app.js" defer></script>
+  <script src="/app.v3.js" defer></script>
 </body>
 </html>
