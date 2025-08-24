@@ -286,7 +286,7 @@ def iis_reset(instance_id: str):
     ok = inv.get('Status') == 'Success'
     return {'ok': ok, 'note': inv.get('StandardErrorContent') or ''}
 
-def lambda_handler(event, context):
+def lambda_handler(event, _ctx):
     method = event.get('requestContext',{}).get('http',{}).get('method','GET')
     path   = event.get('requestContext',{}).get('http',{}).get('path','/')
 

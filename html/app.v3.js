@@ -12,10 +12,8 @@
     envs: new Set()
   };
 
-  // --- utils
   function setHidden(el, val){ el.hidden = !!val; }
   function ensureHidden(sel){ const el = qs(sel); if (el) setHidden(el, true); }
-
   function authHeader(){ return { 'Authorization': sessionStorage.getItem(LS_KEY) || '' }; }
 
   async function api(path, opts={}){
@@ -28,7 +26,6 @@
     return res.json();
   }
 
-  // --- tabs & render
   function renderEnvTabs(){
     const envTabs = qs('#envTabs');
     const envs = ['Summary', ...Array.from(state.envs).sort()];
@@ -77,7 +74,7 @@
     const stopDisabled  = x.state!=='running';
     return `<article class="card ${x.state}">
       <header class="head">
-        <div class="dot"></div>
+        <div class="dot" style="width:10px;height:10px;border-radius:50%;background:${x.state==='running'?'#22c55e':(x.state==='stopped'?'#ef4444':'#f59e0b')}"></div>
         <div class="name" title="${x.name}">${x.name||'(no-name)'}</div>
         <div class="pill right">${x.env||'—'}</div>
       </header>
@@ -98,7 +95,6 @@
     </article>`;
   }
 
-  // --- data load & login
   async function load(){
     qs('#info').innerHTML = '<div class="pill">Loading…</div>';
     const token = sessionStorage.getItem(LS_KEY);
@@ -119,7 +115,7 @@
   }
 
   function showLogin(msg){
-    ensureHidden('#svcModal'); // never show details if we’re not logged in
+    ensureHidden('#svcModal');
     const el = qs('#login'); el && setHidden(el, false);
     const err = qs('#loginErr'); if (err){ err.textContent = msg||''; err.hidden = !msg; }
   }
@@ -142,7 +138,6 @@
   qs('#refreshBtn').onclick = ()=> load();
   qs('#search').oninput = (e)=>{ state.filters.q = e.target.value; draw(); };
 
-  // --- actions & details
   async function onAction(e){
     const id = e.currentTarget.dataset.id; const act = e.currentTarget.dataset.action; const name = e.currentTarget.dataset.name || '';
     if (act === 'details') return openDetails(id, name);
@@ -167,14 +162,13 @@
     if (key.includes('web') || key.includes('svc') || key.includes('iis')) return 'W3SVC,AppHostSvc,was,IIS';
     if (key.includes('redis')) return 'redis';
     return '';
-  }
+    }
 
   async function openDetails(instanceId, name){
     const inst = byId(instanceId) || { service: '', os:'' };
     svcCtx = { id: instanceId, name: name, role: (inst.service||'').toLowerCase(), isWindows:false };
     qs('#svcMeta').textContent = `Instance: ${name||instanceId}`;
-    const def = defaultPatternsFor(inst);
-    qs('#svcPattern').value = def;
+    qs('#svcPattern').value = defaultPatternsFor(inst);
     qs('#svcErr').hidden = true; qs('#svcList').innerHTML = '';
     qs('#btnIIS').style.display = 'none';
     qs('#svcModal').hidden = false;
@@ -233,7 +227,6 @@
     }finally{ e.currentTarget.disabled = false; }
   }
 
-  // IIS Reset
   qs('#btnIIS').onclick = async ()=>{
     try{
       await api('/instances', { method:'POST', body: JSON.stringify({ action:'iis_reset', instance_id: svcCtx.id }) });
@@ -247,13 +240,9 @@
   qs('#svcClose').onclick = ()=>{ qs('#svcModal').hidden = true; };
   qs('#svcRefresh').onclick = ()=>{ refreshDetails(); };
 
-  // --- boot
   (function boot(){
-    // Always start with all modals hidden
     ensureHidden('#login');
     ensureHidden('#svcModal');
-
-    // If we have no token, do NOT call the API; prompt for login
     if (!sessionStorage.getItem(LS_KEY)) { showLogin(); return; }
     load();
   })();

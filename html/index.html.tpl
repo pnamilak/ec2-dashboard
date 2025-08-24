@@ -36,6 +36,7 @@
     .kv{font-size:12px; opacity:.9}
     .empty, .error{padding:30px; text-align:center; color:#cbd5e1; border:1px dashed #25324a; border-radius:var(--radius)}
     .modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(3,6,20,.7); z-index:9999}
+    .modal[hidden]{display:none !important;} /* keep modals hidden until JS shows them */
     .card-lg{width:720px; background:#0c1424; border:1px solid #24324c; border-radius:18px; box-shadow:var(--shadow); padding:18px}
     .card-lg h2{margin:6px 0 12px; font-size:18px}
     .field{display:flex; flex-direction:column; gap:6px; margin:8px 0}
@@ -47,12 +48,14 @@
     .summary .tile{padding:18px; border-radius:16px; background:#0c1424; border:1px solid #24324c; box-shadow:var(--shadow); text-align:center}
     .big{font-size:28px; font-weight:700}
   </style>
+  <link rel="icon" href="data:,"><!-- silence favicon 404 -->
 </head>
 <body>
   <header>
     <div class="bar">
       <div class="brand">EC2 Control Dashboard</div>
       <div class="pill" id="api-pill">API: <span id="api-base">${api_url}</span></div>
+      <div class="pill" id="build-pill">Build: ${js_ver.slice(0,8)}</div>
       <div class="grow"></div>
       <button class="btn ghost" id="refreshBtn">Refresh</button>
       <button class="btn" id="logoutBtn">Logout</button>
@@ -74,20 +77,23 @@
     <div class="card-lg" style="width:380px">
       <h2>Sign in</h2>
       <div class="hint">Enter the Basic Auth credentials stored in SSM.</div>
-      <div class="field">
-        <label for="user">Username</label>
-        <input id="user" autocomplete="username" />
-      </div>
-      <div class="field">
-        <label for="pass">Password</label>
-        <input id="pass" type="password" autocomplete="current-password" />
-      </div>
-      <div class="err" id="loginErr" hidden></div>
-      <div style="display:flex; gap:10px; margin-top:10px; align-items:center">
-        <button class="btn primary" id="signinBtn">Sign In</button>
-        <div id="loginSpin" class="spinner" style="display:none"></div>
-        <div class="hint right">Token is kept in session only.</div>
-      </div>
+
+      <form id="loginForm" onsubmit="event.preventDefault(); document.getElementById('signinBtn').click();">
+        <div class="field">
+          <label for="user">Username</label>
+          <input id="user" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="pass">Password</label>
+          <input id="pass" type="password" autocomplete="current-password" />
+        </div>
+        <div class="err" id="loginErr" hidden></div>
+        <div style="display:flex; gap:10px; margin-top:10px; align-items:center">
+          <button class="btn primary" id="signinBtn" type="button">Sign In</button>
+          <div id="loginSpin" class="spinner" style="display:none"></div>
+          <div class="hint right">Token is kept in session only.</div>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -118,16 +124,26 @@
     </div>
   </div>
 
-  <script>window.API_URL='${api_url}'.replace(/\/$/,''); window.__APP_READY=false;</script>
-  <script src="/app.v3.js?v=${js_ver}" defer onload="window.__APP_READY=true;"></script>
+  <!-- Build+token bootstrap -->
   <script>
-    // Fallback: if JS was cached/stale and didn’t run, prompt login + hint
+    window.API_URL='${api_url}'.replace(/\/$/,'');
+    window.__APP_READY=false;
+    try{
+      var K='__ec2dash_build__';
+      if (localStorage.getItem(K) !== '${js_ver}') {
+        sessionStorage.removeItem('ec2dash.basic'); // force login after each deploy
+        localStorage.setItem(K, '${js_ver}');
+      }
+    }catch(_){}
+  </script>
+  <!-- Load the versioned JS; browsers cannot reuse an old build -->
+  <script src="/app.v3.js?v=${js_ver}" defer onload="window.__APP_READY=true;"></script>
+  <!-- Fallback: if JS didn't init, show login + hint -->
+  <script>
     setTimeout(function(){
       if (!window.__APP_READY) {
-        var m=document.getElementById('login');
-        if (m) m.hidden=false;
-        var e=document.getElementById('loginErr');
-        if (e) { e.hidden=false; e.textContent='If this page looks stuck, press Ctrl+F5 (hard refresh).'; }
+        var m=document.getElementById('login'); if (m) m.hidden=false;
+        var e=document.getElementById('loginErr'); if (e){ e.hidden=false; e.textContent='Hard refresh (Ctrl+F5 / Cmd+Shift+R) to load the latest app.'; }
       }
     }, 1200);
   </script>

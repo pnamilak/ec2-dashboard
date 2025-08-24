@@ -4,9 +4,11 @@ import os
 
 _ssm = boto3.client('ssm')
 
+# You can optionally set these as Lambda env vars to override SSM
 PARAM_USER = os.environ.get('PARAM_USER')
 PARAM_PASS = os.environ.get('PARAM_PASS')
 
+# We support either path
 FALLBACK_USERS = ['/ec2-auth/username', '/ec2dash/auth/username']
 FALLBACK_PASSW = ['/ec2-auth/password', '/ec2dash/auth/password']
 
@@ -21,7 +23,7 @@ def _get_param_first(candidates):
 def _resp(allow: bool, route_arn: str, reason: str = ''):
     return {"isAuthorized": allow, "context": {"reason": reason} if reason else {}, "routeArn": route_arn}
 
-def lambda_handler(event, context):
+def lambda_handler(event, _ctx):
     route_arn = event.get('routeArn')
     headers = (event.get('headers') or {})
     auth = headers.get('authorization') or headers.get('Authorization')
