@@ -25,11 +25,6 @@ data "aws_region" "current" {}
 ##########################
 # Standardized source paths
 ##########################
-# Place your files like this:
-#   lambda/handler.py
-#   lambda/authorizer.py
-#   html/index.html.tpl
-#   html/app.js                 # >>> NEW: split JS file
 locals {
   lambda_dir = "${path.module}/lambda"
   web_dir    = "${path.module}/html"
@@ -68,7 +63,6 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
 
 resource "aws_s3_bucket_policy" "frontend_policy" {
   bucket = aws_s3_bucket.frontend.id
-
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -84,7 +78,6 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 ##########################
 # Package Lambda Code
 ##########################
-# Zips the two Python files from ./lambda
 data "archive_file" "lambda_zip" {
   type        = "zip"
   output_path = "${path.module}/lambda_payload.zip"
@@ -110,7 +103,7 @@ resource "aws_apigatewayv2_api" "api" {
 
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["GET", "POST", "OPTIONS"]    # >>> add POST
+    allow_methods = ["GET", "POST", "OPTIONS"]
     allow_headers = ["Authorization", "Content-Type"]
   }
 }
@@ -160,8 +153,7 @@ resource "aws_apigatewayv2_integration" "lambda" {
   integration_type       = "AWS_PROXY"
   integration_method     = "POST"
   payload_format_version = "2.0"
-
-  integration_uri = aws_lambda_function.ec2_handler.invoke_arn
+  integration_uri        = aws_lambda_function.ec2_handler.invoke_arn
 }
 
 # GET /instances (list)
@@ -173,7 +165,7 @@ resource "aws_apigatewayv2_route" "instances_route" {
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
-# >>> NEW: POST /instances (actions: start/stop/reboot, services_query, service_start/stop)
+# POST /instances (actions)
 resource "aws_apigatewayv2_route" "instances_post" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "POST /instances"
@@ -209,7 +201,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# EC2 Describe/Start/Stop
+# EC2 Describe/Start/Stop/Reboot
 resource "aws_iam_policy" "ec2_control_policy" {
   name_prefix = "ec2-control-policy-"
   policy = jsonencode({
@@ -220,7 +212,7 @@ resource "aws_iam_policy" "ec2_control_policy" {
         "ec2:DescribeInstances",
         "ec2:StartInstances",
         "ec2:StopInstances",
-        "ec2:RebootInstances"         # >>> add reboot for parity
+        "ec2:RebootInstances"
       ],
       Resource = "*"
     }]
@@ -232,7 +224,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ec2" {
   policy_arn = aws_iam_policy.ec2_control_policy.arn
 }
 
-# If authorizer reads SSM parameters for auth (e.g., /ec2-auth/*)
+# Authorizer – allow reading either /ec2-auth/* or /ec2dash/auth/*
 resource "aws_iam_policy" "ssm_read_auth" {
   name_prefix = "ssm-read-auth-params-"
   policy = jsonencode({
@@ -240,7 +232,10 @@ resource "aws_iam_policy" "ssm_read_auth" {
     Statement = [{
       Effect   = "Allow",
       Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
-      Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*"
+      Resource = [
+        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
+        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*"
+      ]
     }]
   })
 }
@@ -250,7 +245,7 @@ resource "aws_iam_role_policy_attachment" "lambda_ssm" {
   policy_arn = aws_iam_policy.ssm_read_auth.arn
 }
 
-# ✅ SSM command permissions for service controls
+# SSM command permissions for service controls
 resource "aws_iam_policy" "lambda_ssm_commands" {
   name_prefix = "lambda-ssm-commands-"
   policy = jsonencode({
@@ -295,40 +290,30 @@ resource "aws_lambda_permission" "apigw_handler" {
 }
 
 #############################################
-# SSM role + instance profile for EC2
+# SSM role + instance profile for EC2 (optional attach)
 #############################################
-
-# Role EC2 will assume
 resource "aws_iam_role" "ec2_ssm_role" {
   name_prefix = "ec2-ssm-role-"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [{
-      Effect = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
+      Effect = "Allow",
+      Principal = { Service = "ec2.amazonaws.com" },
       Action   = "sts:AssumeRole"
     }]
   })
 }
 
-# Attach AmazonSSMManagedInstanceCore
 resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   role       = aws_iam_role.ec2_ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Instance profile EC2 uses
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name_prefix = "ec2-ssm-instance-profile-"
   role        = aws_iam_role.ec2_ssm_role.name
 }
 
-#############################################
-# (Optional) Attach the profile to existing EC2
-# that match state/tag filters
-#############################################
-
-# Find instances to target (running by default, plus optional tag filters)
 data "aws_instances" "ssm_attach_targets" {
   filter {
     name   = "instance-state-name"
@@ -344,8 +329,6 @@ data "aws_instances" "ssm_attach_targets" {
   }
 }
 
-# Use the AWS CLI to associate the profile to each target instance
-# (GitHub ubuntu runners include AWS CLI; no changes to your existing workflow needed)
 resource "null_resource" "associate_ssm_profile" {
   for_each = var.auto_attach_ssm_profile ? toset(data.aws_instances.ssm_attach_targets.ids) : []
 
@@ -360,12 +343,18 @@ resource "null_resource" "associate_ssm_profile" {
 }
 
 ##########################
-# HTML → S3 (templated)
+# HTML → S3 (templated) + versioned JS
 ##########################
+locals {
+  app_js_path = "${local.web_dir}/app.v3.js"
+  app_js_md5  = filemd5(local.app_js_path)
+}
+
 data "template_file" "html" {
   template = file("${local.web_dir}/index.html.tpl")
   vars = {
     api_url = aws_apigatewayv2_stage.default.invoke_url
+    js_ver  = local.app_js_md5
   }
 }
 
@@ -374,16 +363,15 @@ resource "aws_s3_object" "index_html" {
   key           = "index.html"
   content       = data.template_file.html.rendered
   content_type  = "text/html"
-  cache_control = "no-cache"
+  cache_control = "no-cache" # always fetch fresh HTML
 }
 
-# >>> NEW: Upload JS bundle
-resource "aws_s3_object" "app_js" {
+resource "aws_s3_object" "app_v3_js" {
   bucket        = aws_s3_bucket.frontend.id
-  key           = "app.js"
-  source        = "${local.web_dir}/app.js"
+  key           = "app.v3.js"
+  source        = local.app_js_path
   content_type  = "application/javascript"
-  cache_control = "max-age=60"
+  cache_control = "max-age=31536000, immutable"
 }
 
 ##########################
@@ -401,13 +389,4 @@ resource "aws_vpc_endpoint" "ssm_endpoints" {
   subnet_ids          = var.private_subnet_ids
   security_group_ids  = var.endpoint_sg_id != null ? [var.endpoint_sg_id] : []
   private_dns_enabled = true
-}
-
-# Upload the JS with a versioned key to bust caches
-resource "aws_s3_object" "app_v3_js" {
-  bucket        = aws_s3_bucket.frontend.id
-  key           = "app.v3.js"
-  source        = "${local.web_dir}/app.v3.js"
-  content_type  = "application/javascript"
-  cache_control = "max-age=31536000, immutable"
 }

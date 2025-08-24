@@ -34,13 +34,6 @@
     .pill{padding:2px 8px; border-radius:999px; border:1px solid #274061; background:#0c1628; font-size:11px; color:#c9dbff}
     .meta{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:10px 14px; color:#cbd5e1}
     .kv{font-size:12px; opacity:.9}
-    .status{display:flex; align-items:center; gap:8px; padding:10px 14px; border-top:1px dashed #22314a}
-    .dot{width:10px; height:10px; border-radius:50%; background:var(--warn)}
-    .stopped .dot{background:var(--bad)}
-    .running .dot{background:var(--ok)}
-    .actions{display:flex; gap:8px; flex-wrap:wrap; padding:12px 14px; border-top:1px solid #1d2a40}
-    .chip-btn{font-size:12px; padding:7px 10px; border-radius:999px; border:1px solid #2a3a58; background:#0e172a; cursor:pointer}
-    .chip-btn:hover{filter:brightness(1.2)}
     .empty, .error{padding:30px; text-align:center; color:#cbd5e1; border:1px dashed #25324a; border-radius:var(--radius)}
     .modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(3,6,20,.7); z-index:9999}
     .card-lg{width:720px; background:#0c1424; border:1px solid #24324c; border-radius:18px; box-shadow:var(--shadow); padding:18px}
@@ -125,7 +118,18 @@
     </div>
   </div>
 
-  <script>window.API_URL='${api_url}'.replace(/\/$/,'');</script>
-  <script src="/app.v3.js" defer></script>
+  <script>window.API_URL='${api_url}'.replace(/\/$/,''); window.__APP_READY=false;</script>
+  <script src="/app.v3.js?v=${js_ver}" defer onload="window.__APP_READY=true;"></script>
+  <script>
+    // Fallback: if JS was cached/stale and didn’t run, prompt login + hint
+    setTimeout(function(){
+      if (!window.__APP_READY) {
+        var m=document.getElementById('login');
+        if (m) m.hidden=false;
+        var e=document.getElementById('loginErr');
+        if (e) { e.hidden=false; e.textContent='If this page looks stuck, press Ctrl+F5 (hard refresh).'; }
+      }
+    }, 1200);
+  </script>
 </body>
 </html>
