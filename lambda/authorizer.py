@@ -1,40 +1,74 @@
-import base64
+import base64, json, os
 import boto3
-import os
 
-ssm = boto3.client("ssm")
+ssm = boto3.client('ssm')
 
-# Cache credentials across invocations
-_EXPECTED = None
+def _get_param(name: str):
+    try:
+        resp = ssm.get_parameter(Name=name, WithDecryption=True)
+        return resp['Parameter']['Value']
+    except ssm.exceptions.ParameterNotFound:
+        return None
 
-def _get_expected():
-    global _EXPECTED
-    if _EXPECTED:
-        return _EXPECTED
-    names = [
-        "/ec2dash/auth/username", "/ec2dash/auth/password",
-        "/ec2-auth/username", "/ec2-auth/password"
-    ]
-    # Pull in one call (unknown which exist)
-    resp = ssm.get_parameters(Names=names, WithDecryption=True)
-    vals = {p["Name"]: p["Value"] for p in resp.get("Parameters", [])}
-    user = vals.get("/ec2dash/auth/username") or vals.get("/ec2-auth/username")
-    pwd  = vals.get("/ec2dash/auth/password") or vals.get("/ec2-auth/password")
-    _EXPECTED = (user or "", pwd or "")
-    return _EXPECTED
+def _password_from_value(val: str):
+    # Accept a plain password, or {"password": "..."} JSON
+    v = val.strip()
+    if not v:
+        return None
+    if v.startswith('{'):
+        try:
+            obj = json.loads(v)
+            pwd = str(obj.get('password', '')).strip()
+            return pwd or None
+        except Exception:
+            return None
+    return v
 
 def lambda_handler(event, _ctx):
+    # We’re a REQUEST authorizer with simple responses.
+    # Expect Basic auth in header.
+    auth = (event.get('headers') or {}).get('authorization') or (event.get('headers') or {}).get('Authorization')
+    if not auth or not auth.lower().startswith('basic '):
+        return {"isAuthorized": False, "context": {"reason": "missing_basic"}}
+
     try:
-        auth = (event.get("headers") or {}).get("authorization") or (event.get("headers") or {}).get("Authorization")
-        if not auth or not auth.lower().startswith("basic "):
-            return {"isAuthorized": False}
-
-        raw = base64.b64decode(auth.split(" ",1)[1]).decode("utf-8", "ignore")
-        user, _, pwd = raw.partition(":")
-        exp_user, exp_pwd = _get_expected()
-
-        ok = (user == exp_user) and (pwd == exp_pwd) and exp_user and exp_pwd
-        return {"isAuthorized": bool(ok), "context": {"user": user if ok else ""}}
+        decoded = base64.b64decode(auth.split(' ',1)[1]).decode('utf-8', 'ignore')
+        username, password = decoded.split(':', 1)
     except Exception:
-        # On any error, fail closed
-        return {"isAuthorized": False}
+        return {"isAuthorized": False, "context": {"reason": "bad_basic_format"}}
+
+    username = username.strip()
+    password = password.strip()
+
+    # Try both prefixes
+    prefixes = ["/ec2-auth/", "/ec2dash/auth/"]
+    param_name_used = None
+    stored_pwd = None
+
+    for pref in prefixes:
+        name = pref + username
+        v = _get_param(name)
+        if v is None:
+            continue
+        p = _password_from_value(v)
+        if p:
+            stored_pwd = p
+            param_name_used = name
+            break
+
+    if not stored_pwd:
+        # User not found or value unparsable
+        return {"isAuthorized": False, "context": {"reason": "user_not_found_or_bad_value"}}
+
+    if password != stored_pwd:
+        return {"isAuthorized": False, "context": {"reason": "bad_password", "param": param_name_used or ""}}
+
+    # Authorized
+    # You can add arbitrary items to context; handler can read them.
+    return {
+        "isAuthorized": True,
+        "context": {
+            "principalId": username,
+            "param": param_name_used or ""
+        }
+    }
