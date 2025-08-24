@@ -55,7 +55,7 @@
     <div class="bar">
       <div class="brand">EC2 Control Dashboard</div>
       <div class="pill" id="api-pill">API: <span id="api-base">${api_url}</span></div>
-      <div class="pill" id="build-pill">Build: ${js_ver.slice(0,8)}</div>
+      <div class="pill" id="build-pill">Build: ${js_ver_short}</div>
       <div class="grow"></div>
       <button class="btn ghost" id="refreshBtn">Refresh</button>
       <button class="btn" id="logoutBtn">Logout</button>
