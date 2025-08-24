@@ -20,7 +20,6 @@ locals {
 }
 
 # ---------------- S3 website ----------------
-
 resource "aws_s3_bucket" "frontend" {
   bucket        = local.resolved_bucket_name
   force_destroy = true
@@ -28,9 +27,7 @@ resource "aws_s3_bucket" "frontend" {
 
 resource "aws_s3_bucket_website_configuration" "frontend" {
   bucket = aws_s3_bucket.frontend.id
-  index_document {
-    suffix = "index.html"
-  }
+  index_document { suffix = "index.html" }
 }
 
 resource "aws_s3_bucket_public_access_block" "frontend" {
@@ -56,23 +53,15 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 }
 
 # ---------------- Package Lambda code ----------------
-
 data "archive_file" "lambda_zip" {
   type        = "zip"
   output_path = "${path.module}/lambda_payload.zip"
 
-  source {
-    content  = file("${local.lambda_dir}/handler.py")
-    filename = "handler.py"
-  }
-  source {
-    content  = file("${local.lambda_dir}/authorizer.py")
-    filename = "authorizer.py"
-  }
+  source { content = file("${local.lambda_dir}/handler.py");    filename = "handler.py" }
+  source { content = file("${local.lambda_dir}/authorizer.py"); filename = "authorizer.py" }
 }
 
 # ---------------- API Gateway (HTTP API v2) ----------------
-
 resource "aws_apigatewayv2_api" "api" {
   name                       = "ec2-control-api"
   protocol_type              = "HTTP"
@@ -148,7 +137,6 @@ resource "aws_apigatewayv2_stage" "default" {
 }
 
 # ---------------- IAM for Lambda ----------------
-
 resource "aws_iam_role" "lambda_role" {
   name_prefix = "ec2-control-lambda-role-"
   assume_role_policy = jsonencode({
@@ -171,8 +159,8 @@ resource "aws_iam_policy" "ec2_control_policy" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect   = "Allow",
-      Action   = [
+      Effect = "Allow",
+      Action = [
         "ec2:DescribeInstances",
         "ec2:StartInstances",
         "ec2:StopInstances",
@@ -193,17 +181,16 @@ resource "aws_iam_policy" "ssm_read_auth" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect   = "Allow",
-      Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
+      Effect = "Allow",
+      Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
       Resource = [
         "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
         "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*" # <— NEW
+        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*"
       ]
     }]
   })
 }
-
 
 resource "aws_iam_role_policy_attachment" "lambda_ssm" {
   role       = aws_iam_role.lambda_role.name
@@ -215,8 +202,8 @@ resource "aws_iam_policy" "lambda_ssm_commands" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
-      Effect   = "Allow",
-      Action   = [
+      Effect = "Allow",
+      Action = [
         "ssm:SendCommand",
         "ssm:GetCommandInvocation",
         "ssm:ListCommands",
@@ -235,7 +222,6 @@ resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
 }
 
 # ---------------- APIGW -> Lambda invoke perms ----------------
-
 resource "aws_lambda_permission" "apigw_auth" {
   statement_id  = "AllowExecutionFromAPIGatewayAuth"
   action        = "lambda:InvokeFunction"
@@ -253,7 +239,6 @@ resource "aws_lambda_permission" "apigw_handler" {
 }
 
 # ---------------- Optional: SSM on EC2 ----------------
-
 resource "aws_iam_role" "ec2_ssm_role" {
   name_prefix = "ec2-ssm-role-"
   assume_role_policy = jsonencode({
@@ -305,7 +290,6 @@ resource "null_resource" "associate_ssm_profile" {
 }
 
 # ---------------- HTML + JS to S3 ----------------
-
 locals {
   app_js_path  = "${local.web_dir}/app.v3.js"
   app_js_md5   = filemd5(local.app_js_path)
@@ -338,10 +322,7 @@ resource "aws_s3_object" "app_v3_js" {
 }
 
 # ---------------- Optional SSM interface endpoints ----------------
-
-locals {
-  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
-}
+locals { ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"] }
 
 resource "aws_vpc_endpoint" "ssm_endpoints" {
   count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0

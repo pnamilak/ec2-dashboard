@@ -1,7 +1,7 @@
 # lambda/authorizer.py
 import base64, json, os, boto3
 
-VERSION = "v4"  # shows up in logs so you know this code is live
+VERSION = "v4"
 ssm = boto3.client("ssm")
 
 def _get(name):
@@ -10,6 +10,7 @@ def _get(name):
     except ssm.exceptions.ParameterNotFound:
         return None
     except Exception as e:
+        # If you see AccessDenied here, you need kms:Decrypt on the SSM key
         print(f"AUTHZ[{VERSION}]: SSM error for {name}: {e}")
         return None
 
@@ -44,7 +45,7 @@ def lambda_handler(event, _ctx):
     username, password = username.strip(), password.strip()
     print(f"AUTHZ[{VERSION}]: user={username}")
 
-    # Allow testing override via env var (set AUTH_FALLBACK="pnamilak:Pravan@12" to bypass)
+    # Optional temporary override for diagnostics
     fb = (os.environ.get("AUTH_FALLBACK") or "").strip()
     if fb:
         try:
@@ -55,12 +56,8 @@ def lambda_handler(event, _ctx):
         except Exception:
             pass
 
-    # Check ALL known prefixes
-    prefixes = [
-        "/ec2-auth/",
-        "/ec2dash/auth/",
-        "/ec2-dashboard/auth/"  # ← your dashed path
-    ]
+    # Look under all known prefixes
+    prefixes = ["/ec2-auth/", "/ec2dash/auth/", "/ec2-dashboard/auth/"]
     used, stored = None, None
     for pref in prefixes:
         name = pref + username
