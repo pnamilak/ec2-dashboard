@@ -2,6 +2,7 @@
 <html><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>EC2 Dashboard Access</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet"/>
 <style>
 :root{--bg:#0b1220;--card:#111a2b;--ink:#e5e7eb;--muted:#9ca3af}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.4 Inter,system-ui}
@@ -12,7 +13,6 @@ input{width:100%;padding:10px;border-radius:10px;border:1px solid #243145;backgr
 .hint{color:#9ca3af}
 .kv{background:#101a2d;border:1px dashed #2b3a57;border-radius:10px;padding:10px;margin-top:10px}
 .err{color:#fca5a5;margin-top:8px}
-.ok{color:#86efac;margin-top:8px}
 </style>
 <script>
 window.API_URL = "${api_url}";

@@ -24,7 +24,6 @@
       if(!res.ok) throw new Error(await res.text());
       const j = await res.json(); jwt = j.token;
 
-      // Now request access details (requires JWT via authorizer)
       const ad = await fetch(API + '/auth/access-details', {method:'POST', headers:{'Authorization':'Bearer '+jwt}});
       if(!ad.ok){ const txt=await ad.text(); throw new Error(txt); }
       const d = await ad.json();
