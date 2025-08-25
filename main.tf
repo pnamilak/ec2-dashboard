@@ -6,8 +6,15 @@ terraform {
   }
 }
 
+# Default provider = your workload region (e.g., us-east-2)
 provider "aws" {
   region = var.aws_region
+}
+
+# WAF for CloudFront must be created in us-east-1
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
 }
 
 data "aws_caller_identity" "current" {}
@@ -19,37 +26,19 @@ locals {
   resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
 }
 
-# ---------------- S3 website ----------------
+# ---------------- S3 (private) ----------------
 resource "aws_s3_bucket" "frontend" {
   bucket        = local.resolved_bucket_name
   force_destroy = true
 }
 
-resource "aws_s3_bucket_website_configuration" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-  index_document { suffix = "index.html" }
-}
-
+# Block ALL public access (bucket stays private)
 resource "aws_s3_bucket_public_access_block" "frontend" {
   bucket                  = aws_s3_bucket.frontend.id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_policy" "frontend_policy" {
-  bucket = aws_s3_bucket.frontend.id
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Principal = "*",
-      Action    = ["s3:GetObject"],
-      Resource  = "${aws_s3_bucket.frontend.arn}/*"
-    }]
-  })
-  depends_on = [aws_s3_bucket_public_access_block.frontend]
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 # ---------------- Package Lambda code ----------------
@@ -110,14 +99,14 @@ resource "aws_lambda_function" "ec2_handler" {
 }
 
 resource "aws_apigatewayv2_authorizer" "lambda_auth" {
-  api_id                              = aws_apigatewayv2_api.api.id
-  name                                = "lambda-auth"
-  authorizer_type                     = "REQUEST"
-  authorizer_payload_format_version   = "2.0"
-  enable_simple_responses             = true
-  identity_sources                    = ["$request.header.Authorization"]
-  authorizer_uri                      = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
-  depends_on                          = [aws_lambda_permission.apigw_auth]
+  api_id                            = aws_apigatewayv2_api.api.id
+  name                              = "lambda-auth"
+  authorizer_type                   = "REQUEST"
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  identity_sources                  = ["$request.header.Authorization"]
+  authorizer_uri                    = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
+  depends_on                        = [aws_lambda_permission.apigw_auth]
 }
 
 resource "aws_apigatewayv2_integration" "lambda" {
@@ -252,58 +241,7 @@ resource "aws_lambda_permission" "apigw_handler" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ---------------- Optional: auto-attach SSM role to EC2 ----------------
-resource "aws_iam_role" "ec2_ssm_role" {
-  name_prefix = "ec2-ssm-role-"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Principal = { Service = "ec2.amazonaws.com" },
-      Action   = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ec2_ssm_profile" {
-  name_prefix = "ec2-ssm-instance-profile-"
-  role        = aws_iam_role.ec2_ssm_role.name
-}
-
-data "aws_instances" "ssm_attach_targets" {
-  filter {
-    name   = "instance-state-name"
-    values = var.instance_state_filter
-  }
-
-  dynamic "filter" {
-    for_each = var.target_tag_selector
-    content {
-      name   = "tag:${filter.key}"
-      values = [filter.value]
-    }
-  }
-}
-
-resource "null_resource" "associate_ssm_profile" {
-  for_each = var.auto_attach_ssm_profile ? toset(data.aws_instances.ssm_attach_targets.ids) : []
-
-  triggers = {
-    instance_id = each.value
-    profile     = aws_iam_instance_profile.ec2_ssm_profile.name
-  }
-
-  provisioner "local-exec" {
-    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile.name} --instance-id ${self.triggers.instance_id} || true"
-  }
-}
-
-# ---------------- HTML + JS to S3 ----------------
+# ---------------- Upload HTML/JS to S3 (still private) ----------------
 locals {
   app_js_path  = "${local.web_dir}/app.v3.js"
   app_js_md5   = filemd5(local.app_js_path)
@@ -335,7 +273,154 @@ resource "aws_s3_object" "app_v3_js" {
   cache_control = "max-age=31536000, immutable"
 }
 
-# ---------------- Optional SSM interface endpoints ----------------
+# ---------------- CloudFront + OAC (locks bucket to CloudFront only) ----------------
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name                              = "ec2dash-s3-oac"
+  description                       = "Origin Access Control for S3 frontend"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# Optional Basic Auth at the edge (CloudFront Function)
+resource "aws_cloudfront_function" "basic_auth" {
+  count   = var.enable_cf_basic_auth ? 1 : 0
+  name    = "ec2dash-basic-auth"
+  runtime = "cloudfront-js-1.0"
+  publish = true
+  code    = <<-EOJS
+function handler(event) {
+  var req = event.request;
+  var h = req.headers || {};
+  var auth = (h.authorization && h.authorization.value) || "";
+  var ok = auth === "Basic ${var.cf_basic_auth_b64}";
+  if (!ok) {
+    return {
+      statusCode: 401,
+      statusDescription: "Unauthorized",
+      headers: { "www-authenticate": { value: "Basic realm=\\"Restricted\\"" } }
+    };
+  }
+  return req;
+}
+EOJS
+}
+
+# Optional WAF allow-list for your team's CIDRs (CloudFront scope => us-east-1 provider)
+resource "aws_wafv2_ip_set" "team" {
+  provider           = aws.us_east_1
+  count              = length(var.team_cidrs) > 0 ? 1 : 0
+  name               = "ec2dash-team-ips"
+  description        = "Team IP allow-list for CloudFront"
+  scope              = "CLOUDFRONT"
+  ip_address_version = "IPV4"
+  addresses          = var.team_cidrs
+}
+
+resource "aws_wafv2_web_acl" "allow_team" {
+  provider        = aws.us_east_1
+  count           = length(var.team_cidrs) > 0 ? 1 : 0
+  name            = "ec2dash-allow-team"
+  description     = "Only allow requests from team CIDRs"
+  scope           = "CLOUDFRONT"
+  default_action  = { block = {} }
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "ec2dash-allow-team"
+    sampled_requests_enabled   = true
+  }
+  rule {
+    name     = "AllowTeamIPs"
+    priority = 1
+    action   = { allow = {} }
+    statement {
+      ip_set_reference_statement { arn = aws_wafv2_ip_set.team[0].arn }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowTeamIPs"
+      sampled_requests_enabled   = true
+    }
+  }
+}
+
+resource "aws_cloudfront_distribution" "cdn" {
+  enabled             = true
+  comment             = "EC2 Dashboard Frontend"
+  default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
+    origin_id                = "s3-frontend"
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "s3-frontend"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+
+    forwarded_values {
+      query_string = false
+      headers      = ["Origin"]
+    }
+
+    dynamic "function_association" {
+      for_each = var.enable_cf_basic_auth ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.basic_auth[0].arn
+      }
+    }
+  }
+
+  # SPA-friendly: map 403/404 to index.html
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+  custom_error_response {
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
+  price_class = "PriceClass_100"
+  restrictions { geo_restriction { restriction_type = "none" } }
+  viewer_certificate { cloudfront_default_certificate = true }
+
+  # Attach WAF if configured
+  web_acl_id = length(var.team_cidrs) > 0 ? aws_wafv2_web_acl.allow_team[0].arn : null
+
+  depends_on = [aws_s3_object.index_html, aws_s3_object.app_v3_js]
+}
+
+# Bucket policy: allow ONLY CloudFront (OAC) to read objects
+resource "aws_s3_bucket_policy" "frontend_oac" {
+  bucket = aws_s3_bucket.frontend.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Sid       = "AllowCloudFrontReadViaOAC",
+      Effect    = "Allow",
+      Principal = { Service = "cloudfront.amazonaws.com" },
+      Action    = ["s3:GetObject"],
+      Resource  = "${aws_s3_bucket.frontend.arn}/*",
+      Condition = {
+        StringEquals = {
+          "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn
+        }
+      }
+    }]
+  })
+}
+
+# ---------------- Optional SSM endpoints (unchanged passthrough) ----------------
 locals { ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"] }
 
 resource "aws_vpc_endpoint" "ssm_endpoints" {

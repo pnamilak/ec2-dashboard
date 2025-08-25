@@ -5,17 +5,37 @@ variable "aws_region" {
 }
 
 variable "bucket_name" {
-  description = "Optional fixed bucket name (blank => account/region-based default)"
+  description = "Optional fixed bucket name (blank => derived)"
   type        = string
   default     = ""
 }
 
 variable "auth_fallback" {
-  description = "Optional 'user:pass' accepted by authorizer for quick testing. Leave empty in prod."
+  description = "Optional 'user:pass' accepted by API authorizer for quick testing (leave empty in prod)"
   type        = string
   default     = ""
 }
 
+# ---------- CloudFront viewer restrictions ----------
+variable "team_cidrs" {
+  description = "Team IPv4 CIDRs allowed to view the site via CloudFront (empty => no WAF allow-list)"
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_cf_basic_auth" {
+  description = "Enable Basic Auth at CloudFront (viewer-request) via CloudFront Function"
+  type        = bool
+  default     = false
+}
+
+variable "cf_basic_auth_b64" {
+  description = "Base64 of 'user:pass' for CloudFront Basic Auth (e.g. 'admin:Password123!' -> YWRtaW46UGFzc3dvcmQxMjMh)"
+  type        = string
+  default     = ""
+}
+
+# ---------- (existing) optional SSM endpoint wiring ----------
 variable "instance_state_filter" {
   description = "Which EC2 states to consider for auto SSM attach"
   type        = list(string)
