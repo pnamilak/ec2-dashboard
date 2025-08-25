@@ -12,7 +12,7 @@ on:
         required: true
         default: 'us-east-2'
       BUCKET_NAME:
-        description: 'S3 bucket name (blank => default derived name)'
+        description: 'S3 bucket name (blank => derived)'
         required: false
         default: ''
       ACTION:
@@ -21,6 +21,14 @@ on:
         type: choice
         default: 'apply'
         options: [plan, apply, destroy]
+      TEAM_PUBLIC_IP:
+        description: 'Public IP (with /32) to allow via WAF (e.g. 203.0.113.45/32). Leave blank to disable WAF.'
+        required: false
+        default: ''
+      ENABLE_CF_BASIC_AUTH:
+        description: 'Protect with CloudFront Basic Auth (true/false)'
+        required: true
+        default: 'true'
 
 env:
   AWS_MAX_ATTEMPTS: 10
@@ -51,8 +59,24 @@ jobs:
         run: |
           echo 'aws_region  = "${{ github.event.inputs.REGION }}"'      >> terraform.auto.tfvars
           echo 'bucket_name = "${{ github.event.inputs.BUCKET_NAME }}"' >> terraform.auto.tfvars
-          # Optional quick login while wiring SSM params:
-          # echo 'auth_fallback = "admin:Password123!"'                 >> terraform.auto.tfvars
+
+          # --- CloudFront Basic Auth ---
+          echo 'enable_cf_basic_auth = ${{ github.event.inputs.ENABLE_CF_BASIC_AUTH }}' >> terraform.auto.tfvars
+          if [ "${{ github.event.inputs.ENABLE_CF_BASIC_AUTH }}" = "true" ]; then
+            echo 'cf_basic_auth_b64 = "${{ secrets.CF_BASIC_AUTH_B64 }}"' >> terraform.auto.tfvars
+          else
+            echo 'cf_basic_auth_b64 = ""' >> terraform.auto.tfvars
+          fi
+
+          # --- WAF allow-list (only if TEAM_PUBLIC_IP provided) ---
+          if [ -n "${{ github.event.inputs.TEAM_PUBLIC_IP }}" ]; then
+            echo 'team_cidrs = ["${{ github.event.inputs.TEAM_PUBLIC_IP }}"]' >> terraform.auto.tfvars
+          else
+            echo 'team_cidrs = []' >> terraform.auto.tfvars
+          fi
+
+          # Optional: quick API login while wiring SSM params
+          # echo 'auth_fallback = "admin:Password123!"' >> terraform.auto.tfvars
 
       - name: Terraform Init (remote backend)
         run: |
