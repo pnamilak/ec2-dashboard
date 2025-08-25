@@ -1,23 +1,19 @@
-output "s3_website_url" {
-  value = "http://${aws_s3_bucket.frontend.bucket}.s3-website.${data.aws_region.current.name}.amazonaws.com/"
+output "s3_bucket_name" {
+  description = "Private S3 bucket hosting the frontend (served via CloudFront)"
+  value       = aws_s3_bucket.frontend.id
 }
 
-output "api_gateway_url" {
-  value = aws_apigatewayv2_stage.default.invoke_url
+output "cloudfront_domain" {
+  description = "Use this URL to access the dashboard"
+  value       = aws_cloudfront_distribution.cdn.domain_name
 }
 
-output "lambda_handler_name" {
-  value = aws_lambda_function.ec2_handler.function_name
-}
-
-output "authorizer_lambda_name" {
-  value = aws_lambda_function.authorizer.function_name
-}
-
-output "lambda_role_name" {
-  value = aws_iam_role.lambda_role.name
+output "api_base_url" {
+  description = "API Gateway invoke URL"
+  value       = aws_apigatewayv2_stage.default.invoke_url
 }
 
 output "ec2_ssm_instance_profile_name" {
-  value = aws_iam_instance_profile.ec2_ssm_profile.name
+  description = "EC2 SSM instance profile name (null if not created)"
+  value       = var.create_ec2_ssm_profile ? aws_iam_instance_profile.ec2_ssm_profile[0].name : null
 }

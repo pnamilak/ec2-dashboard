@@ -35,7 +35,19 @@ variable "cf_basic_auth_b64" {
   default     = ""
 }
 
-# ---------- (existing) optional SSM endpoint wiring ----------
+# ---------- Optional EC2 SSM instance profile wiring ----------
+variable "create_ec2_ssm_profile" {
+  description = "Create an EC2 IAM instance profile with AmazonSSMManagedInstanceCore"
+  type        = bool
+  default     = false
+}
+
+variable "auto_attach_ssm_profile" {
+  description = "If true (and profile created), associate the SSM instance profile to matching instances"
+  type        = bool
+  default     = false
+}
+
 variable "instance_state_filter" {
   description = "Which EC2 states to consider for auto SSM attach"
   type        = list(string)
@@ -48,12 +60,7 @@ variable "target_tag_selector" {
   default     = {}
 }
 
-variable "auto_attach_ssm_profile" {
-  description = "If true, associate the SSM instance profile to matching instances"
-  type        = bool
-  default     = false
-}
-
+# ---------- Optional SSM interface endpoints ----------
 variable "vpc_id" {
   description = "VPC ID (required if create_ssm_endpoints = true)"
   type        = string

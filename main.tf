@@ -318,12 +318,16 @@ resource "aws_wafv2_ip_set" "team" {
 }
 
 resource "aws_wafv2_web_acl" "allow_team" {
-  provider        = aws.us_east_1
-  count           = length(var.team_cidrs) > 0 ? 1 : 0
-  name            = "ec2dash-allow-team"
-  description     = "Only allow requests from team CIDRs"
-  scope           = "CLOUDFRONT"
-  default_action  = { block = {} }
+  provider = aws.us_east_1
+  count    = length(var.team_cidrs) > 0 ? 1 : 0
+
+  name        = "ec2dash-allow-team"
+  description = "Only allow requests from team CIDRs"
+  scope       = "CLOUDFRONT"
+
+  default_action {
+    block {}
+  }
 
   visibility_config {
     cloudwatch_metrics_enabled = true
@@ -334,7 +338,10 @@ resource "aws_wafv2_web_acl" "allow_team" {
   rule {
     name     = "AllowTeamIPs"
     priority = 1
-    action   = { allow = {} }
+
+    action {
+      allow {}
+    }
 
     statement {
       ip_set_reference_statement {
@@ -437,6 +444,61 @@ resource "aws_s3_bucket_policy" "frontend_oac" {
       }
     }]
   })
+}
+
+# ---------------- Optional EC2 SSM instance profile (re-added) ----------------
+resource "aws_iam_role" "ec2_ssm_role" {
+  count = var.create_ec2_ssm_profile ? 1 : 0
+  name_prefix = "ec2-ssm-role-"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "ec2.amazonaws.com" },
+      Action   = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
+  count     = var.create_ec2_ssm_profile ? 1 : 0
+  role      = aws_iam_role.ec2_ssm_role[0].name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_instance_profile" "ec2_ssm_profile" {
+  count = var.create_ec2_ssm_profile ? 1 : 0
+  name_prefix = "ec2-ssm-instance-profile-"
+  role        = aws_iam_role.ec2_ssm_role[0].name
+}
+
+# Optional: discover instances to attach the SSM profile to
+data "aws_instances" "ssm_attach_targets" {
+  filter {
+    name   = "instance-state-name"
+    values = var.instance_state_filter
+  }
+
+  dynamic "filter" {
+    for_each = var.target_tag_selector
+    content {
+      name   = "tag:${filter.key}"
+      values = [filter.value]
+    }
+  }
+}
+
+resource "null_resource" "associate_ssm_profile" {
+  for_each = var.auto_attach_ssm_profile && var.create_ec2_ssm_profile ? toset(data.aws_instances.ssm_attach_targets.ids) : []
+
+  triggers = {
+    instance_id = each.value
+    profile     = aws_iam_instance_profile.ec2_ssm_profile[0].name
+  }
+
+  provisioner "local-exec" {
+    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile[0].name} --instance-id ${self.triggers.instance_id} || true"
+  }
 }
 
 # ---------------- Optional SSM interface endpoints ----------------
