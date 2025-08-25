@@ -107,7 +107,7 @@ resource "aws_iam_role" "lambda_role" {
   name_prefix = "ec2-control-lambda-role-"
 
   assume_role_policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
         Effect    = "Allow",
@@ -127,11 +127,11 @@ resource "aws_iam_policy" "ec2_control_policy" {
   name_prefix = "ec2-control-policy-"
 
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
-        Effect   = "Allow",
-        Action   = [
+        Effect = "Allow",
+        Action = [
           "ec2:DescribeInstances",
           "ec2:StartInstances",
           "ec2:StopInstances",
@@ -153,11 +153,11 @@ resource "aws_iam_policy" "ssm_read_auth" {
   name_prefix = "ssm-read-auth-params-"
 
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
-        Effect   = "Allow",
-        Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
+        Effect = "Allow",
+        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
         Resource = [
           "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
           "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
@@ -178,11 +178,11 @@ resource "aws_iam_policy" "lambda_ssm_commands" {
   name_prefix = "lambda-ssm-commands-"
 
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
-        Effect   = "Allow",
-        Action   = [
+        Effect = "Allow",
+        Action = [
           "ssm:SendCommand",
           "ssm:GetCommandInvocation",
           "ssm:ListCommands",
@@ -233,7 +233,7 @@ resource "aws_iam_policy" "lambda_otp_auth" {
   name_prefix = "lambda-otp-auth-"
 
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
         Effect   = "Allow",
@@ -397,9 +397,9 @@ resource "aws_apigatewayv2_stage" "default" {
 
 # ----------------- Upload REAL dashboard assets -----------------
 locals {
-  app_js_path   = "${local.web_dir}/app.v3.js"
-  app_js_md5    = filemd5(local.app_js_path)
-  app_js_short  = substr(local.app_js_md5, 0, 8)
+  app_js_path  = "${local.web_dir}/app.v3.js"
+  app_js_md5   = filemd5(local.app_js_path)
+  app_js_short = substr(local.app_js_md5, 0, 8)
 
   entry_js_path  = "${local.entry_web_dir}/entry.js"
   entry_js_md5   = filemd5(local.entry_js_path)
@@ -617,8 +617,8 @@ resource "aws_s3_bucket_policy" "frontend_oac" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid      = "AllowCloudFrontReadViaOAC",
-        Effect   = "Allow",
+        Sid    = "AllowCloudFrontReadViaOAC",
+        Effect = "Allow",
         Principal = {
           Service = "cloudfront.amazonaws.com"
         },
@@ -696,8 +696,8 @@ resource "aws_s3_bucket_policy" "entry_oac" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid      = "AllowCloudFrontReadViaOAC",
-        Effect   = "Allow",
+        Sid    = "AllowCloudFrontReadViaOAC",
+        Effect = "Allow",
         Principal = {
           Service = "cloudfront.amazonaws.com"
         },
