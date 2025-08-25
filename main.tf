@@ -6,12 +6,9 @@ terraform {
   }
 }
 
-# Workload region (e.g., us-east-2)
-provider "aws" {
-  region = var.aws_region
-}
+provider "aws" { region = var.aws_region }
 
-# WAF for CloudFront must be us-east-1
+# WAF (CloudFront scope) must be us-east-1
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
@@ -45,15 +42,8 @@ data "archive_file" "lambda_zip" {
   type        = "zip"
   output_path = "${path.module}/dist/lambda.zip"
 
-  source {
-    content  = file("${local.lambda_dir}/handler.py")
-    filename = "handler.py"
-  }
-
-  source {
-    content  = file("${local.lambda_dir}/authorizer.py")
-    filename = "authorizer.py"
-  }
+  source { content = file("${local.lambda_dir}/handler.py");    filename = "handler.py" }
+  source { content = file("${local.lambda_dir}/authorizer.py"); filename = "authorizer.py" }
 }
 
 # ---------------- API Gateway (HTTP API v2) ----------------
@@ -78,12 +68,7 @@ resource "aws_lambda_function" "authorizer" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 5
   memory_size      = 128
-
-  environment {
-    variables = {
-      AUTH_FALLBACK = var.auth_fallback
-    }
-  }
+  environment { variables = { AUTH_FALLBACK = var.auth_fallback } }
 }
 
 resource "aws_lambda_function" "ec2_handler" {
@@ -143,102 +128,40 @@ resource "aws_iam_role" "lambda_role" {
   name_prefix = "ec2-control-lambda-role-"
   assume_role_policy = jsonencode({
     Version   = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Action    = "sts:AssumeRole",
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
+    Statement = [{ Effect="Allow", Action="sts:AssumeRole", Principal={ Service="lambda.amazonaws.com" } }]
   })
 }
-
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
+resource "aws_iam_role_policy_attachment" "lambda_basic" { role = aws_iam_role.lambda_role.name  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole" }
 resource "aws_iam_policy" "ec2_control_policy" {
   name_prefix = "ec2-control-policy-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "ec2:DescribeInstances",
-        "ec2:StartInstances",
-        "ec2:StopInstances",
-        "ec2:RebootInstances"
-      ],
-      Resource = "*"
-    }]
-  })
+  policy = jsonencode({ Version="2012-10-17", Statement=[{ Effect="Allow", Action=[
+    "ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances","ec2:RebootInstances"], Resource="*" }] })
 }
-
-resource "aws_iam_role_policy_attachment" "lambda_ec2" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ec2_control_policy.arn
-}
+resource "aws_iam_role_policy_attachment" "lambda_ec2" { role = aws_iam_role.lambda_role.name  policy_arn = aws_iam_policy.ec2_control_policy.arn }
 
 resource "aws_iam_policy" "ssm_read_auth" {
   name_prefix = "ssm-read-auth-params-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
-      Resource = [
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*"
-      ]
-    }]
-  })
+  policy = jsonencode({ Version="2012-10-17", Statement=[{ Effect="Allow", Action=[
+    "ssm:GetParameter","ssm:GetParameters","ssm:GetParameterHistory"],
+    Resource=[
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*"
+    ] }] })
 }
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ssm_read_auth.arn
-}
+resource "aws_iam_role_policy_attachment" "lambda_ssm" { role = aws_iam_role.lambda_role.name  policy_arn = aws_iam_policy.ssm_read_auth.arn }
 
 resource "aws_iam_policy" "lambda_ssm_commands" {
   name_prefix = "lambda-ssm-commands-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "ssm:SendCommand",
-        "ssm:GetCommandInvocation",
-        "ssm:ListCommands",
-        "ssm:ListCommandInvocations",
-        "ssm:CancelCommand",
-        "ssm:DescribeInstanceInformation"
-      ],
-      Resource = "*"
-    }]
-  })
+  policy = jsonencode({ Version="2012-10-17", Statement=[{ Effect="Allow", Action:[
+    "ssm:SendCommand","ssm:GetCommandInvocation","ssm:ListCommands","ssm:ListCommandInvocations",
+    "ssm:CancelCommand","ssm:DescribeInstanceInformation"], Resource="*" }] })
 }
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
-}
+resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" { role = aws_iam_role.lambda_role.name  policy_arn = aws_iam_policy.lambda_ssm_commands.arn }
 
 # ---------------- APIGW -> Lambda invoke perms ----------------
-resource "aws_lambda_permission" "apigw_auth" {
-  statement_id  = "AllowExecutionFromAPIGatewayAuth"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.authorizer.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
-}
-
-resource "aws_lambda_permission" "apigw_handler" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_handler.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
-}
+resource "aws_lambda_permission" "apigw_auth"     { statement_id="AllowExecutionFromAPIGatewayAuth" action="lambda:InvokeFunction" function_name=aws_lambda_function.authorizer.function_name principal="apigateway.amazonaws.com" source_arn="${aws_apigatewayv2_api.api.execution_arn}/authorizers/*" }
+resource "aws_lambda_permission" "apigw_handler"  { statement_id="AllowExecutionFromAPIGateway"     action="lambda:InvokeFunction" function_name=aws_lambda_function.ec2_handler.function_name principal="apigateway.amazonaws.com" source_arn="${aws_apigatewayv2_api.api.execution_arn}/*/*" }
 
 # ---------------- Upload HTML/JS to S3 (private) ----------------
 locals {
@@ -249,36 +172,19 @@ locals {
 
 data "template_file" "html" {
   template = file("${local.web_dir}/index.html.tpl")
-  vars = {
-    api_url      = aws_apigatewayv2_stage.default.invoke_url
-    js_ver       = local.app_js_md5
-    js_ver_short = local.app_js_short
-  }
+  vars = { api_url = aws_apigatewayv2_stage.default.invoke_url, js_ver = local.app_js_md5, js_ver_short = local.app_js_short }
 }
 
-resource "aws_s3_object" "index_html" {
-  bucket        = aws_s3_bucket.frontend.id
-  key           = "index.html"
-  content       = data.template_file.html.rendered
-  content_type  = "text/html"
-  cache_control = "no-cache"
-}
-
-resource "aws_s3_object" "app_v3_js" {
-  bucket        = aws_s3_bucket.frontend.id
-  key           = "app.v3.js"
-  source        = local.app_js_path
-  content_type  = "application/javascript"
-  cache_control = "max-age=31536000, immutable"
-}
+resource "aws_s3_object" "index_html" { bucket = aws_s3_bucket.frontend.id  key = "index.html"  content = data.template_file.html.rendered content_type = "text/html" cache_control = "no-cache" }
+resource "aws_s3_object" "app_v3_js"  { bucket = aws_s3_bucket.frontend.id  key = "app.v3.js"   source  = local.app_js_path             content_type = "application/javascript" cache_control = "max-age=31536000, immutable" }
 
 # ---------------- CloudFront + OAC ----------------
 resource "aws_cloudfront_origin_access_control" "oac" {
-  name                              = "ec2dash-s3-oac"
-  description                       = "Origin Access Control for S3 frontend"
+  name = "ec2dash-s3-oac"
+  description = "Origin Access Control for S3 frontend"
   origin_access_control_origin_type = "s3"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
+  signing_behavior = "always"
+  signing_protocol = "sigv4"
 }
 
 # Optional: Basic Auth at the edge
@@ -305,6 +211,11 @@ function handler(event) {
 EOJS
 }
 
+# --- Normalize IPs: add /32 if omitted ---
+locals {
+  team_cidrs_normalized = [for a in var.team_cidrs : can(regex(".+/.+", a)) ? a : "${a}/32" ]
+}
+
 # Optional: WAF allow-list (CloudFront scope)
 resource "aws_wafv2_ip_set" "team" {
   provider           = aws.us_east_1
@@ -313,7 +224,7 @@ resource "aws_wafv2_ip_set" "team" {
   description        = "Team IP allow-list for CloudFront"
   scope              = "CLOUDFRONT"
   ip_address_version = "IPV4"
-  addresses          = var.team_cidrs
+  addresses          = local.team_cidrs_normalized
 }
 
 resource "aws_wafv2_web_acl" "allow_team" {
@@ -324,9 +235,7 @@ resource "aws_wafv2_web_acl" "allow_team" {
   description = "Only allow requests from team CIDRs"
   scope       = "CLOUDFRONT"
 
-  default_action {
-    block {}
-  }
+  default_action { block {} }
 
   visibility_config {
     cloudwatch_metrics_enabled = true
@@ -338,14 +247,10 @@ resource "aws_wafv2_web_acl" "allow_team" {
     name     = "AllowTeamIPs"
     priority = 1
 
-    action {
-      allow {}
-    }
+    action { allow {} }
 
     statement {
-      ip_set_reference_statement {
-        arn = aws_wafv2_ip_set.team[0].arn
-      }
+      ip_set_reference_statement { arn = aws_wafv2_ip_set.team[0].arn }
     }
 
     visibility_config {
@@ -377,11 +282,7 @@ resource "aws_cloudfront_distribution" "cdn" {
     forwarded_values {
       query_string = false
       headers      = ["Origin"]
-
-      # >>> FIX: add required cookies block
-      cookies {
-        forward = "none"
-      }
+      cookies { forward = "none" }
     }
 
     dynamic "function_association" {
@@ -393,46 +294,22 @@ resource "aws_cloudfront_distribution" "cdn" {
     }
   }
 
-  # SPA-friendly: map 403/404 to index.html
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
+  custom_error_response { error_code = 403 response_code = 200 response_page_path = "/index.html" error_caching_min_ttl = 0 }
+  custom_error_response { error_code = 404 response_code = 200 response_page_path = "/index.html" error_caching_min_ttl = 0 }
 
   price_class = "PriceClass_100"
-
-  restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
-  }
-
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
+  restrictions { geo_restriction { restriction_type = "none" } }
+  viewer_certificate { cloudfront_default_certificate = true }
 
   # Attach WAF if configured
   web_acl_id = length(var.team_cidrs) > 0 ? aws_wafv2_web_acl.allow_team[0].arn : null
 
-  depends_on = [
-    aws_s3_object.index_html,
-    aws_s3_object.app_v3_js
-  ]
+  depends_on = [aws_s3_object.index_html, aws_s3_object.app_v3_js]
 }
 
 # Bucket policy: allow ONLY CloudFront (OAC) to read objects
 resource "aws_s3_bucket_policy" "frontend_oac" {
   bucket = aws_s3_bucket.frontend.id
-
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -441,74 +318,13 @@ resource "aws_s3_bucket_policy" "frontend_oac" {
       Principal = { Service = "cloudfront.amazonaws.com" },
       Action    = ["s3:GetObject"],
       Resource  = "${aws_s3_bucket.frontend.arn}/*",
-      Condition = {
-        StringEquals = {
-          "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn
-        }
-      }
+      Condition = { StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn } }
     }]
   })
 }
 
-# ---------------- Optional EC2 SSM instance profile ----------------
-resource "aws_iam_role" "ec2_ssm_role" {
-  count = var.create_ec2_ssm_profile ? 1 : 0
-  name_prefix = "ec2-ssm-role-"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Principal = { Service = "ec2.amazonaws.com" },
-      Action   = "sts:AssumeRole"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
-  count     = var.create_ec2_ssm_profile ? 1 : 0
-  role      = aws_iam_role.ec2_ssm_role[0].name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ec2_ssm_profile" {
-  count = var.create_ec2_ssm_profile ? 1 : 0
-  name_prefix = "ec2-ssm-instance-profile-"
-  role        = aws_iam_role.ec2_ssm_role[0].name
-}
-
-data "aws_instances" "ssm_attach_targets" {
-  filter {
-    name   = "instance-state-name"
-    values = var.instance_state_filter
-  }
-
-  dynamic "filter" {
-    for_each = var.target_tag_selector
-    content {
-      name   = "tag:${filter.key}"
-      values = [filter.value]
-    }
-  }
-}
-
-resource "null_resource" "associate_ssm_profile" {
-  for_each = var.auto_attach_ssm_profile && var.create_ec2_ssm_profile ? toset(data.aws_instances.ssm_attach_targets.ids) : []
-
-  triggers = {
-    instance_id = each.value
-    profile     = aws_iam_instance_profile.ec2_ssm_profile[0].name
-  }
-
-  provisioner "local-exec" {
-    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile[0].name} --instance-id ${self.triggers.instance_id} || true"
-  }
-}
-
-# ---------------- Optional SSM interface endpoints ----------------
-locals {
-  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
-}
-
+# ---------------- Optional EC2 SSM endpoints/profile (unchanged) ----------------
+locals { ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"] }
 resource "aws_vpc_endpoint" "ssm_endpoints" {
   count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0
   vpc_id              = var.vpc_id

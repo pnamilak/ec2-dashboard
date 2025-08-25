@@ -1,10 +1,13 @@
 # lambda/handler.py
 import boto3, json, os, time, base64, re
+from botocore.exceptions import ClientError
 
 ec2 = boto3.client("ec2")
 ssm = boto3.client("ssm")
 
-ENV_RE = re.compile(r"(DEV|DEMO|QA|UAT|SIT|STG|STAGE|PPE|PROD|PRD|DR|TEST)", re.I)
+# detect envs like naqa1, apqa1, euqa1, etc., else generic
+ENV_TOKEN = re.compile(r"([a-z]{2,3}qa\d+)", re.I)
+GEN_ENV   = re.compile(r"(prod|prd|ppe|stage|stg|uat|sit|qa|dev|test|dr)", re.I)
 
 def _tag(tags, key):
     for t in tags or []:
@@ -12,9 +15,24 @@ def _tag(tags, key):
             return t.get("Value","")
     return ""
 
-def _env_from_name(name):
-    m = ENV_RE.search(name or "")
-    return (m.group(1).upper() if m else "OTHER")
+def _env_from_name(name: str) -> str:
+    n = (name or "").strip()
+    if not n:
+        return "other"
+    # 1) first token before '-' if it looks like *qaN*
+    first = n.split('-', 1)[0]
+    m1 = ENV_TOKEN.search(first)
+    if m1:
+        return m1.group(1).lower()
+    # 2) anywhere in name: *qaN*
+    m2 = ENV_TOKEN.search(n)
+    if m2:
+        return m2.group(1).lower()
+    # 3) generic fallback (qa/dev/prod…)
+    m3 = GEN_ENV.search(n)
+    if m3:
+        return m3.group(1).lower()
+    return "other"
 
 def _list_instances():
     out = []
@@ -38,16 +56,26 @@ def _list_instances():
                 })
     return out
 
-def _wait_cmd(command_id, instance_id, timeout=60):
+def _wait_cmd(command_id, instance_id, timeout=120):
+    """Poll SSM until invocation exists and completes. Handle eventual consistency."""
     t0 = time.time()
     while True:
-        resp = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
-        st = resp.get("Status")
-        if st in ("Success", "Failed", "Cancelled", "TimedOut"):
-            return resp
+        try:
+            resp = ssm.get_command_invocation(CommandId=command_id, InstanceId=instance_id)
+            st = resp.get("Status")
+            if st in ("Success", "Failed", "Cancelled", "TimedOut"):
+                return resp
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            # This happens right after SendCommand — keep waiting.
+            if code == "InvocationDoesNotExist":
+                pass
+            else:
+                raise
+        # timeout?
         if time.time() - t0 > timeout:
             return {"Status": "TimedOut", "StandardOutputContent": "", "StandardErrorContent": "Timeout"}
-        time.sleep(1.5)
+        time.sleep(2)
 
 def _send_ps(instance_id, lines, comment="dashboard"):
     resp = ssm.send_command(
@@ -142,7 +170,6 @@ def _json(status=200, body=None):
 def lambda_handler(event, _ctx):
     method = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
     path   = (event.get("requestContext",{}).get("http",{}).get("path") or event.get("rawPath") or "/")
-    user   = (event.get("requestContext",{}).get("authorizer",{}).get("user") or "")
 
     try:
         if method == "GET" and path.endswith("/instances"):

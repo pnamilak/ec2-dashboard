@@ -3,12 +3,7 @@
   const API = window.API_URL;
   const LS_KEY = 'ec2dash.basic';
 
-  const state = {
-    all: [],
-    envs: [],
-    activeEnv: 'ALL',
-    filterText: ''
-  };
+  const state = { all: [], envs: [], activeEnv: 'ALL', filterText: '' };
 
   // ---------- Auth ----------
   function token(){ return sessionStorage.getItem(LS_KEY) || ''; }
@@ -35,23 +30,12 @@
       ui_login(true, 'Invalid username or password.');
     }
   }
-
   $('loginForm').addEventListener('submit', signIn);
   $('signinBtn').addEventListener('click', signIn);
+  $('logoutBtn').addEventListener('click', ()=>{ clearToken(); ui_login(true); });
 
-  $('logoutBtn').addEventListener('click', ()=>{
-    clearToken();
-    ui_login(true);
-  });
-
-  $('refreshBtn').addEventListener('click', ()=>{
-    loadInstances(false);
-  });
-
-  $('search').addEventListener('input', (e)=>{
-    state.filterText = e.target.value.trim().toLowerCase();
-    render();
-  });
+  $('refreshBtn').addEventListener('click', ()=> loadInstances(false));
+  $('search').addEventListener('input', (e)=>{ state.filterText = e.target.value.trim().toLowerCase(); render(); });
 
   // ---------- Fetch ----------
   async function api(path, opts={}){
@@ -60,28 +44,35 @@
       'Content-Type': 'application/json'
     }, opts.headers || {});
     const res = await fetch(API + path, Object.assign({}, opts, {headers}));
-    if (res.status === 401 || res.status === 403){
-      throw new Error('unauthorized');
-    }
-    if (!res.ok){
-      const txt = await res.text();
-      throw new Error(txt || `HTTP ${res.status}`);
-    }
+    if (res.status === 401 || res.status === 403) throw new Error('unauthorized');
+    if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
     return res.json();
   }
 
-  // ---------- Load + Render ----------
+  // ---------- Env derivation ----------
   function envFromName(name){
-    const m = (name||'').toUpperCase().match(/DEV|DEMO|QA|UAT|SIT|STG|STAGE|PPE|PROD|PRD|DR|TEST/);
-    return m ? m[0] : 'OTHER';
+    const n = (name||'').trim();
+    if (!n) return 'other';
+    // 1) if hyphenated, prefer first token when it looks like *qaN*
+    const first = n.split('-', 1)[0];
+    const m1 = first.match(/^[a-z]{2,3}qa\d+/i);
+    if (m1) return m1[0].toLowerCase();
+    // 2) anywhere: *qaN*
+    const m2 = n.match(/[a-z]{2,3}qa\d+/i);
+    if (m2) return m2[0].toLowerCase();
+    // 3) generic env tokens
+    const m3 = n.toLowerCase().match(/prod|prd|ppe|stage|stg|uat|sit|qa|dev|test|dr/);
+    if (m3) return m3[0];
+    return 'other';
   }
 
+  // ---------- Load + Render ----------
   async function loadInstances(isProbe){
     $('info').innerHTML = `<div class="empty">Loading...</div>`;
     try{
       const data = await api('/instances');
       state.all   = (data.items || []).map(x => ({...x, env: envFromName(x.name)}));
-      state.envs  = ['ALL', ...Array.from(new Set(state.all.map(x=>x.env))).sort()];
+      state.envs  = ['ALL', ...Array.from(new Set(state.all.map(x=>x.env))).sort((a,b)=>a.localeCompare(b))];
       if (!isProbe) {
         summary(data.summary || {});
         tabs();
@@ -146,8 +137,7 @@
 
   function pill(st){
     const c = st==='running' ? 'style="border-color:#14532d;background:#0a1f12;color:#a7f3d0"' :
-              st==='stopped' ? 'style="border-color:#4b1d1d;background:#1a0b0b;color:#fecaca"' :
-              '';
+              st==='stopped' ? 'style="border-color:#4b1d1d;background:#1a0b0b;color:#fecaca"' : '';
     return `<span class="pill" ${c}>${st}</span>`;
   }
 
@@ -178,9 +168,7 @@
     try{
       await api('/instances', {method:'POST', body:JSON.stringify({action, instanceId:id})});
       await loadInstances(false);
-    }catch(e){
-      alert('Action failed: ' + e.message);
-    }
+    }catch(e){ alert('Action failed: ' + e.message); }
   }
 
   // ---------- Details modal ----------
@@ -193,7 +181,7 @@
     if (n.includes('redis')) return 'redis';
     if (n.includes('rabbit')) return 'rabbit';
     return 'ServiceManagement';
-  }
+    }
 
   function openDetails(x){
     current = x;
@@ -250,7 +238,6 @@
   }
 
   function cssId(s){ return (s||'').replace(/[^a-z0-9]/ig,'_'); }
-
   function svcCard(s){
     const canStart = (''+s.Status).toLowerCase() === 'stopped';
     const canStop  = (''+s.Status).toLowerCase() === 'running';
@@ -273,9 +260,7 @@
     try{
       await api('/instances', {method:'POST', body:JSON.stringify({action, instanceId: current.id, name})});
       await refreshServices();
-    }catch(e){
-      alert('Service action failed: ' + e.message);
-    }
+    }catch(e){ alert('Service action failed: ' + e.message); }
   }
 
   // ---------- Boot ----------
