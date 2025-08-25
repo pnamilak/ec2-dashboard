@@ -27,7 +27,6 @@
     const pass = $('pass').value;
     const tok  = 'Basic ' + btoa(user + ':' + pass);
     setToken(tok);
-    // quick probe to validate
     try{
       await loadInstances(true);
       ui_login(false);
@@ -37,7 +36,6 @@
     }
   }
 
-  // submit on Enter
   $('loginForm').addEventListener('submit', signIn);
   $('signinBtn').addEventListener('click', signIn);
 
@@ -136,7 +134,6 @@
     }
 
     grid.innerHTML = list.map(x => card(x)).join('');
-    // wire events
     list.forEach(x=>{
       const start = $('start-'+x.id);
       const stop  = $('stop-'+x.id);
@@ -236,8 +233,7 @@
       if (!svcs.length){
         $('svcList').innerHTML = `<div class="empty">No matching services.</div>`;
       } else {
-        $('svcList').innerHTML =
-          `<div class="grid">` + svcs.map(svc => svcCard(svc)).join('') + `</div>`;
+        $('svcList').innerHTML = `<div class="grid">` + svcs.map(svc => svcCard(svc)).join('') + `</div>`;
         svcs.forEach(s => {
           const sid = cssId(s.Name);
           const start = $('svc-start-'+sid);

@@ -1,10 +1,10 @@
 # lambda/authorizer.py
 import base64, json, os, boto3
 
-VERSION = "v4"
+VERSION = "v5"
 ssm = boto3.client("ssm")
 
-def _get(name):
+def _get(name: str):
     try:
         return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
     except ssm.exceptions.ParameterNotFound:
@@ -14,7 +14,7 @@ def _get(name):
         print(f"AUTHZ[{VERSION}]: SSM error for {name}: {e}")
         return None
 
-def _pw(val: str):
+def _pw(val: str | None):
     v = (val or "").strip()
     if not v:
         return None
@@ -52,7 +52,7 @@ def lambda_handler(event, _ctx):
             fu, fp = fb.split(":", 1)
             if username == fu and password == fp:
                 print(f"AUTHZ[{VERSION}]: override matched (AUTH_FALLBACK)")
-                return {"isAuthorized": True, "context": {"principalId": username, "param": "AUTH_FALLBACK"}}
+                return {"isAuthorized": True, "context": {"user": username, "param": "AUTH_FALLBACK"}}
         except Exception:
             pass
 
@@ -81,4 +81,4 @@ def lambda_handler(event, _ctx):
     if not ok:
         return {"isAuthorized": False, "context": {"reason": "bad_password", "param": used or ""}}
 
-    return {"isAuthorized": True, "context": {"principalId": username, "param": used or ""}}
+    return {"isAuthorized": True, "context": {"user": username, "param": used or ""}}

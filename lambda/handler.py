@@ -1,3 +1,4 @@
+# lambda/handler.py
 import boto3, json, os, time, base64, re
 
 ec2 = boto3.client("ec2")
@@ -59,10 +60,10 @@ def _send_ps(instance_id, lines, comment="dashboard"):
     return _wait_cmd(cmd_id, instance_id)
 
 def _services_query_windows(instance_id, patterns):
-    # Escape regex safely
     pats = [p for p in [x.strip() for x in (patterns or [])] if p]
     if not pats:
         pats = ["SQL","SQLServer","SQLSERVERAGENT","ServiceManagement"]
+
     esc = "|".join([r"({})".format(re.escape(p)) for p in pats])
     script = f'''
 $ErrorActionPreference = "SilentlyContinue"
@@ -94,7 +95,7 @@ if (-not $sqlVers -and (Get-Command sqlcmd -ErrorAction SilentlyContinue)) {{
     $txt = sqlcmd -S . -Q "SET NOCOUNT ON; SELECT @@VERSION" -W -h-1 2>$null
     if ($txt) {{ $sqlVers = @($txt) }}
   }} catch {{}}
-}
+}}
 
 $body = [PSCustomObject]@{{
   os = $os
@@ -117,9 +118,9 @@ $body | ConvertTo-Json -Depth 4 -Compress
 def _service_control_windows(instance_id, name, op):
     name = name.strip()
     if op == "start":
-        ps = f'Start-Service -Name "{name}" -ErrorAction Stop; Start-Sleep -Seconds 1; (Get-Service -Name "{name}") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+        ps = f'($s=Start-Service -Name "{name}" -PassThru -ErrorAction Stop; Get-Service -Name "{name}") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
     else:
-        ps = f'Stop-Service -Name "{name}" -Force -ErrorAction Stop; Start-Sleep -Seconds 1; (Get-Service -Name "{name}") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+        ps = f'($s=Stop-Service -Name "{name}" -Force -PassThru -ErrorAction Stop; Get-Service -Name "{name}") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
     res = _send_ps(instance_id, ps, f"service-{op}")
     if res.get("Status") != "Success":
         raise Exception(res.get("StandardErrorContent") or "SSM command failed")
@@ -146,7 +147,6 @@ def lambda_handler(event, _ctx):
     try:
         if method == "GET" and path.endswith("/instances"):
             items = _list_instances()
-            # Summary counts
             total   = len(items)
             running = sum(1 for x in items if x["state"] == "running")
             stopped = sum(1 for x in items if x["state"] == "stopped")
@@ -190,6 +190,7 @@ def lambda_handler(event, _ctx):
                 return _json(200, data)
 
             return _json(400, {"error":"unknown action"})
+
         return _json(404, {"error":"not found"})
     except Exception as e:
         return _json(500, {"error": str(e)})

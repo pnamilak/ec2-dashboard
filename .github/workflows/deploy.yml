@@ -7,62 +7,54 @@ on:
         description: 'Environment identifier'
         required: true
         default: 'mypersonalAWS'
-
       REGION:
         description: 'AWS region'
         required: true
         default: 'us-east-2'
-
       BUCKET_NAME:
-        description: 'S3 bucket name (must be globally unique)'
-        required: true
-        default: 'pnamilak'
-
+        description: 'S3 bucket name (blank => default derived name)'
+        required: false
+        default: ''
       ACTION:
         description: 'Select Terraform action'
         required: true
         type: choice
         default: 'apply'
-        options:
-          - plan
-          - apply
-          - destroy
+        options: [plan, apply, destroy]
 
 env:
   AWS_MAX_ATTEMPTS: 10
-
 
 jobs:
   terraform:
     name: Terraform ${{ github.event.inputs.ACTION }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.ENVIRONMENT }} 
+    environment: ${{ github.event.inputs.ENVIRONMENT }}
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.5.0
+          terraform_version: 1.6.6
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ github.event.inputs.REGION }}
+          aws-region:            ${{ github.event.inputs.REGION }}
 
       - name: Generate terraform.auto.tfvars
         run: |
-          echo "aws_region = \"${{ github.event.inputs.REGION }}\"" >> terraform.auto.tfvars
-          echo "bucket_name = \"${{ github.event.inputs.BUCKET_NAME }}\"" >> terraform.auto.tfvars
-          echo "environment = \"${{ github.event.inputs.ENVIRONMENT }}\"" >> terraform.auto.tfvars
+          echo 'aws_region  = "${{ github.event.inputs.REGION }}"'      >> terraform.auto.tfvars
+          echo 'bucket_name = "${{ github.event.inputs.BUCKET_NAME }}"' >> terraform.auto.tfvars
+          # Optional quick login while wiring SSM params:
+          # echo 'auth_fallback = "admin:Password123!"'                 >> terraform.auto.tfvars
 
-      - name: Remove previous .terraform folder
-        run: rm -rf .terraform
-      - name: Terraform Init with Backend
+      - name: Terraform Init (remote backend)
         run: |
           terraform init \
             -backend-config="bucket=tfstate-pnamilak" \
@@ -71,16 +63,16 @@ jobs:
             -backend-config="dynamodb_table=terraform-ec2-dashboard-lock" \
             -backend-config="encrypt=true"
 
-      - name: Terraform Apply/Destroy
+      - name: Terraform ${{ github.event.inputs.ACTION }}
         run: |
           case "${{ github.event.inputs.ACTION }}" in
-            "plan")
+            plan)
               terraform plan
               ;;
-            "apply")
+            apply)
               terraform apply -auto-approve
               ;;
-            "destroy")
+            destroy)
               terraform destroy -auto-approve
               ;;
           esac

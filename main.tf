@@ -55,10 +55,17 @@ resource "aws_s3_bucket_policy" "frontend_policy" {
 # ---------------- Package Lambda code ----------------
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  output_path = "${path.module}/lambda_payload.zip"
+  output_path = "${path.module}/dist/lambda.zip"
 
-  source { content = file("${local.lambda_dir}/handler.py");    filename = "handler.py" }
-  source { content = file("${local.lambda_dir}/authorizer.py"); filename = "authorizer.py" }
+  source {
+    content  = file("${local.lambda_dir}/handler.py")
+    filename = "handler.py"
+  }
+
+  source {
+    content  = file("${local.lambda_dir}/authorizer.py")
+    filename = "authorizer.py"
+  }
 }
 
 # ---------------- API Gateway (HTTP API v2) ----------------
@@ -66,6 +73,7 @@ resource "aws_apigatewayv2_api" "api" {
   name                       = "ec2-control-api"
   protocol_type              = "HTTP"
   route_selection_expression = "$request.method $request.path"
+
   cors_configuration {
     allow_origins = ["*"]
     allow_methods = ["GET", "POST", "OPTIONS"]
@@ -77,18 +85,24 @@ resource "aws_lambda_function" "authorizer" {
   function_name    = "ec2-control-authorizer"
   role             = aws_iam_role.lambda_role.arn
   handler          = "authorizer.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.12"
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 5
   memory_size      = 128
+
+  environment {
+    variables = {
+      AUTH_FALLBACK = var.auth_fallback
+    }
+  }
 }
 
 resource "aws_lambda_function" "ec2_handler" {
   function_name    = "ec2-control-handler"
   role             = aws_iam_role.lambda_role.arn
   handler          = "handler.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.12"
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 30
@@ -96,14 +110,14 @@ resource "aws_lambda_function" "ec2_handler" {
 }
 
 resource "aws_apigatewayv2_authorizer" "lambda_auth" {
-  api_id                            = aws_apigatewayv2_api.api.id
-  name                              = "lambda-auth"
-  authorizer_type                   = "REQUEST"
-  authorizer_payload_format_version = "2.0"
-  enable_simple_responses           = true
-  identity_sources                  = ["$request.header.Authorization"]
-  authorizer_uri                    = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
-  depends_on                        = [aws_lambda_permission.apigw_auth]
+  api_id                              = aws_apigatewayv2_api.api.id
+  name                                = "lambda-auth"
+  authorizer_type                     = "REQUEST"
+  authorizer_payload_format_version   = "2.0"
+  enable_simple_responses             = true
+  identity_sources                    = ["$request.header.Authorization"]
+  authorizer_uri                      = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
+  depends_on                          = [aws_lambda_permission.apigw_auth]
 }
 
 resource "aws_apigatewayv2_integration" "lambda" {
@@ -238,7 +252,7 @@ resource "aws_lambda_permission" "apigw_handler" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ---------------- Optional: SSM on EC2 ----------------
+# ---------------- Optional: auto-attach SSM role to EC2 ----------------
 resource "aws_iam_role" "ec2_ssm_role" {
   name_prefix = "ec2-ssm-role-"
   assume_role_policy = jsonencode({
@@ -285,7 +299,7 @@ resource "null_resource" "associate_ssm_profile" {
   }
 
   provisioner "local-exec" {
-    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --instance-id ${each.value} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile.name} || true"
+    command = "aws ec2 associate-iam-instance-profile --region ${data.aws_region.current.name} --iam-instance-profile Name=${aws_iam_instance_profile.ec2_ssm_profile.name} --instance-id ${self.triggers.instance_id} || true"
   }
 }
 

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>EC2 Control Dashboard</title>
   <style>
-    /* Philips SRC inspired night theme */
     :root{
       --bg1:#061225; --bg2:#0A2C5E; --bg3:#03203B;
       --panel:#0d1c33; --card:#0f213e; --muted:#9fb6d3; --text:#e8f0ff;
@@ -17,14 +16,14 @@
       margin:0; color:var(--text); font:14px/1.35 system-ui,Segoe UI,Inter,Arial;
       background:
         radial-gradient(1200px 800px at 10% -10%, rgba(0,161,224,.18), transparent 60%),
-        radial-gradient(900px 700px at 100% 20%, rgba(111,66,193,.18), transparent 60%),
+        radial-gradient(900px 700px at 100% 20%, rgba(11,66,193,.18), transparent 60%),
         linear-gradient(180deg, var(--bg1), var(--bg3) 50%, #020a16);
     }
     header{position:sticky;top:0;z-index:5; backdrop-filter: blur(6px); background:rgba(2,10,22,.55); border-bottom:1px solid #133359}
     .bar{display:flex; align-items:center; gap:14px; padding:14px 18px; max-width:1200px; margin:0 auto}
     .brand{font-weight:700; letter-spacing:.2px}
     .grow{flex:1}
-    .btn{cursor:pointer; border:1px solid #1d3b66; background:#0d1c33; padding:8px 12px; border-radius:10px; color:#e5f2ff; box-shadow:var(--shadow)}
+    .btn{cursor:pointer; border:1px solid #1d3b66; background:#0d2140; padding:8px 12px; border-radius:10px; color:#e5f2ff; box-shadow:var(--shadow)}
     .btn[disabled]{opacity:.45; cursor:not-allowed}
     .btn.primary{background-image:linear-gradient(180deg,#0F6CBD,#054d91); border-color:#0e5a9e}
     .btn.ghost{background:transparent; border-color:#20436f}
@@ -82,7 +81,7 @@
 
   <!-- Login Modal -->
   <div class="modal" id="login">
-    <div class="card-lg" style="width:380px">
+    <div class="card-lg" style="width:380px;background:#0d1f3a;border:1px solid #1b3c69;">
       <h2>Sign in</h2>
       <div class="hint">Enter the Basic Auth credentials stored in SSM.</div>
       <form id="loginForm">
