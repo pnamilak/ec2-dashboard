@@ -6,12 +6,12 @@ terraform {
   }
 }
 
-# Default provider = your workload region (e.g., us-east-2)
+# Workload region (e.g., us-east-2)
 provider "aws" {
   region = var.aws_region
 }
 
-# WAF for CloudFront must be created in us-east-1
+# WAF for CloudFront must be us-east-1
 provider "aws" {
   alias  = "us_east_1"
   region = "us-east-1"
@@ -32,7 +32,7 @@ resource "aws_s3_bucket" "frontend" {
   force_destroy = true
 }
 
-# Block ALL public access (bucket stays private)
+# Block ALL public access
 resource "aws_s3_bucket_public_access_block" "frontend" {
   bucket                  = aws_s3_bucket.frontend.id
   block_public_acls       = true
@@ -241,7 +241,7 @@ resource "aws_lambda_permission" "apigw_handler" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ---------------- Upload HTML/JS to S3 (still private) ----------------
+# ---------------- Upload HTML/JS to S3 (private) ----------------
 locals {
   app_js_path  = "${local.web_dir}/app.v3.js"
   app_js_md5   = filemd5(local.app_js_path)
@@ -273,7 +273,7 @@ resource "aws_s3_object" "app_v3_js" {
   cache_control = "max-age=31536000, immutable"
 }
 
-# ---------------- CloudFront + OAC (locks bucket to CloudFront only) ----------------
+# ---------------- CloudFront + OAC ----------------
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "ec2dash-s3-oac"
   description                       = "Origin Access Control for S3 frontend"
@@ -282,7 +282,7 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   signing_protocol                  = "sigv4"
 }
 
-# Optional Basic Auth at the edge (CloudFront Function)
+# Optional: Basic Auth at the edge
 resource "aws_cloudfront_function" "basic_auth" {
   count   = var.enable_cf_basic_auth ? 1 : 0
   name    = "ec2dash-basic-auth"
@@ -306,7 +306,7 @@ function handler(event) {
 EOJS
 }
 
-# Optional WAF allow-list for your team's CIDRs (CloudFront scope => us-east-1 provider)
+# Optional: WAF allow-list (CloudFront scope)
 resource "aws_wafv2_ip_set" "team" {
   provider           = aws.us_east_1
   count              = length(var.team_cidrs) > 0 ? 1 : 0
@@ -324,18 +324,24 @@ resource "aws_wafv2_web_acl" "allow_team" {
   description     = "Only allow requests from team CIDRs"
   scope           = "CLOUDFRONT"
   default_action  = { block = {} }
+
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "ec2dash-allow-team"
     sampled_requests_enabled   = true
   }
+
   rule {
     name     = "AllowTeamIPs"
     priority = 1
     action   = { allow = {} }
+
     statement {
-      ip_set_reference_statement { arn = aws_wafv2_ip_set.team[0].arn }
+      ip_set_reference_statement {
+        arn = aws_wafv2_ip_set.team[0].arn
+      }
     }
+
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "AllowTeamIPs"
@@ -383,6 +389,7 @@ resource "aws_cloudfront_distribution" "cdn" {
     response_page_path    = "/index.html"
     error_caching_min_ttl = 0
   }
+
   custom_error_response {
     error_code            = 404
     response_code         = 200
@@ -391,18 +398,30 @@ resource "aws_cloudfront_distribution" "cdn" {
   }
 
   price_class = "PriceClass_100"
-  restrictions { geo_restriction { restriction_type = "none" } }
-  viewer_certificate { cloudfront_default_certificate = true }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 
   # Attach WAF if configured
   web_acl_id = length(var.team_cidrs) > 0 ? aws_wafv2_web_acl.allow_team[0].arn : null
 
-  depends_on = [aws_s3_object.index_html, aws_s3_object.app_v3_js]
+  depends_on = [
+    aws_s3_object.index_html,
+    aws_s3_object.app_v3_js
+  ]
 }
 
 # Bucket policy: allow ONLY CloudFront (OAC) to read objects
 resource "aws_s3_bucket_policy" "frontend_oac" {
   bucket = aws_s3_bucket.frontend.id
+
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -420,8 +439,10 @@ resource "aws_s3_bucket_policy" "frontend_oac" {
   })
 }
 
-# ---------------- Optional SSM endpoints (unchanged passthrough) ----------------
-locals { ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"] }
+# ---------------- Optional SSM interface endpoints ----------------
+locals {
+  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
+}
 
 resource "aws_vpc_endpoint" "ssm_endpoints" {
   count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0
