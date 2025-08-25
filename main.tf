@@ -32,7 +32,6 @@ resource "aws_s3_bucket" "frontend" {
   force_destroy = true
 }
 
-# Block ALL public access
 resource "aws_s3_bucket_public_access_block" "frontend" {
   bucket                  = aws_s3_bucket.frontend.id
   block_public_acls       = true
@@ -378,6 +377,11 @@ resource "aws_cloudfront_distribution" "cdn" {
     forwarded_values {
       query_string = false
       headers      = ["Origin"]
+
+      # >>> FIX: add required cookies block
+      cookies {
+        forward = "none"
+      }
     }
 
     dynamic "function_association" {
@@ -446,7 +450,7 @@ resource "aws_s3_bucket_policy" "frontend_oac" {
   })
 }
 
-# ---------------- Optional EC2 SSM instance profile (re-added) ----------------
+# ---------------- Optional EC2 SSM instance profile ----------------
 resource "aws_iam_role" "ec2_ssm_role" {
   count = var.create_ec2_ssm_profile ? 1 : 0
   name_prefix = "ec2-ssm-role-"
@@ -472,7 +476,6 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role        = aws_iam_role.ec2_ssm_role[0].name
 }
 
-# Optional: discover instances to attach the SSM profile to
 data "aws_instances" "ssm_attach_targets" {
   filter {
     name   = "instance-state-name"
