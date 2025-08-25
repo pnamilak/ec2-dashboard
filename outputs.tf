@@ -1,16 +1,14 @@
-# outputs.tf — minimal, works with your current main.tf
-
-output "s3_bucket_name" {
-  description = "Private S3 bucket hosting the frontend (served via CloudFront)"
-  value       = aws_s3_bucket.frontend.id
+output "entry_cloudfront_domain" {
+  description = "Open this URL for Email+OTP access"
+  value       = aws_cloudfront_distribution.entry_cdn.domain_name
 }
 
 output "cloudfront_domain" {
-  description = "Use this URL to access the dashboard"
+  description = "REAL dashboard URL (behind Basic Auth)"
   value       = aws_cloudfront_distribution.cdn.domain_name
 }
 
 output "api_base_url" {
-  description = "API Gateway invoke URL"
+  description = "API Gateway base URL"
   value       = aws_apigatewayv2_stage.default.invoke_url
 }

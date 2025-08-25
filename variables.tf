@@ -1,86 +1,24 @@
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-2"
-}
+variable "aws_region"              { type = string, default = "us-east-2" }
+variable "bucket_name"             { type = string, default = "" }
 
-variable "bucket_name" {
-  description = "Optional fixed bucket name (blank => derived)"
-  type        = string
-  default     = ""
-}
+# CloudFront gates for REAL dashboard
+variable "team_cidrs"              { type = list(string), default = [] }
+variable "enable_cf_basic_auth"    { type = bool,  default = true }
+# Base64("user:pass") for the REAL dashboard
+variable "cf_basic_auth_b64"       { type = string, default = "YWRtaW46UGFzc3dvcmQxMjMh" }
 
-variable "auth_fallback" {
-  description = "Optional 'user:pass' accepted by API authorizer for quick testing (leave empty in prod)"
-  type        = string
-  default     = ""
-}
+# OTP settings for ENTRY site
+variable "allowed_email_domain"    { type = string, default = "domain.com" }
+variable "ses_sender_email"        { type = string, default = "no-reply@domain.com" }
+variable "otp_ttl_seconds"         { type = number, default = 300 }
+variable "jwt_ttl_seconds"         { type = number, default = 3600 }
+variable "jwt_secret_param"        { type = string, default = "/ec2-dashboard/auth/jwt_secret" }
 
-# ---------- CloudFront viewer restrictions ----------
-variable "team_cidrs" {
-  description = "Team IPv4 CIDRs allowed to view the site via CloudFront (empty => no WAF allow-list)"
-  type        = list(string)
-  default     = []
-}
+# API basic auth fallback (same as CloudFront basic, so users type once in UI)
+variable "auth_fallback"           { type = string, default = "admin:Password123!" }
 
-variable "enable_cf_basic_auth" {
-  description = "Enable Basic Auth at CloudFront (viewer-request) via CloudFront Function"
-  type        = bool
-  default     = false
-}
-
-variable "cf_basic_auth_b64" {
-  description = "Base64 of 'user:pass' for CloudFront Basic Auth (e.g. 'admin:Password123!' -> YWRtaW46UGFzc3dvcmQxMjMh)"
-  type        = string
-  default     = ""
-}
-
-# ---------- Optional EC2 SSM instance profile wiring ----------
-variable "create_ec2_ssm_profile" {
-  description = "Create an EC2 IAM instance profile with AmazonSSMManagedInstanceCore"
-  type        = bool
-  default     = false
-}
-
-variable "auto_attach_ssm_profile" {
-  description = "If true (and profile created), associate the SSM instance profile to matching instances"
-  type        = bool
-  default     = false
-}
-
-variable "instance_state_filter" {
-  description = "Which EC2 states to consider for auto SSM attach"
-  type        = list(string)
-  default     = ["running", "stopped"]
-}
-
-variable "target_tag_selector" {
-  description = "Map of tag key => value to select instances for SSM profile attach"
-  type        = map(string)
-  default     = {}
-}
-
-# ---------- Optional SSM interface endpoints ----------
-variable "vpc_id" {
-  description = "VPC ID (required if create_ssm_endpoints = true)"
-  type        = string
-  default     = null
-}
-
-variable "private_subnet_ids" {
-  description = "Private subnet IDs for SSM interface endpoints"
-  type        = list(string)
-  default     = []
-}
-
-variable "endpoint_sg_id" {
-  description = "Security group ID for interface endpoints (optional)"
-  type        = string
-  default     = null
-}
-
-variable "create_ssm_endpoints" {
-  description = "Create SSM interface endpoints in the provided VPC/subnets"
-  type        = bool
-  default     = false
-}
+# Optional VPC endpoints for SSM
+variable "vpc_id"                  { type = string, default = null }
+variable "private_subnet_ids"      { type = list(string), default = [] }
+variable "endpoint_sg_id"          { type = string, default = null }
+variable "create_ssm_endpoints"    { type = bool,  default = false }

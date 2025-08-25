@@ -6,32 +6,31 @@ terraform {
   }
 }
 
-# Workload region
-provider "aws" {
-  region = var.aws_region
-}
-
-# WAF for CloudFront must be us-east-1
-provider "aws" {
-  alias  = "us_east_1"
-  region = "us-east-1"
-}
+provider "aws" { region = var.aws_region }
+provider "aws" { alias  = "us_east_1"; region = "us-east-1" }
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
+  # REAL dashboard site
   lambda_dir           = "${path.module}/lambda"
   web_dir              = "${path.module}/html"
   resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+
+  # ENTRY site
+  entry_web_dir        = "${path.module}/entry"
+  entry_bucket_name    = "ec2-dashboard-entry-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
+
+  # normalize bare IPs to /32 for WAF
+  team_cidrs_normalized = [for a in var.team_cidrs : can(regex(".+/.+", a)) ? a : "${a}/32" ]
 }
 
-# ---------------- S3 (private) ----------------
+# ----------------- S3 Buckets (REAL & ENTRY) -----------------
 resource "aws_s3_bucket" "frontend" {
   bucket        = local.resolved_bucket_name
   force_destroy = true
 }
-
 resource "aws_s3_bucket_public_access_block" "frontend" {
   bucket                  = aws_s3_bucket.frontend.id
   block_public_acls       = true
@@ -40,7 +39,19 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
   restrict_public_buckets = true
 }
 
-# ---------------- Package Lambda code ----------------
+resource "aws_s3_bucket" "entry" {
+  bucket        = local.entry_bucket_name
+  force_destroy = true
+}
+resource "aws_s3_bucket_public_access_block" "entry" {
+  bucket                  = aws_s3_bucket.entry.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# ----------------- Lambda package -----------------
 data "archive_file" "lambda_zip" {
   type        = "zip"
   output_path = "${path.module}/dist/lambda.zip"
@@ -49,26 +60,114 @@ data "archive_file" "lambda_zip" {
     content  = file("${local.lambda_dir}/handler.py")
     filename = "handler.py"
   }
-
   source {
     content  = file("${local.lambda_dir}/authorizer.py")
     filename = "authorizer.py"
   }
 }
 
-# ---------------- API Gateway (HTTP API v2) ----------------
+# ----------------- API Gateway (shared) -----------------
 resource "aws_apigatewayv2_api" "api" {
   name                       = "ec2-control-api"
   protocol_type              = "HTTP"
   route_selection_expression = "$request.method $request.path"
-
   cors_configuration {
     allow_origins = ["*"]
-    allow_methods = ["GET", "POST", "OPTIONS"]
-    allow_headers = ["Authorization", "Content-Type"]
+    allow_methods = ["GET","POST","OPTIONS"]
+    allow_headers = ["Authorization","Content-Type"]
   }
 }
 
+# ----------------- IAM & policies -----------------
+resource "aws_iam_role" "lambda_role" {
+  name_prefix = "ec2-control-lambda-role-"
+  assume_role_policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[{Effect="Allow", Action="sts:AssumeRole", Principal={Service="lambda.amazonaws.com"}}]
+  })
+}
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_policy" "ec2_control_policy" {
+  name_prefix = "ec2-control-policy-"
+  policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[{Effect="Allow", Action=[
+      "ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances","ec2:RebootInstances"], Resource="*"}]
+  })
+}
+resource "aws_iam_role_policy_attachment" "lambda_ec2" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.ec2_control_policy.arn
+}
+
+# SSM (auth fallback + JWT secret)
+resource "aws_iam_policy" "ssm_read_auth" {
+  name_prefix = "ssm-read-auth-params-"
+  policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[{Effect="Allow", Action:["ssm:GetParameter","ssm:GetParameters","ssm:GetParameterHistory"], Resource:[
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
+      "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*"
+    ]}]
+  })
+}
+resource "aws_iam_role_policy_attachment" "lambda_ssm" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.ssm_read_auth.arn
+}
+
+# SSM command permissions
+resource "aws_iam_policy" "lambda_ssm_commands" {
+  name_prefix = "lambda-ssm-commands-"
+  policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[{Effect="Allow", Action:[
+      "ssm:SendCommand","ssm:GetCommandInvocation","ssm:ListCommands","ssm:ListCommandInvocations",
+      "ssm:CancelCommand","ssm:DescribeInstanceInformation"], Resource="*"}]
+  })
+}
+resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
+}
+
+# OTP & Allow-list tables
+resource "aws_dynamodb_table" "otp" {
+  name         = "ec2dash-otp"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "email"
+  attribute { name = "email"; type = "S" }
+  ttl { attribute_name = "expires_at"; enabled = true }
+}
+resource "aws_dynamodb_table" "allowlist" {
+  name         = "ec2dash-allowlist"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "email"
+  attribute { name = "email"; type = "S" }
+}
+
+resource "aws_iam_policy" "lambda_otp_auth" {
+  name_prefix = "lambda-otp-auth-"
+  policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[
+      {Effect="Allow", Action:["ses:SendEmail","ses:SendRawEmail"], Resource="*"},
+      {Effect="Allow", Action:["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource=aws_dynamodb_table.otp.arn},
+      {Effect="Allow", Action:["dynamodb:GetItem"], Resource=aws_dynamodb_table.allowlist.arn}
+    ]
+  })
+}
+resource "aws_iam_role_policy_attachment" "lambda_otp_auth" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_otp_auth.arn
+}
+
+# ----------------- Lambdas -----------------
 resource "aws_lambda_function" "authorizer" {
   function_name    = "ec2-control-authorizer"
   role             = aws_iam_role.lambda_role.arn
@@ -78,10 +177,11 @@ resource "aws_lambda_function" "authorizer" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 5
   memory_size      = 128
-
   environment {
     variables = {
-      AUTH_FALLBACK = var.auth_fallback
+      AUTH_FALLBACK        = var.auth_fallback
+      ALLOWED_EMAIL_DOMAIN = var.allowed_email_domain
+      JWT_SECRET_PARAM     = var.jwt_secret_param
     }
   }
 }
@@ -95,6 +195,55 @@ resource "aws_lambda_function" "ec2_handler" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 30
   memory_size      = 256
+  environment {
+    variables = {
+      # OTP
+      ALLOWED_EMAIL_DOMAIN = var.allowed_email_domain
+      SES_SENDER_EMAIL     = var.ses_sender_email
+      OTP_TABLE_NAME       = aws_dynamodb_table.otp.name
+      OTP_TTL_SECONDS      = tostring(var.otp_ttl_seconds)
+      JWT_TTL_SECONDS      = tostring(var.jwt_ttl_seconds)
+      JWT_SECRET_PARAM     = var.jwt_secret_param
+      # Allow-list lookup
+      ALLOWLIST_TABLE      = aws_dynamodb_table.allowlist.name
+      # REAL dashboard credentials (to show upon approval)
+      CF_BASIC_AUTH_B64    = var.cf_basic_auth_b64
+      # API fallback
+      AUTH_FALLBACK        = var.auth_fallback
+    }
+  }
+}
+
+# ----------------- API routes -----------------
+# Public OTP routes (ENTRY)
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_method     = "POST"
+  payload_format_version = "2.0"
+  integration_uri        = aws_lambda_function.ec2_handler.invoke_arn
+}
+
+resource "aws_apigatewayv2_route" "auth_request_otp" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /auth/request-otp"
+  authorization_type = "NONE"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+resource "aws_apigatewayv2_route" "auth_verify" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /auth/verify"
+  authorization_type = "NONE"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+# Needs JWT from OTP authorizer; returns REAL dashboard link + creds only if allow-listed
+resource "aws_lambda_permission" "apigw_auth" {
+  statement_id  = "AllowExecutionFromAPIGatewayAuth"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
 }
 
 resource "aws_apigatewayv2_authorizer" "lambda_auth" {
@@ -108,14 +257,15 @@ resource "aws_apigatewayv2_authorizer" "lambda_auth" {
   depends_on                        = [aws_lambda_permission.apigw_auth]
 }
 
-resource "aws_apigatewayv2_integration" "lambda" {
-  api_id                 = aws_apigatewayv2_api.api.id
-  integration_type       = "AWS_PROXY"
-  integration_method     = "POST"
-  payload_format_version = "2.0"
-  integration_uri        = aws_lambda_function.ec2_handler.invoke_arn
+resource "aws_apigatewayv2_route" "auth_access_details" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /auth/access-details"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
 
+# Protected dashboard API routes (require API Basic header typed in UI)
 resource "aws_apigatewayv2_route" "instances_get" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "GET /instances"
@@ -123,117 +273,12 @@ resource "aws_apigatewayv2_route" "instances_get" {
   authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
 }
-
 resource "aws_apigatewayv2_route" "instances_post" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "POST /instances"
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
-}
-
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.api.id
-  name        = "prod"
-  auto_deploy = true
-}
-
-# ---------------- IAM for Lambda ----------------
-resource "aws_iam_role" "lambda_role" {
-  name_prefix = "ec2-control-lambda-role-"
-
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Action    = "sts:AssumeRole",
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-resource "aws_iam_policy" "ec2_control_policy" {
-  name_prefix = "ec2-control-policy-"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "ec2:DescribeInstances",
-        "ec2:StartInstances",
-        "ec2:StopInstances",
-        "ec2:RebootInstances"
-      ],
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ec2" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ec2_control_policy.arn
-}
-
-resource "aws_iam_policy" "ssm_read_auth" {
-  name_prefix = "ssm-read-auth-params-"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
-      Resource = [
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2dash/auth/*",
-        "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-dashboard/auth/*"
-      ]
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ssm_read_auth.arn
-}
-
-resource "aws_iam_policy" "lambda_ssm_commands" {
-  name_prefix = "lambda-ssm-commands-"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "ssm:SendCommand",
-        "ssm:GetCommandInvocation",
-        "ssm:ListCommands",
-        "ssm:ListCommandInvocations",
-        "ssm:CancelCommand",
-        "ssm:DescribeInstanceInformation"
-      ],
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
-}
-
-# ---------------- APIGW -> Lambda invoke perms ----------------
-resource "aws_lambda_permission" "apigw_auth" {
-  statement_id  = "AllowExecutionFromAPIGatewayAuth"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.authorizer.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
 }
 
 resource "aws_lambda_permission" "apigw_handler" {
@@ -244,11 +289,20 @@ resource "aws_lambda_permission" "apigw_handler" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ---------------- Upload HTML/JS to S3 (private) ----------------
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "prod"
+  auto_deploy = true
+}
+
+# ----------------- Upload REAL dashboard assets -----------------
 locals {
   app_js_path  = "${local.web_dir}/app.v3.js"
   app_js_md5   = filemd5(local.app_js_path)
   app_js_short = substr(local.app_js_md5, 0, 8)
+  entry_js_path = "${local.entry_web_dir}/entry.js"
+  entry_js_md5  = filemd5(local.entry_js_path)
+  entry_js_short= substr(local.entry_js_md5, 0, 8)
 }
 
 data "template_file" "html" {
@@ -259,7 +313,6 @@ data "template_file" "html" {
     js_ver_short = local.app_js_short
   }
 }
-
 resource "aws_s3_object" "index_html" {
   bucket        = aws_s3_bucket.frontend.id
   key           = "index.html"
@@ -267,7 +320,6 @@ resource "aws_s3_object" "index_html" {
   content_type  = "text/html"
   cache_control = "no-cache"
 }
-
 resource "aws_s3_object" "app_v3_js" {
   bucket        = aws_s3_bucket.frontend.id
   key           = "app.v3.js"
@@ -276,16 +328,40 @@ resource "aws_s3_object" "app_v3_js" {
   cache_control = "max-age=31536000, immutable"
 }
 
-# ---------------- CloudFront + OAC ----------------
+# ----------------- Upload ENTRY assets -----------------
+data "template_file" "entry_html" {
+  template = file("${local.entry_web_dir}/index.html.tpl")
+  vars = {
+    api_url = aws_apigatewayv2_stage.default.invoke_url
+    js_ver  = local.entry_js_md5
+    js_ver_short = local.entry_js_short
+    allowed_domain = var.allowed_email_domain
+  }
+}
+resource "aws_s3_object" "entry_index_html" {
+  bucket        = aws_s3_bucket.entry.id
+  key           = "index.html"
+  content       = data.template_file.entry_html.rendered
+  content_type  = "text/html"
+  cache_control = "no-cache"
+}
+resource "aws_s3_object" "entry_js" {
+  bucket        = aws_s3_bucket.entry.id
+  key           = "entry.js"
+  source        = local.entry_js_path
+  content_type  = "application/javascript"
+  cache_control = "max-age=31536000, immutable"
+}
+
+# ----------------- CloudFront (REAL) -----------------
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "ec2dash-s3-oac"
-  description                       = "Origin Access Control for S3 frontend"
+  description                       = "OAC for REAL dashboard"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
 }
 
-# Optional: Basic Auth at the edge
 resource "aws_cloudfront_function" "basic_auth" {
   count   = var.enable_cf_basic_auth ? 1 : 0
   name    = "ec2dash-basic-auth"
@@ -293,176 +369,130 @@ resource "aws_cloudfront_function" "basic_auth" {
   publish = true
   code    = <<-EOJS
 function handler(event) {
-  var req = event.request;
-  var h = req.headers || {};
+  var h = (event.request && event.request.headers) || {};
   var auth = (h.authorization && h.authorization.value) || "";
-  var ok = auth === "Basic ${var.cf_basic_auth_b64}";
-  if (!ok) {
-    return {
-      statusCode: 401,
-      statusDescription: "Unauthorized",
-      headers: { "www-authenticate": { value: "Basic realm=\\"Restricted\\"" } }
-    };
+  if (auth !== "Basic ${var.cf_basic_auth_b64}") {
+    return { statusCode: 401, statusDescription: "Unauthorized",
+      headers: { "www-authenticate": { value: "Basic realm=\\"EC2Dashboard\\"" } } };
   }
-  return req;
+  return event.request;
 }
 EOJS
 }
 
-# --- Normalize IPs: add /32 if omitted ---
-locals {
-  team_cidrs_normalized = [for a in var.team_cidrs : can(regex(".+/.+", a)) ? a : "${a}/32" ]
-}
-
-# Optional: WAF allow-list (CloudFront scope / us-east-1)
+# Optional WAF allow-list (CloudFront scope/us-east-1)
 resource "aws_wafv2_ip_set" "team" {
   provider           = aws.us_east_1
   count              = length(var.team_cidrs) > 0 ? 1 : 0
   name               = "ec2dash-team-ips"
-  description        = "Team IP allow-list for CloudFront"
   scope              = "CLOUDFRONT"
   ip_address_version = "IPV4"
   addresses          = local.team_cidrs_normalized
 }
-
 resource "aws_wafv2_web_acl" "allow_team" {
   provider = aws.us_east_1
   count    = length(var.team_cidrs) > 0 ? 1 : 0
-
   name        = "ec2dash-allow-team"
-  description = "Only allow requests from team CIDRs"
   scope       = "CLOUDFRONT"
-
-  default_action {
-    block {}
-  }
-
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "ec2dash-allow-team"
-    sampled_requests_enabled   = true
-  }
-
+  default_action { block {} }
+  visibility_config { cloudwatch_metrics_enabled = true, metric_name = "ec2dash-allow-team", sampled_requests_enabled = true }
   rule {
     name     = "AllowTeamIPs"
     priority = 1
-
-    action {
-      allow {}
-    }
-
-    statement {
-      ip_set_reference_statement {
-        arn = aws_wafv2_ip_set.team[0].arn
-      }
-    }
-
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "AllowTeamIPs"
-      sampled_requests_enabled   = true
-    }
+    action { allow {} }
+    statement { ip_set_reference_statement { arn = aws_wafv2_ip_set.team[0].arn } }
+    visibility_config { cloudwatch_metrics_enabled = true, metric_name = "AllowTeamIPs", sampled_requests_enabled = true }
   }
 }
 
 resource "aws_cloudfront_distribution" "cdn" {
   enabled             = true
-  comment             = "EC2 Dashboard Frontend"
+  comment             = "REAL: EC2 Dashboard"
   default_root_object = "index.html"
-
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
     origin_id                = "s3-frontend"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
   }
-
   default_cache_behavior {
     target_origin_id       = "s3-frontend"
     viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
-    cached_methods         = ["GET", "HEAD"]
+    allowed_methods        = ["GET","HEAD","OPTIONS"]
+    cached_methods         = ["GET","HEAD"]
     compress               = true
-
-    forwarded_values {
-      query_string = false
-      headers      = ["Origin"]
-
-      cookies {
-        forward = "none"
-      }
-    }
-
+    forwarded_values { query_string = false, headers = ["Origin"], cookies { forward = "none" } }
     dynamic "function_association" {
       for_each = var.enable_cf_basic_auth ? [1] : []
-      content {
-        event_type   = "viewer-request"
-        function_arn = aws_cloudfront_function.basic_auth[0].arn
-      }
+      content { event_type = "viewer-request", function_arn = aws_cloudfront_function.basic_auth[0].arn }
     }
   }
-
-  # SPA-friendly: map 403/404 to index.html
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
+  custom_error_response { error_code = 403, response_code = 200, response_page_path = "/index.html", error_caching_min_ttl = 0 }
+  custom_error_response { error_code = 404, response_code = 200, response_page_path = "/index.html", error_caching_min_ttl = 0 }
   price_class = "PriceClass_100"
-
-  restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
-  }
-
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
-
-  # Attach WAF if configured
+  restrictions { geo_restriction { restriction_type = "none" } }
+  viewer_certificate { cloudfront_default_certificate = true }
   web_acl_id = length(var.team_cidrs) > 0 ? aws_wafv2_web_acl.allow_team[0].arn : null
-
-  depends_on = [
-    aws_s3_object.index_html,
-    aws_s3_object.app_v3_js
-  ]
+  depends_on = [aws_s3_object.index_html, aws_s3_object.app_v3_js]
 }
 
-# Bucket policy: allow ONLY CloudFront (OAC) to read objects
 resource "aws_s3_bucket_policy" "frontend_oac" {
   bucket = aws_s3_bucket.frontend.id
-
   policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Sid       = "AllowCloudFrontReadViaOAC",
-      Effect    = "Allow",
-      Principal = { Service = "cloudfront.amazonaws.com" },
-      Action    = ["s3:GetObject"],
-      Resource  = "${aws_s3_bucket.frontend.arn}/*",
-      Condition = {
-        StringEquals = {
-          "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn
-        }
-      }
+    Version="2012-10-17",
+    Statement=[{
+      Sid="AllowCloudFrontReadViaOAC", Effect="Allow",
+      Principal={ Service="cloudfront.amazonaws.com" },
+      Action=["s3:GetObject"], Resource="${aws_s3_bucket.frontend.arn}/*",
+      Condition={ StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.cdn.arn } }
     }]
   })
 }
 
-# ---------------- Optional SSM interface endpoints ----------------
-locals {
-  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
+# ----------------- CloudFront (ENTRY) -----------------
+resource "aws_cloudfront_origin_access_control" "entry_oac" {
+  name                              = "ec2dash-entry-oac"
+  description                       = "OAC for ENTRY site"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+resource "aws_cloudfront_distribution" "entry_cdn" {
+  enabled             = true
+  comment             = "ENTRY: OTP + allow-list gate"
+  default_root_object = "index.html"
+  origin {
+    domain_name              = aws_s3_bucket.entry.bucket_regional_domain_name
+    origin_id                = "s3-entry"
+    origin_access_control_id = aws_cloudfront_origin_access_control.entry_oac.id
+  }
+  default_cache_behavior {
+    target_origin_id       = "s3-entry"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET","HEAD","OPTIONS"]
+    cached_methods         = ["GET","HEAD"]
+    compress               = true
+    forwarded_values { query_string = false, headers = ["Origin"], cookies { forward = "none" } }
+  }
+  price_class = "PriceClass_100"
+  restrictions { geo_restriction { restriction_type = "none" } }
+  viewer_certificate { cloudfront_default_certificate = true }
+  depends_on = [aws_s3_object.entry_index_html, aws_s3_object.entry_js]
+}
+resource "aws_s3_bucket_policy" "entry_oac" {
+  bucket = aws_s3_bucket.entry.id
+  policy = jsonencode({
+    Version="2012-10-17",
+    Statement=[{
+      Sid="AllowCloudFrontReadViaOAC", Effect="Allow",
+      Principal={ Service="cloudfront.amazonaws.com" },
+      Action=["s3:GetObject"], Resource="${aws_s3_bucket.entry.arn}/*",
+      Condition={ StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.entry_cdn.arn } }
+    }]
+  })
 }
 
+# ----------------- Optional VPC endpoints for SSM -----------------
+locals { ssm_endpoints = ["ssm","ssmmessages","ec2messages"] }
 resource "aws_vpc_endpoint" "ssm_endpoints" {
   count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0
   vpc_id              = var.vpc_id

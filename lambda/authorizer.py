@@ -1,84 +1,48 @@
-# lambda/authorizer.py
-import base64, json, os, boto3
-
-VERSION = "v5"
+import os, json, time, base64, hmac, hashlib
+import boto3
 ssm = boto3.client("ssm")
+_SECRET = None
 
-def _get(name: str):
-    try:
-        return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-    except ssm.exceptions.ParameterNotFound:
-        return None
-    except Exception as e:
-        # If you see AccessDenied here, you need kms:Decrypt on the SSM key
-        print(f"AUTHZ[{VERSION}]: SSM error for {name}: {e}")
-        return None
+def _pad(s): return s + "=" * ((4 - len(s) % 4) % 4)
+def _get_secret():
+  global _SECRET
+  if _SECRET: return _SECRET
+  name = os.environ.get("JWT_SECRET_PARAM", "/ec2-dashboard/auth/jwt_secret")
+  try:
+    r = ssm.get_parameter(Name=name, WithDecryption=True)
+    _SECRET = r["Parameter"]["Value"].encode("utf-8")
+  except Exception: _SECRET = None
+  return _SECRET
 
-def _pw(val: str | None):
-    v = (val or "").strip()
-    if not v:
-        return None
-    if v.startswith("{"):
-        try:
-            obj = json.loads(v)
-            p = str(obj.get("password", "")).strip()
-            return p or None
-        except Exception as e:
-            print(f"AUTHZ[{VERSION}]: JSON parse error: {e}")
-            return None
-    return v
+def _verify_jwt(tok):
+  try:
+    h,p,s = tok.split(".")
+    sig_expect = hmac.new(_get_secret(), (h+"."+p).encode(), hashlib.sha256).digest()
+    sig = base64.urlsafe_b64decode(_pad(s))
+    if not hmac.compare_digest(sig, sig_expect): return None
+    payload = json.loads(base64.urlsafe_b64decode(_pad(p)).decode())
+    if int(payload.get("exp",0)) < int(time.time()): return None
+    return payload
+  except Exception: return None
+
+def allow(principal): return {"isAuthorized": True, "context": {"principalId": principal}}
+def deny(): return {"isAuthorized": False}
 
 def lambda_handler(event, _ctx):
-    hdrs = event.get("headers") or {}
-    auth = hdrs.get("authorization") or hdrs.get("Authorization")
-    if not auth or not auth.lower().startswith("basic "):
-        print(f"AUTHZ[{VERSION}]: missing Basic header")
-        return {"isAuthorized": False, "context": {"reason": "missing_basic"}}
+  headers = event.get("headers") or {}
+  auth = headers.get("authorization") or headers.get("Authorization") or ""
+  domain = (os.environ.get("ALLOWED_EMAIL_DOMAIN","domain.com") or "").lower()
 
-    try:
-        userpass = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8", "ignore")
-        username, password = userpass.split(":", 1)
-    except Exception as e:
-        print(f"AUTHZ[{VERSION}]: bad Basic format: {e}")
-        return {"isAuthorized": False, "context": {"reason": "bad_basic_format"}}
+  if auth.lower().startswith("bearer "):
+    payload = _verify_jwt(auth.split(" ",1)[1])
+    if payload:
+      email = (payload.get("email") or payload.get("sub") or "").lower()
+      if email.endswith("@"+domain): return allow(email)
+    return deny()
 
-    username, password = username.strip(), password.strip()
-    print(f"AUTHZ[{VERSION}]: user={username}")
-
-    # Optional temporary override for diagnostics
-    fb = (os.environ.get("AUTH_FALLBACK") or "").strip()
-    if fb:
-        try:
-            fu, fp = fb.split(":", 1)
-            if username == fu and password == fp:
-                print(f"AUTHZ[{VERSION}]: override matched (AUTH_FALLBACK)")
-                return {"isAuthorized": True, "context": {"user": username, "param": "AUTH_FALLBACK"}}
-        except Exception:
-            pass
-
-    # Look under all known prefixes
-    prefixes = ["/ec2-auth/", "/ec2dash/auth/", "/ec2-dashboard/auth/"]
-    used, stored = None, None
-    for pref in prefixes:
-        name = pref + username
-        raw = _get(name)
-        if raw is None:
-            print(f"AUTHZ[{VERSION}]: not found: {name}")
-            continue
-        pw = _pw(raw)
-        if not pw:
-            print(f"AUTHZ[{VERSION}]: unparsable at {name} (expect plain or {{\"password\":\"...\"}})")
-            continue
-        used, stored = name, pw
-        break
-
-    if not stored:
-        print(f"AUTHZ[{VERSION}]: no usable credential for {username}")
-        return {"isAuthorized": False, "context": {"reason": "user_not_found_or_bad_value"}}
-
-    ok = (password == stored)
-    print(f"AUTHZ[{VERSION}]: compare={ok} param={used}")
-    if not ok:
-        return {"isAuthorized": False, "context": {"reason": "bad_password", "param": used or ""}}
-
-    return {"isAuthorized": True, "context": {"user": username, "param": used or ""}}
+  if auth.lower().startswith("basic "):
+    try: up = base64.b64decode(auth.split(" ",1)[1]).decode()
+    except Exception: up = ""
+    if os.environ.get("AUTH_FALLBACK") and up == os.environ["AUTH_FALLBACK"]:
+      return allow(up.split(":",1)[0])
+  return deny()
