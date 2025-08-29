@@ -19,15 +19,13 @@
   .pill{padding:2px 8px;border-radius:999px;background:#22304d;border:1px solid #3a4c6b;margin-right:6px}
   dialog{border:none;border-radius:16px;background:#0f1625;color:#e6e6e6;box-shadow:0 10px 40px rgba(0,0,0,.6);width:min(700px,90vw)}
   .right{display:flex;gap:8px}
-  /* Buttons */
   .btn{cursor:pointer}
-  .btn-green{background:#0a3; border-color:#093; color:#eaffea}
+  .btn-green{background:#0a3;border-color:#093;color:#eaffea}
   .btn-green:hover{filter:brightness(1.1)}
-  .btn-red{background:#b11; border-color:#822; color:#fee}
+  .btn-red{background:#b11;border-color:#822;color:#fee}
   .btn-red:hover{filter:brightness(1.1)}
   .btn-gray{background:#1b2740;border-color:#3a4c6b;color:#dbe2ff}
   .btn-gray:hover{filter:brightness(1.08)}
-  /* Toasts */
   #toasts{position:fixed;top:12px;right:12px;display:flex;flex-direction:column;gap:8px;z-index:50}
   .toast{background:#101826;border:1px solid #2b3a59;padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
 </style>
@@ -36,7 +34,6 @@
 <div class="wrap">
   <h2>EC2 Dashboard</h2>
 
-  <!-- STEP 1: Email + OTP -->
   <div id="step1" class="card">
     <h3>Step 1: Email OTP (allowed domain: <span class="pill">@${allowed_email_domain}</span>)</h3>
     <div class="row">
@@ -50,7 +47,6 @@
     <div id="msg1" class="muted"></div>
   </div>
 
-  <!-- STEP 2: Username/Password -->
   <div id="step2" class="card" style="display:none">
     <h3>Step 2: Login</h3>
     <div class="row">
@@ -61,7 +57,6 @@
     <div id="msg2" class="muted"></div>
   </div>
 
-  <!-- STEP 3: Dashboard -->
   <div id="dash" style="display:none">
     <div class="card">
       <div id="summary"></div>
@@ -100,28 +95,28 @@ function auth(){ return TOKEN ? {'Authorization':'Bearer '+TOKEN} : {}; }
 
 async function requestOtp(){
   const email = el('email').value.trim();
-  const r = await fetch(`$${API}/request-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
+  const r = await fetch(`$${API}/request-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email})});
   const j = await r.json();
   msg('msg1', r.ok ? 'OTP sent. Check your email.' : (j.error || 'Failed'));
 }
 async function verifyOtp(){
   const email = el('email').value.trim();
   const code  = el('otp').value.trim();
-  const r = await fetch(`$${API}/verify-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, code})});
+  const r = await fetch(`$${API}/verify-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email, code})});
   const j = await r.json();
   if(r.ok){ el('step2').style.display='block'; msg('msg1','OTP verified. Proceed to login.'); } else { msg('msg1', j.error || 'Failed'); }
 }
 async function login(){
   const username = el('username').value.trim();
   const password = el('password').value.trim();
-  const r = await fetch(`$${API}/login`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})});
+  const r = await fetch(`$${API}/login`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username,password})});
   const j = await r.json();
   if(r.ok){ TOKEN = j.token; localStorage.setItem('token', TOKEN); showDash(); await loadDashboard(); }
   else { msg('msg2', j.error || 'Login failed'); }
 }
 function showDash(){
-  el('step1')?.style && (el('step1').style.display='none');
-  el('step2')?.style && (el('step2').style.display='none');
+  if(el('step1')) el('step1').style.display='none';
+  if(el('step2')) el('step2').style.display='none';
   el('dash').style.display='block';
 }
 
@@ -155,23 +150,23 @@ function isRedis(name){ return name.toLowerCase().includes('redis'); }
 function renderEnvPanel(envs, env){
   const p = el('env-panels'); const data = envs[env];
   p.innerHTML = '';
-  ["DM","EA"].forEach(block=>{
-    const blockName = block==="DM" ? "Dream Mapper" : "Encore Anywhere";
+  ["DM","EA"].forEach((blk)=>{
+    const blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
     const card = document.createElement('div'); card.className='card';
     card.innerHTML = `<div class="block-title"><h3>$${blockName}</h3>
       <div class="right">
-        <button class="btn btn-green" onclick="groupAction('$${env}','${block}','start')">Start All</button>
-        <button class="btn btn-red"   onclick="groupAction('$${env}','${block}','stop')">Stop All</button>
+        <button class="btn btn-green" onclick="groupAction('$${env}','$${blk}','start')">Start All</button>
+        <button class="btn btn-red"   onclick="groupAction('$${env}','$${blk}','stop')">Stop All</button>
       </div></div>
-      <div id="list-$${env}-${block}"></div>`;
+      <div id="list-$${env}-$${blk}"></div>`;
     p.appendChild(card);
-    const c = card.querySelector(`#list-$${env}-${block}`);
-    (data[block]||[]).forEach(inst=>{
+    const c = card.querySelector(`#list-$${env}-$${blk}`);
+    (data[blk]||[]).forEach(inst=>{
       const name = inst.name;
       const btnStartStop = (inst.state==='running')
         ? `<button class="btn btn-red"   onclick="act('$${inst.id}','stop','$${name}')">Stop</button>`
         : `<button class="btn btn-green" onclick="act('$${inst.id}','start','$${name}')">Start</button>`;
-      const svcBtn  = `<button class="btn btn-gray" onclick="openServices('$${inst.id}','$${name.replaceAll('"','&quot;')}')">Services</button>`;
+      const svcBtn  = `<button class="btn btn-gray" onclick="openServices('$${inst.id}','$${name.replaceAll("\"","&quot;")}')">Services</button>`;
       const html = `<div class="inst">
         <div><strong>$${name}</strong> <span class="muted">($${inst.id})</span></div>
         <div class="right">
@@ -187,13 +182,13 @@ function renderEnvPanel(envs, env){
 
 async function act(id, action, name){
   toast(`${action==='start'?'Starting':'Stopping'}: ${name}`);
-  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id, action})})
+  await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id, action})})
   pollUntilStable();
 }
 
 async function groupAction(env, block, action){
   toast(`${action==='start'?'Starting':'Stopping'} ALL in ${env} / ${block}`);
-  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({env, block, action})});
+  await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({env, block, action})});
   pollUntilStable(60);
 }
 
@@ -212,14 +207,14 @@ function openServices(id, name){
   el('svcInstName').textContent = name;
   const iisBtn = document.querySelector('#svcDlg button[data-iis]');
   if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? 'inline-block' : 'none'); }
-  el('svcDlg').showModal();
+  document.getElementById('svcDlg').showModal();
   loadServices();
 }
-function closeSvc(){ el('svcDlg').close(); }
+function closeSvc(){ document.getElementById('svcDlg').close(); }
 
 async function loadServices(){
   const pattern = el('svcFilter').value.trim();
-  const r = await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:'list', pattern})});
+  const r = await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:"list", pattern})});
   const j = await r.json();
   if(j.message) toast(j.message);
   const list = el('svcList'); list.innerHTML = '';
@@ -237,12 +232,12 @@ async function loadServices(){
 }
 async function svc(name, action){
   toast(`${action==='start'?'Starting':'Stopping'} service: ${name}`);
-  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
+  await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
   setTimeout(loadServices, 1200);
 }
 async function iisReset(){
   toast("Performing IIS Reset...");
-  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:'iisreset'})});
+  await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})});
 }
 
 /* Enter to submit (OTP + Login) */

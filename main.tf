@@ -420,11 +420,79 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Associate instance profile to selected existing instances.
-# If an instance already has a profile, we replace it.
-resource "aws_iam_instance_profile_association" "attach_profile" {
-  for_each             = toset(local.target_ids)
-  instance_id          = each.value
-  iam_instance_profile = aws_iam_instance_profile.ec2_ssm_profile.name
-  replace              = true
+# --- (keep your role, policy attachment, and instance profile resources above) ---
+
+# Discover instances by state + Name tag matching any env token (already in your file)
+data "aws_instances" "targets_running" {
+  filter {
+    name   = "instance-state-name"
+    values = ["running"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
+}
+
+data "aws_instances" "targets_stopped" {
+  filter {
+    name   = "instance-state-name"
+    values = ["stopped"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
+}
+
+locals {
+  target_ids_map = {
+    none    = []
+    running = data.aws_instances.targets_running.ids
+    stopped = data.aws_instances.targets_stopped.ids
+    both    = distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids))
+  }
+  target_ids = local.target_ids_map[var.assign_profile_target]
+}
+
+# Idempotent attach via AWS CLI (works with all provider versions)
+resource "null_resource" "attach_profile" {
+  for_each = toset(local.target_ids)
+
+  triggers = {
+    instance_id         = each.value
+    profile_name        = aws_iam_instance_profile.ec2_ssm_profile.name
+    region              = var.aws_region
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-lc"]
+    command = <<-EOT
+      set -euo pipefail
+      IID="${each.value}"
+      PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+      REGION="${var.aws_region}"
+
+      # get current association (if any)
+      CUR_JSON=$(aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values="$IID" --region "$REGION" --output json)
+      CUR_ID=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].AssociationId // empty')
+      CUR_PROFILE=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].IamInstanceProfile.Arn | split("/")[-1] // empty')
+
+      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
+        echo "Instance $IID already associated with profile $PROFILE"
+        exit 0
+      fi
+
+      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
+        echo "Disassociating old profile $CUR_PROFILE from $IID ..."
+        aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
+        # small wait to settle
+        sleep 3
+      fi
+
+      echo "Associating profile $PROFILE to $IID ..."
+      aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
+      echo "Done."
+    EOT
+  }
 }
