@@ -6,74 +6,56 @@
 <title>EC2 Dashboard</title>
 <style>
   :root{
-    --bg:#f6f8fb;
-    --card:#ffffff;
-    --ink:#0b1220;
-    --muted:#5a667d;
-    --line:#e6ecf5;
-    --pill:#eef2f9;
-    --green:#22c55e;   /* start */
-    --green-d:#16a34a;
-    --red:#ef4444;     /* stop */
-    --red-d:#b91c1c;
-    --blue:#3b82f6;    /* neutral */
-    --blue-d:#2563eb;
+    --bg:#0b1220; --card:#111827; --ink:#e5e7eb; --muted:#9aa3b2; --line:#1f2937; --pill:#0f172a;
+    --green:#4ade80;  --green-d:#22c55e;
+    --red:#f87171;    --red-d:#ef4444;
+    --blue:#93c5fd;   --blue-d:#3b82f6;
   }
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
   .wrap{max-width:1100px;margin:0 auto;padding:28px}
-  .card{
-    background:var(--card);
-    border:1px solid var(--line);
-    border-radius:18px;
-    padding:18px;
-    margin:14px 0;
-    box-shadow:0 6px 20px rgba(17,24,39,0.06);
-  }
-  input,button,select{
-    border-radius:12px;border:1px solid var(--line);
-    background:#fff;color:var(--ink);padding:10px 12px
-  }
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+  input,button,select{border-radius:12px;border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:10px 12px}
   input{min-width:220px}
   .row{display:flex;gap:12px;flex-wrap:wrap}
   .col{flex:1}
-  .tab{
-    padding:10px 14px;border:1px solid var(--line);
-    border-bottom:none;border-radius:12px 12px 0 0;background:#f1f5ff;
-    margin-right:6px;cursor:pointer;color:#1e293b;font-weight:600
-  }
-  .tab.active{background:#dbeafe;border-color:#c7ddff}
-  .inst{
-    display:flex;align-items:center;justify-content:space-between;
-    border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#fff
-  }
-  .status.running{color:var(--green-d);font-weight:700}
-  .status.stopped{color:var(--red-d);font-weight:700}
-  .status.terminated{color:#a16207;font-weight:700}
+  .tab{padding:10px 14px;border:1px solid var(--line);border-bottom:none;border-radius:12px 12px 0 0;background:#0f172a;margin-right:6px;cursor:pointer;color:#cbd5e1;font-weight:600}
+  .tab.active{background:#172033;border-color:#263244}
+  .inst{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#0f172a}
+  .status.running{color:#86efac;font-weight:700}
+  .status.stopped{color:#fda4af;font-weight:700}
+  .status.terminated{color:#fbbf24;font-weight:700}
   .muted{color:var(--muted)}
-  .pill{
-    padding:3px 10px;border-radius:999px;background:var(--pill);
-    border:1px solid var(--line);margin-right:6px;font-weight:600
-  }
-  dialog{
-    border:none;border-radius:16px;background:#fff;color:var(--ink);
-    box-shadow:0 20px 60px rgba(17,24,39,0.18);width:min(720px,92vw)
-  }
+  .pill{padding:3px 10px;border-radius:999px;background:var(--pill);border:1px solid var(--line);margin-right:6px;font-weight:600}
+  dialog{border:none;border-radius:16px;background:#0f172a;color:var(--ink);box-shadow:0 30px 90px rgba(0,0,0,.45);width:min(720px,92vw)}
   .right{display:flex;gap:10px}
-  .btn{cursor:pointer;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.06)}
+  .btn{cursor:pointer;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.25)}
   .btn:active{transform:translateY(1px)}
-  .btn-green{background:var(--green);border-color:var(--green);color:#fff}
-  .btn-green:hover{background:var(--green-d);border-color:var(--green-d)}
-  .btn-red{background:var(--red);border-color:var(--red);color:#fff}
-  .btn-red:hover{background:var(--red-d);border-color:var(--red-d)}
-  .btn-gray{background:var(--blue);border-color:var(--blue);color:#fff}
-  .btn-gray:hover{background:var(--blue-d);border-color:var(--blue-d)}
+  .btn-green{background:var(--green);border-color:var(--green-d);color:#0b1220}
+  .btn-green:hover{background:var(--green-d);border-color:var(--green-d);color:#fff}
+  .btn-red{background:var(--red);border-color:var(--red-d);color:#0b1220}
+  .btn-red:hover{background:var(--red-d);border-color:var(--red-d);color:#fff}
+  .btn-gray{background:var(--blue);border-color:var(--blue-d);color:#0b1220}
+  .btn-gray:hover{background:var(--blue-d);border-color:var(--blue-d);color:#fff}
   #toasts{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;gap:8px;z-index:50}
-  .toast{background:#fff;border:1px solid var(--line);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(17,24,39,.12)}
+  .toast{background:#0f172a;border:1px solid var(--line);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+
+  /* Top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .userbox{display:flex;align-items:center;gap:10px}
+  .role{font-weight:800;text-transform:uppercase}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h2>EC2 Dashboard</h2>
+  <div class="topbar">
+    <h2 style="margin:0">EC2 Dashboard</h2>
+    <div class="userbox" id="userBox" style="display:none">
+      <span id="userName"></span>
+      <span id="userEmail" class="muted"></span>
+      <span id="userRole" class="pill role"></span>
+      <button id="btnSignOut" class="btn btn-red">Sign out</button>
+    </div>
+  </div>
 
   <!-- STEP 1: Email + OTP -->
   <div id="step1" class="card">
@@ -131,7 +113,7 @@
   var ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 
   var TOKEN = localStorage.getItem("token") || null;
-  var CURRENT_ENV = null;
+  var CURRENT_ENV = localStorage.getItem("current_env") || null;
   var SVC_CTX = { id:null, name:null };
 
   function el(id){ return document.getElementById(id); }
@@ -140,6 +122,22 @@
   function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
   function merge(a,b){ var o={}; for(var k in a)o[k]=a[k]; for(var k2 in b)o[k2]=b[k2]; return o; }
   Object.prototype.with = function(obj){ return merge(this, obj); };
+
+  function showUserBox(u){
+    if(!u) { el("userBox").style.display="none"; return; }
+    el("userName").textContent = u.name || "";
+    el("userEmail").textContent = u.email || "";
+    el("userRole").textContent  = (u.role || "read");
+    el("userBox").style.display = "flex";
+  }
+  function signOut(){
+    TOKEN = null;
+    localStorage.removeItem("token");
+    showUserBox(null);
+    el("dash").style.display="none";
+    el("step1").style.display="block";
+    el("step2").style.display="none";
+  }
 
   function requestOtp(){
     var email = el("email").value.trim();
@@ -163,14 +161,22 @@
     fetch(API + "/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:username,password:password})})
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
       .then(function(res){
-        if(res.ok){ TOKEN = res.j.token; localStorage.setItem("token", TOKEN); showDash(); loadDashboard(); }
-        else { msg("msg2", res.j.error || "Login failed"); }
+        if(res.ok){
+          TOKEN = res.j.token; localStorage.setItem("token", TOKEN);
+          showDash();
+          // load user profile (name/email/role)
+          fetch(API + "/me", {headers: auth()})
+            .then(function(r){ return r.ok ? r.json() : {}; })
+            .then(function(u){ showUserBox(u || {}); });
+          loadDashboard();
+        } else {
+          msg("msg2", res.j.error || "Login failed");
+        }
       });
   }
   function showDash(){
-    var s1=el("step1"), s2=el("step2");
-    if(s1) s1.style.display="none";
-    if(s2) s2.style.display="none";
+    if(el("step1")) el("step1").style.display="none";
+    if(el("step2")) el("step2").style.display="none";
     el("dash").style.display="block";
   }
 
@@ -191,27 +197,34 @@
 
   function renderEnvTabs(envs){
     var tabs = el("env-tabs"); tabs.innerHTML = "";
-    ENV_NAMES.forEach(function(e, i){
+
+    // Keep last selected env; default only if none stored
+    if(!CURRENT_ENV || ENV_NAMES.indexOf(CURRENT_ENV) === -1){
+      CURRENT_ENV = ENV_NAMES[0] || null;
+    }
+
+    ENV_NAMES.forEach(function(e){
       var t = document.createElement("div");
-      t.className = "tab" + (i===0 ? " active" : "");
+      t.className = "tab" + (e===CURRENT_ENV ? " active" : "");
       t.textContent = e;
       t.addEventListener("click", function(){
         Array.prototype.forEach.call(tabs.children, function(c){ c.classList.remove("active"); });
         t.classList.add("active");
         CURRENT_ENV = e;
+        localStorage.setItem("current_env", CURRENT_ENV);
         renderEnvPanel(envs, e);
       });
       tabs.appendChild(t);
     });
-    CURRENT_ENV = ENV_NAMES[0];
-    renderEnvPanel(envs, CURRENT_ENV);
+
+    if(CURRENT_ENV){ renderEnvPanel(envs, CURRENT_ENV); }
   }
 
   function isWebOrSvc(name){ var n=name.toLowerCase(); return n.indexOf("svc")>-1 || n.indexOf("web")>-1; }
 
   function renderEnvPanel(envs, env){
     var p = el("env-panels");
-    var data = envs[env];
+    var data = envs[env] || {};
     p.innerHTML = "";
 
     ["DM","EA"].forEach(function(blk){
@@ -246,8 +259,13 @@
         var status = document.createElement("span"); status.className="status " + inst.state; status.textContent = inst.state;
 
         var bToggle = document.createElement("button");
-        if(inst.state === "running"){ bToggle.className="btn btn-red"; bToggle.textContent="Stop"; bToggle.addEventListener("click", function(){ act(inst.id, "stop", inst.name); }); }
-        else { bToggle.className="btn btn-green"; bToggle.textContent="Start"; bToggle.addEventListener("click", function(){ act(inst.id, "start", inst.name); }); }
+        if(inst.state === "running"){
+          bToggle.className="btn btn-red"; bToggle.textContent="Stop";
+          bToggle.addEventListener("click", function(){ act(inst.id, "stop", inst.name); });
+        } else {
+          bToggle.className="btn btn-green"; bToggle.textContent="Start";
+          bToggle.addEventListener("click", function(){ act(inst.id, "start", inst.name); });
+        }
 
         var bSvc = document.createElement("button"); bSvc.className="btn btn-gray"; bSvc.textContent="Services";
         bSvc.addEventListener("click", function(){ openServices(inst.id, inst.name); });
@@ -263,6 +281,7 @@
   function act(id, action, name){
     toast((action==="start"?"Starting":"Stopping") + ": " + name);
     fetch(API + "/instance-action", {method:"POST", headers:{"Content-Type":"application/json"}.with(auth()), body: JSON.stringify({id:id, action:action})})
+      // Do NOT reset tabs; just poll
       .then(function(){ pollUntilStable(); });
   }
 
@@ -278,7 +297,7 @@
     if(pollTimer) clearInterval(pollTimer);
     var start=Date.now();
     pollTimer=setInterval(function(){
-      loadDashboard();
+      loadDashboard(); // re-renders but keeps CURRENT_ENV from localStorage
       if((Date.now()-start)/1000 > maxSecs){ clearInterval(pollTimer); }
     }, 3000);
   }
@@ -335,12 +354,14 @@
     });
   }
 
+  // Wire up buttons
   el("btnReqOtp").addEventListener("click", requestOtp);
   el("btnVerifyOtp").addEventListener("click", verifyOtp);
   el("btnLogin").addEventListener("click", login);
   el("btnSvcRefresh").addEventListener("click", loadServices);
-  el("btnSvcClose").addEventListener("click", closeSvc);
+  el("btnSvcClose").addEventListener("click", function(){ el("svcDlg").close(); });
   el("btnIIS").addEventListener("click", iisReset);
+  el("btnSignOut").addEventListener("click", signOut);
 
   wireEnter("email", requestOtp);
   wireEnter("otp", verifyOtp);
@@ -348,7 +369,13 @@
   wireEnter("password", login);
 
   window.addEventListener("load", function(){
-    if(TOKEN){ showDash(); loadDashboard(); }
+    if(TOKEN){
+      showDash();
+      fetch(API + "/me", {headers: auth()})
+        .then(function(r){ return r.ok ? r.json() : {}; })
+        .then(function(u){ showUserBox(u || {}); });
+      loadDashboard();
+    }
   });
 })();
 </script>
