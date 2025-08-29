@@ -4,21 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       ACTION:
-        description: "Choose what Terraform should do"
-        required: true
-        default: "apply"
+        description: "What do you want to do?"
         type: choice
-        options:
-          - apply
-          - destroy
+        options: [apply, destroy]
+        default: apply
+        required: true
       AWS_REGION:
         description: "AWS Region"
         required: true
-        default: "us-east-2"
+        default: "us-east-1"
       BACKEND_BUCKET:
         description: "Terraform state S3 bucket"
         required: true
-        default: "mypersonalaws-tfstate-us-east-2"
+        default: "mypersonalaws-tfstate-us-east-1"
       BACKEND_TABLE:
         description: "Terraform lock DynamoDB table"
         required: true
@@ -32,50 +30,53 @@ on:
         required: true
         default: "gmail.com"
       SES_SENDER_EMAIL:
-        description: "SES sender (must be verified)"
+        description: "SES sender (must be verified in this region)"
         required: true
-        default: "noreplyzingamazigle@gmail.com"
+        default: "noreply@example.com"
+      ATTACH_SSM_PROFILE:
+        description: "Attach SSM instance profile to EC2s (by Name matching envs)"
+        type: choice
+        options: [none, running, stopped, both]
+        default: none
+        required: true
 
 jobs:
-  Ec2-DashBoard:
-    runs-on: ubuntu-latest
-    # If you use GitHub Environments (recommended), set it here so it stays manual-only.
+  deploy:
     environment: mypersonalAWS
+    runs-on: ubuntu-latest
 
     env:
-      ACTION:             ${{ github.event.inputs.ACTION }}
-      AWS_REGION:         ${{ github.event.inputs.AWS_REGION }}
-      BACKEND_BUCKET:     ${{ github.event.inputs.BACKEND_BUCKET }}
-      BACKEND_TABLE:      ${{ github.event.inputs.BACKEND_TABLE }}
+      AWS_REGION: ${{ github.event.inputs.AWS_REGION }}
+      BACKEND_BUCKET: ${{ github.event.inputs.BACKEND_BUCKET }}
+      BACKEND_TABLE:  ${{ github.event.inputs.BACKEND_TABLE }}
       WEBSITE_BUCKET_NAME: ${{ github.event.inputs.WEBSITE_BUCKET_NAME }}
       ALLOWED_EMAIL_DOMAIN: ${{ github.event.inputs.ALLOWED_EMAIL_DOMAIN }}
-      SES_SENDER_EMAIL:   ${{ github.event.inputs.SES_SENDER_EMAIL }}
-      TF_IN_AUTOMATION:   "true"
+      SES_SENDER_EMAIL: ${{ github.event.inputs.SES_SENDER_EMAIL }}
+      ATTACH_SSM_PROFILE: ${{ github.event.inputs.ATTACH_SSM_PROFILE }}
+      TF_IN_AUTOMATION: "true"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Install AWS CLI v2
+        run: |
+          curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
+      - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      - name: Install AWS CLI v2
-        run: |
-          set -e
-          curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-          unzip -q awscliv2.zip
-          sudo ./aws/install --update
-          aws --version
-
-      # Backend must exist for BOTH apply and destroy so Terraform can read/write state
       - name: Ensure backend S3 bucket exists
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           if aws s3api head-bucket --bucket "$BACKEND_BUCKET" 2>/dev/null; then
             echo "State bucket exists"
           else
@@ -91,7 +92,7 @@ jobs:
       - name: Ensure DynamoDB lock table exists
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           if aws dynamodb describe-table --table-name "$BACKEND_TABLE" >/dev/null 2>&1; then
             echo "Lock table exists"
           else
@@ -112,77 +113,69 @@ jobs:
       - name: Terraform Init (S3 backend)
         shell: bash
         run: |
-          set -euo pipefail
           terraform init \
             -backend-config="bucket=$BACKEND_BUCKET" \
             -backend-config="key=state/terraform.tfstate" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$BACKEND_TABLE"
 
-      # -------- APPLY PATH --------
+      # ---------- APPLY ----------
       - name: Terraform Apply
-        if: ${{ env.ACTION == 'apply' }}
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
         shell: bash
         env:
-          TF_VAR_aws_region:           ${{ env.AWS_REGION }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
           TF_VAR_allowed_email_domain: ${{ env.ALLOWED_EMAIL_DOMAIN }}
-          TF_VAR_ses_sender_email:     ${{ env.SES_SENDER_EMAIL }}
-          TF_VAR_website_bucket_name:  ${{ env.WEBSITE_BUCKET_NAME }}
+          TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
+          TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
+          TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
         run: |
-          set -euo pipefail
           terraform apply -auto-approve
 
-      - name: CloudFront Invalidate
-        if: ${{ success() && env.ACTION == 'apply' }}
+      - name: CloudFront Invalidate (after apply)
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           CF_DOMAIN=$(terraform output -raw cloudfront_domain || true)
           if [ -n "$CF_DOMAIN" ]; then
             DIST_ID=$(aws cloudfront list-distributions \
               --query "DistributionList.Items[?DomainName=='$CF_DOMAIN'].Id | [0]" --output text)
-            if [ "$DIST_ID" != "None" ] && [ -n "$DIST_ID" ]; then
+            if [ "$DIST_ID" != "None" ]; then
               aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
-            else
-              echo "No matching CloudFront distribution found for $CF_DOMAIN"
             fi
-          else
-            echo "No cloudfront_domain output present (maybe first run?)"
           fi
 
-      - name: Show outputs
-        if: ${{ success() && env.ACTION == 'apply' }}
-        run: terraform output
-
-      # -------- DESTROY PATH --------
-      # Optional: empty website bucket before destroy IF your Terraform doesn't have force_destroy=true.
-      # Safe to leave in; it will no-op if the output isn't present or bucket doesn't exist.
-      - name: (Destroy) Try emptying website bucket (best-effort)
-        if: ${{ env.ACTION == 'destroy' }}
+      # ---------- DESTROY ----------
+      - name: Try to empty website bucket (best-effort)
+        if: ${{ github.event.inputs.ACTION == 'destroy' }}
         shell: bash
+        continue-on-error: true
         run: |
-          set -euo pipefail
-          # If you output the bucket name from Terraform as "website_bucket", try to read it:
-          BUCKET_OUT=$( (terraform output -raw website_bucket) 2>/dev/null || true )
-          TARGET_BUCKET="${WEBSITE_BUCKET_NAME:-}"
-          if [ -n "$BUCKET_OUT" ]; then
-            TARGET_BUCKET="$BUCKET_OUT"
-          fi
-          if [ -n "$TARGET_BUCKET" ]; then
-            echo "Attempting to empty bucket: $TARGET_BUCKET (best-effort)"
-            aws s3 rm "s3://$TARGET_BUCKET" --recursive || true
+          set -e
+          BUCKET=$(terraform output -raw website_bucket 2>/dev/null || true)
+          if [ -n "$BUCKET" ]; then
+            echo "Attempting to empty s3://$BUCKET ..."
+            aws s3 rm "s3://$BUCKET" --recursive || true
           else
-            echo "No website bucket detected to empty."
+            echo "No website_bucket output (maybe never applied)."
           fi
 
       - name: Terraform Destroy
-        if: ${{ env.ACTION == 'destroy' }}
+        if: ${{ github.event.inputs.ACTION == 'destroy' }}
         shell: bash
         env:
-          TF_VAR_aws_region:           ${{ env.AWS_REGION }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
           TF_VAR_allowed_email_domain: ${{ env.ALLOWED_EMAIL_DOMAIN }}
-          TF_VAR_ses_sender_email:     ${{ env.SES_SENDER_EMAIL }}
-          TF_VAR_website_bucket_name:  ${{ env.WEBSITE_BUCKET_NAME }}
+          TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
+          TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
+          TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
         run: |
-          set -euo pipefail
           terraform destroy -auto-approve
+
+      - name: Post-destroy note
+        if: ${{ github.event.inputs.ACTION == 'destroy' }}
+        shell: bash
+        run: |
+          echo "Terraform resources destroyed."
+          echo "State remains in s3://$BACKEND_BUCKET/state/terraform.tfstate and locks in DynamoDB table: $BACKEND_TABLE."

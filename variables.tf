@@ -40,3 +40,13 @@ variable "env_names" {
   type        = list(string)
   default     = ["NAQA1", "NAQA2", "NAQA3", "NAQA6", "APQA1", "EUQA1"]
 }
+
+variable "assign_profile_target" {
+  description = "Attach SSM instance profile to: none | running | stopped | both"
+  type        = string
+  default     = "none"
+  validation {
+    condition     = contains(["none","running","stopped","both"], var.assign_profile_target)
+    error_message = "assign_profile_target must be one of: none, running, stopped, both"
+  }
+}

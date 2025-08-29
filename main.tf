@@ -1,21 +1,51 @@
+#############################################
+# EC2 Dashboard – complete main.tf
+#############################################
+
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.50"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.6"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# ---------- Locals ----------
 locals {
-  name_prefix = "${var.project_name}-${random_id.suffix.hex}"
+  name_prefix  = "${var.project_name}-${random_id.suffix.hex}"
+  env_filters  = [for e in var.env_names : "*${e}*"]
 }
 
 resource "random_id" "suffix" {
   byte_length = 2
 }
 
-# ---------- SES sender (ensure you verify email if not already) ----------
+data "aws_caller_identity" "me" {}
+
+# ---------- SES sender (identity must be verified by you) ----------
 resource "aws_ses_email_identity" "sender" {
   email = var.ses_sender_email
 }
 
 # ---------- DynamoDB: OTP store ----------
 resource "aws_dynamodb_table" "otp" {
-  name           = "${local.name_prefix}-otp"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "email"
+  name         = "${local.name_prefix}-otp"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "email"
 
   attribute {
     name = "email"
@@ -29,7 +59,6 @@ resource "aws_dynamodb_table" "otp" {
 }
 
 # ---------- SSM Parameters ----------
-# Secret for signing tokens
 resource "random_password" "jwt_secret" {
   length  = 32
   special = false
@@ -41,7 +70,6 @@ resource "aws_ssm_parameter" "jwt_secret" {
   value = random_password.jwt_secret.result
 }
 
-# User credentials (plaintext -> stored as SecureString; rotate to hashed later if desired)
 resource "aws_ssm_parameter" "user_params" {
   for_each = var.app_users
   name     = "/${var.project_name}/users/${each.key}"
@@ -49,18 +77,14 @@ resource "aws_ssm_parameter" "user_params" {
   value    = each.value
 }
 
-# ---------- Lambda (API) ----------
+# ---------- Lambda packaging ----------
 data "archive_file" "api_zip" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/lambda-packaged.zip"
 }
 
-resource "aws_iam_role" "lambda_exec" {
-  name               = "${local.name_prefix}-lambda-exec"
-  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
-}
-
+# ---------- IAM role for Lambdas ----------
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -71,24 +95,29 @@ data "aws_iam_policy_document" "lambda_assume" {
   }
 }
 
+resource "aws_iam_role" "lambda_exec" {
+  name               = "${local.name_prefix}-lambda-exec"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
 resource "aws_iam_role_policy" "lambda_permissions" {
   name = "${local.name_prefix}-lambda-policy"
   role = aws_iam_role.lambda_exec.id
+
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      { Sid = "Logs", Effect = "Allow", Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], Resource = "*" },
-      { Sid = "SES",  Effect = "Allow", Action = ["ses:SendEmail","ses:SendRawEmail"], Resource = "*" },
-      { Sid = "DDB",  Effect = "Allow", Action = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource = aws_dynamodb_table.otp.arn },
-      { Sid = "EC2",  Effect = "Allow", Action = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"], Resource = "*" },
+      { Sid = "Logs",  Effect = "Allow", Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], Resource = "*" },
+      { Sid = "SES",   Effect = "Allow", Action = ["ses:SendEmail","ses:SendRawEmail"], Resource = "*" },
+      { Sid = "DDB",   Effect = "Allow", Action = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource = aws_dynamodb_table.otp.arn },
+      { Sid = "EC2",   Effect = "Allow", Action = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"], Resource = "*" },
       { Sid = "SSMRun",Effect = "Allow", Action = ["ssm:SendCommand","ssm:GetCommandInvocation"], Resource = "*" },
       { Sid = "SSMParams", Effect = "Allow", Action = ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"], Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*" }
     ]
   })
 }
 
-data "aws_caller_identity" "me" {}
-
+# ---------- Lambda functions ----------
 resource "aws_lambda_function" "api" {
   function_name = "${local.name_prefix}-api"
   role          = aws_iam_role.lambda_exec.arn
@@ -109,7 +138,6 @@ resource "aws_lambda_function" "api" {
   }
 }
 
-# ---------- Lambda (Authorizer) ----------
 resource "aws_lambda_function" "authorizer" {
   function_name = "${local.name_prefix}-authorizer"
   role          = aws_iam_role.lambda_exec.arn
@@ -125,7 +153,6 @@ resource "aws_lambda_function" "authorizer" {
   }
 }
 
-# Permissions so API Gateway can invoke both Lambdas
 resource "aws_lambda_permission" "api_invoke" {
   statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
@@ -140,7 +167,7 @@ resource "aws_lambda_permission" "auth_invoke" {
   principal     = "apigateway.amazonaws.com"
 }
 
-# ---------- API Gateway HTTP API ----------
+# ---------- API Gateway (HTTP API) ----------
 resource "aws_apigatewayv2_api" "api" {
   name          = "${local.name_prefix}-httpapi"
   protocol_type = "HTTP"
@@ -148,7 +175,7 @@ resource "aws_apigatewayv2_api" "api" {
   cors_configuration {
     allow_headers = ["*"]
     allow_methods = ["GET","POST","OPTIONS"]
-    allow_origins = ["*"] # tighten to CloudFront domain after first deploy if desired
+    allow_origins = ["*"] # tighten to CloudFront domain later if you want
   }
 }
 
@@ -159,7 +186,6 @@ resource "aws_apigatewayv2_integration" "api_lambda" {
   payload_format_version = "2.0"
 }
 
-# Lambda authorizer (simple responses)
 resource "aws_apigatewayv2_authorizer" "auth" {
   api_id                            = aws_apigatewayv2_api.api.id
   authorizer_type                   = "REQUEST"
@@ -177,13 +203,11 @@ resource "aws_apigatewayv2_route" "request_otp" {
   route_key = "POST /request-otp"
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 }
-
 resource "aws_apigatewayv2_route" "verify_otp" {
   api_id    = aws_apigatewayv2_api.api.id
   route_key = "POST /verify-otp"
   target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
 }
-
 resource "aws_apigatewayv2_route" "login" {
   api_id    = aws_apigatewayv2_api.api.id
   route_key = "POST /login"
@@ -198,7 +222,6 @@ resource "aws_apigatewayv2_route" "instances" {
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
-
 resource "aws_apigatewayv2_route" "instance_action" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "POST /instance-action"
@@ -206,7 +229,6 @@ resource "aws_apigatewayv2_route" "instance_action" {
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
-
 resource "aws_apigatewayv2_route" "services" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "POST /services"
@@ -221,9 +243,10 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 }
 
-# ---------- Static site: S3 + CloudFront (OAC) ----------
+# ---------- Static site: S3 + CloudFront ----------
 resource "aws_s3_bucket" "website" {
-  bucket = var.website_bucket_name != "" ? var.website_bucket_name : "${local.name_prefix}-site"
+  bucket        = var.website_bucket_name != "" ? var.website_bucket_name : "${local.name_prefix}-site"
+  force_destroy = true  # allow terraform destroy without manual empty
 }
 
 resource "aws_s3_bucket_ownership_controls" "site" {
@@ -279,7 +302,6 @@ resource "aws_cloudfront_distribution" "site" {
   }
 }
 
-# Bucket policy to allow CloudFront OAC
 data "aws_iam_policy_document" "site_bucket" {
   statement {
     sid     = "AllowCloudFrontRead"
@@ -313,3 +335,81 @@ resource "aws_s3_object" "index" {
     env_names            = join(",", var.env_names)
   })
 }
+
+# ============================================================
+# EC2 SSM – Role / Instance Profile and optional attachments
+# ============================================================
+
+# Role for EC2 to talk to SSM
+data "aws_iam_policy_document" "ec2_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ec2_ssm_role" {
+  name               = "${local.name_prefix}-ec2-ssm-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+}
+
+# Attach AWS managed policy AmazonSSMManagedInstanceCore
+resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Instance profile for EC2
+resource "aws_iam_instance_profile" "ec2_ssm_profile" {
+  name = "${local.name_prefix}-ec2-ssm-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+# Find instances whose Name tag contains any of the env tokens (NAQA1, APQA1, etc.)
+# Running only
+data "aws_instances" "targets_running" {
+  filter {
+    name   = "instance-state-name"
+    values = ["running"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
+}
+
+# Stopped only
+data "aws_instances" "targets_stopped" {
+  filter {
+    name   = "instance-state-name"
+    values = ["stopped"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
+}
+
+# Select which instances to target based on variable
+locals {
+  target_ids = var.assign_profile_target == "none"    ? [] :
+               var.assign_profile_target == "running" ? data.aws_instances.targets_running.ids :
+               var.assign_profile_target == "stopped" ? data.aws_instances.targets_stopped.ids :
+               distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids)) # both
+}
+
+# Associate instance profile to selected existing instances.
+# Note: If an instance already has a different profile, set replace = true to swap it.
+resource "aws_iam_instance_profile_association" "attach_profile" {
+  for_each             = toset(local.target_ids)
+  instance_id          = each.value
+  iam_instance_profile = aws_iam_instance_profile.ec2_ssm_profile.name
+  replace              = true
+}
+
+#############################################
+# End of main.tf
+#############################################

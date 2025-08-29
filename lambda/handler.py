@@ -18,7 +18,8 @@ def _read_jwt_secret():
     p = ssm.get_parameter(Name=jwt_param, WithDecryption=True)
     return p["Parameter"]["Value"].encode()
 
-def _sign(payload: dict, ttl=3600):
+# Token now valid for 8 hours
+def _sign(payload: dict, ttl=28800):
     secret = _read_jwt_secret()
     payload = {**payload, "exp": int(time.time()) + ttl}
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
@@ -71,7 +72,7 @@ def lambda_handler(event, context):
         email = (d.get("email") or "").strip().lower()
         if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
             return _resp(400, {"error": "Invalid email"})
-        if not email.endswith(f"@{allowed_dom}"):
+        if allowed_dom and not email.endswith(f"@{allowed_dom}"):
             return _resp(403, {"error": f"Email domain not allowed. Use @{allowed_dom}"})
         code = "".join(random.choices(string.digits, k=6))
         expires = int(time.time()) + 300
@@ -101,7 +102,6 @@ def lambda_handler(event, context):
             return _resp(400, {"error":"OTP expired"})
         if item["code"]["S"] != code:
             return _resp(403, {"error":"Invalid OTP"})
-        # success
         return _resp(200, {"status":"ok"})
 
     if route == "/login" and method == "POST":
@@ -118,7 +118,6 @@ def lambda_handler(event, context):
         return _resp(200, {"token": token})
 
     if route == "/instances" and method == "GET":
-        # auth already checked by authorizer, but we can also soft-check if header present
         data = ec2.describe_instances()
         envs = {e: {"DM": [], "EA": []} for e in (env_names.split(",") if env_names else [])}
         total=running=stopped=0
@@ -138,32 +137,36 @@ def lambda_handler(event, context):
                     })
         return _resp(200, {"summary":{"total":total,"running":running,"stopped":stopped}, "envs": envs})
 
+    # Start/Stop single or group
     if route == "/instance-action" and method == "POST":
         d = _json(event)
         action = d.get("action")  # start|stop
+
+        ids = []
         if "id" in d:
             ids = [d["id"]]
         else:
-            # group operation: require env + block
-            env = d.get("env"); block = d.get("block") # DM or EA
-            flt = [{
-                "Name":"tag:Name",
-                "Values":[f"*{env}*{block}*"]
-            }]
-            r = ec2.describe_instances(Filters=flt)
-            ids=[]
-            for res in r["Reservations"]:
-                for i in res["Instances"]:
-                    ids.append(i["InstanceId"])
-        if not ids: return _resp(400, {"error":"No instances found"})
+            env  = (d.get("env") or "").upper()
+            block= (d.get("block") or "").upper()
+            data = ec2.describe_instances()
+            for res in data.get("Reservations", []):
+                for i in res.get("Instances", []):
+                    name = (_get_name(i.get("Tags")) or "").upper()
+                    if env in name and block in name:
+                        ids.append(i["InstanceId"])
+
+        if not ids:
+            return _resp(400, {"error":"No instances found"})
         if action=="start":
             ec2.start_instances(InstanceIds=ids)
+            return _resp(200, {"status":"starting", "ids": ids, "message": f"Starting {len(ids)} instance(s)."})
         elif action=="stop":
             ec2.stop_instances(InstanceIds=ids)
+            return _resp(200, {"status":"stopping", "ids": ids, "message": f"Stopping {len(ids)} instance(s)."})
         else:
             return _resp(400, {"error":"Invalid action"})
-        return _resp(200, {"status":"ok", "ids": ids})
 
+    # Services (via SSM)
     if route == "/services" and method == "POST":
         d = _json(event)
         instance_id = d.get("id")
@@ -173,22 +176,20 @@ def lambda_handler(event, context):
         name_hint = (d.get("instanceName") or "").lower()
 
         if mode == "iisreset":
-            cmd = ["iisreset"]
+            cmd = ["iisreset"]; msg = "Performing IIS reset"
         elif mode in ("start","stop"):
             if not svc: return _resp(400, {"error":"service required"})
             ps = f'{("Start-Service" if mode=="start" else "Stop-Service")} -Name "{svc}"'
-            cmd = [ps]
+            cmd = [ps]; msg = f"{mode.title()} service {svc}"
         else:
-            # LIST
             if "sql" in name_hint:
-                ps = 'Get-Service -Name "MSSQLSERVER","SQLSERVERAGENT","SQLBrowser" | Select-Object Name,Status | ConvertTo-Json'
+                ps = 'Get-Service -Name "MSSQL*","SQL*","SQLBrowser" | Select-Object Name,Status | ConvertTo-Json'
             elif "redis" in name_hint:
                 ps = 'Get-Service -Name "Redis*" | Select-Object Name,Status | ConvertTo-Json'
             else:
-                # text filter from UI
                 patt = pattern if pattern else "*"
                 ps = f'Get-Service -Name "*{patt}*" | Select-Object Name,Status | ConvertTo-Json'
-            cmd = [ps]
+            cmd = [ps]; msg = "Listing services"
 
         resp = ssm_ec2.send_command(
             InstanceIds=[instance_id],
@@ -196,7 +197,6 @@ def lambda_handler(event, context):
             Parameters={"commands": cmd},
         )
         cid = resp["Command"]["CommandId"]
-        # simple wait loop (short)
         for _ in range(30):
             out = ssm_ec2.get_command_invocation(CommandId=cid, InstanceId=instance_id)
             if out["Status"] in ("Success","Failed","Cancelled","TimedOut"):
@@ -208,8 +208,8 @@ def lambda_handler(event, context):
                 data = json.loads(out.get("StandardOutputContent") or "[]")
             except Exception:
                 data = []
-            return _resp(200, {"services": data})
+            return _resp(200, {"services": data, "message": msg, "status": out.get("Status")})
         else:
-            return _resp(200, {"status": out.get("Status"), "stdout": out.get("StandardOutputContent",""), "stderr": out.get("StandardErrorContent","")})
+            return _resp(200, {"status": out.get("Status"), "message": msg, "stdout": out.get("StandardOutputContent",""), "stderr": out.get("StandardErrorContent","")})
 
     return _resp(404, {"error": "Not found"})
