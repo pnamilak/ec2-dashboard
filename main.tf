@@ -8,8 +8,15 @@ locals {
   # random_id suffix keeps names unique per deployment
   name_prefix = "${var.project_name}-${random_id.suffix.hex}"
 
-  # Used to match instances by Name tag for the EC2/SSM profile attachment
-  env_filters = [for e in var.env_names : "*${e}*"]
+  # Used to match instances by Name tag for EC2/SSM profile attachment
+  # Make matching case-flexible so NAQA1/naqa1/etc all match
+  env_filters = flatten([
+    for e in var.env_names : [
+      "*${e}*",
+      "*${lower(e)}*",
+      "*${upper(e)}*"
+    ]
+  ])
 }
 
 resource "random_id" "suffix" {
@@ -404,7 +411,7 @@ data "aws_instances" "targets_stopped" {
   }
 }
 
-# Single locals block for selection
+# Selection for attach behavior driven by var.assign_profile_target (none|running|stopped|both)
 locals {
   target_ids_map = {
     none    = []
@@ -433,7 +440,6 @@ resource "null_resource" "attach_profile" {
       PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
       REGION="${var.aws_region}"
 
-      # get current association (if any)
       CUR_JSON=$(aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values="$IID" --region "$REGION" --output json)
       CUR_ID=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].AssociationId // empty')
       CUR_PROFILE=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].IamInstanceProfile.Arn | split("/")[-1] // empty')
