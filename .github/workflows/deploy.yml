@@ -29,7 +29,7 @@ on:
         default: "noreplyzingamazigle@gmail.com"
 
 jobs:
-  deploy:
+  Ec2-DashBoard:
     runs-on: ubuntu-latest  # (use your runner)
     environment: mypersonalAWS   # <— add this line
     env:

@@ -87,21 +87,21 @@ function msg(id, t){ el(id).textContent = t; }
 
 async function requestOtp(){
   const email = el('email').value.trim();
-  const r = await fetch(`${API}/request-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
+  const r = await fetch(`$${API}/request-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
   const j = await r.json();
   msg('msg1', r.ok ? 'OTP sent. Check your email.' : (j.error || 'Failed'));
 }
 async function verifyOtp(){
   const email = el('email').value.trim();
   const code  = el('otp').value.trim();
-  const r = await fetch(`${API}/verify-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, code})});
+  const r = await fetch(`$${API}/verify-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, code})});
   const j = await r.json();
   if(r.ok){ el('step2').style.display='block'; msg('msg1','OTP verified. Proceed to login.'); } else { msg('msg1', j.error || 'Failed'); }
 }
 async function login(){
   const username = el('username').value.trim();
   const password = el('password').value.trim();
-  const r = await fetch(`${API}/login`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})});
+  const r = await fetch(`$${API}/login`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})});
   const j = await r.json();
   if(r.ok){ TOKEN = j.token; localStorage.setItem('token', TOKEN); el('step1').style.display='none'; el('step2').style.display='none'; el('dash').style.display='block'; await loadDashboard(); }
   else { msg('msg2', j.error || 'Login failed'); }
@@ -110,7 +110,7 @@ async function login(){
 function auth(){ return TOKEN ? {'Authorization':'Bearer '+TOKEN} : {}; }
 
 async function loadDashboard(){
-  const r = await fetch(`${API}/instances`, {headers: auth()});
+  const r = await fetch(`$${API}/instances`, {headers: auth()});
   const j = await r.json();
   if(!r.ok){ alert(j.error||'Auth failed'); return; }
   el('summary').innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
@@ -161,12 +161,12 @@ function renderEnvPanel(envs, env){
 }
 
 async function act(id, action){
-  await fetch(`${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id, action})});
+  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id, action})});
   setTimeout(loadDashboard, 1500);
 }
 
 async function groupAction(env, block, action){
-  await fetch(`${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({env, block, action})});
+  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({env, block, action})});
   setTimeout(loadDashboard, 2000);
 }
 
@@ -180,7 +180,7 @@ function closeSvc(){ el('svcDlg').close(); }
 
 async function loadServices(){
   const pattern = el('svcFilter').value.trim();
-  const r = await fetch(`${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:'list', pattern})});
+  const r = await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:'list', pattern})});
   const j = await r.json();
   const list = el('svcList'); list.innerHTML = '';
   (j.services||[]).forEach(s=>{
@@ -194,11 +194,11 @@ async function loadServices(){
   });
 }
 async function svc(name, action){
-  await fetch(`${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
+  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
   setTimeout(loadServices, 1200);
 }
 async function iisReset(){
-  await fetch(`${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:'iisreset'})});
+  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:'iisreset'})});
 }
 </script>
 </body>
