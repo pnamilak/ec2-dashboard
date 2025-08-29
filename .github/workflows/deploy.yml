@@ -12,11 +12,11 @@ on:
       AWS_REGION:
         description: "AWS Region"
         required: true
-        default: "us-east-1"
+        default: "us-east-2"
       BACKEND_BUCKET:
         description: "Terraform state S3 bucket"
         required: true
-        default: "mypersonalaws-tfstate-us-east-1"
+        default: "mypersonalaws-tfstate-us-east-2"
       BACKEND_TABLE:
         description: "Terraform lock DynamoDB table"
         required: true
@@ -32,12 +32,12 @@ on:
       SES_SENDER_EMAIL:
         description: "SES sender (must be verified in this region)"
         required: true
-        default: "noreply@example.com"
+        default: "noreplyzingamazigle@gmail.com"
       ATTACH_SSM_PROFILE:
         description: "Attach SSM instance profile to EC2s (by Name matching envs)"
         type: choice
         options: [none, running, stopped, both]
-        default: none
+        default: running
         required: true
 
 jobs:
