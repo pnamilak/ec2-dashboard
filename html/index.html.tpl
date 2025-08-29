@@ -5,29 +5,70 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>EC2 Dashboard</title>
 <style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b1220;color:#e6e6e6}
-  .wrap{max-width:1100px;margin:0 auto;padding:24px}
-  .card{background:#121a2a;border:1px solid #27314a;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset}
-  input,button,select{border-radius:10px;border:1px solid #3a4c6b;background:#0f1625;color:#e6e6e6;padding:10px}
+  :root{
+    --bg:#f6f8fb;
+    --card:#ffffff;
+    --ink:#0b1220;
+    --muted:#5a667d;
+    --line:#e6ecf5;
+    --pill:#eef2f9;
+    --green:#22c55e;   /* start */
+    --green-d:#16a34a;
+    --red:#ef4444;     /* stop */
+    --red-d:#b91c1c;
+    --blue:#3b82f6;    /* neutral */
+    --blue-d:#2563eb;
+  }
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
+  .wrap{max-width:1100px;margin:0 auto;padding:28px}
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:18px;
+    margin:14px 0;
+    box-shadow:0 6px 20px rgba(17,24,39,0.06);
+  }
+  input,button,select{
+    border-radius:12px;border:1px solid var(--line);
+    background:#fff;color:var(--ink);padding:10px 12px
+  }
+  input{min-width:220px}
   .row{display:flex;gap:12px;flex-wrap:wrap}
   .col{flex:1}
-  .tab{padding:8px 12px;border:1px solid #3a4c6b;border-bottom:none;border-radius:10px 10px 0 0;background:#0f1625;margin-right:6px;cursor:pointer}
-  .tab.active{background:#1b2740}
-  .inst{display:flex;align-items:center;justify-content:space-between;border:1px solid #33425e;border-radius:10px;padding:8px;margin:6px 0;background:#0f1625}
-  .status.running{color:#3fd16f} .status.stopped{color:#ff8b8b} .status.terminated{color:#ffb38b}
-  .muted{opacity:.8}
-  .pill{padding:2px 8px;border-radius:999px;background:#22304d;border:1px solid #3a4c6b;margin-right:6px}
-  dialog{border:none;border-radius:16px;background:#0f1625;color:#e6e6e6;box-shadow:0 10px 40px rgba(0,0,0,.6);width:min(700px,90vw)}
-  .right{display:flex;gap:8px}
-  .btn{cursor:pointer}
-  .btn-green{background:#0a3;border-color:#093;color:#eaffea}
-  .btn-green:hover{filter:brightness(1.1)}
-  .btn-red{background:#b11;border-color:#822;color:#fee}
-  .btn-red:hover{filter:brightness(1.1)}
-  .btn-gray{background:#1b2740;border-color:#3a4c6b;color:#dbe2ff}
-  .btn-gray:hover{filter:brightness(1.08)}
-  #toasts{position:fixed;top:12px;right:12px;display:flex;flex-direction:column;gap:8px;z-index:50}
-  .toast{background:#101826;border:1px solid #2b3a59;padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .tab{
+    padding:10px 14px;border:1px solid var(--line);
+    border-bottom:none;border-radius:12px 12px 0 0;background:#f1f5ff;
+    margin-right:6px;cursor:pointer;color:#1e293b;font-weight:600
+  }
+  .tab.active{background:#dbeafe;border-color:#c7ddff}
+  .inst{
+    display:flex;align-items:center;justify-content:space-between;
+    border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#fff
+  }
+  .status.running{color:var(--green-d);font-weight:700}
+  .status.stopped{color:var(--red-d);font-weight:700}
+  .status.terminated{color:#a16207;font-weight:700}
+  .muted{color:var(--muted)}
+  .pill{
+    padding:3px 10px;border-radius:999px;background:var(--pill);
+    border:1px solid var(--line);margin-right:6px;font-weight:600
+  }
+  dialog{
+    border:none;border-radius:16px;background:#fff;color:var(--ink);
+    box-shadow:0 20px 60px rgba(17,24,39,0.18);width:min(720px,92vw)
+  }
+  .right{display:flex;gap:10px}
+  .btn{cursor:pointer;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.06)}
+  .btn:active{transform:translateY(1px)}
+  .btn-green{background:var(--green);border-color:var(--green);color:#fff}
+  .btn-green:hover{background:var(--green-d);border-color:var(--green-d)}
+  .btn-red{background:var(--red);border-color:var(--red);color:#fff}
+  .btn-red:hover{background:var(--red-d);border-color:var(--red-d)}
+  .btn-gray{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn-gray:hover{background:var(--blue-d);border-color:var(--blue-d)}
+  #toasts{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;gap:8px;z-index:50}
+  .toast{background:#fff;border:1px solid var(--line);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(17,24,39,.12)}
 </style>
 </head>
 <body>
@@ -86,22 +127,20 @@
 
 <script>
 (function(){
-  // Immutable Terraform-provided values:
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 
-  // Session
   var TOKEN = localStorage.getItem("token") || null;
   var CURRENT_ENV = null;
   var SVC_CTX = { id:null, name:null };
 
-  // Helpers
   function el(id){ return document.getElementById(id); }
   function msg(id, t){ el(id).textContent = t; }
   function toast(t){ var d=document.createElement('div'); d.className='toast'; d.textContent=t; el('toasts').appendChild(d); setTimeout(function(){ d.remove(); }, 4500); }
   function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
+  function merge(a,b){ var o={}; for(var k in a)o[k]=a[k]; for(var k2 in b)o[k2]=b[k2]; return o; }
+  Object.prototype.with = function(obj){ return merge(this, obj); };
 
-  // API calls
   function requestOtp(){
     var email = el("email").value.trim();
     fetch(API + "/request-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:email})})
@@ -169,8 +208,6 @@
   }
 
   function isWebOrSvc(name){ var n=name.toLowerCase(); return n.indexOf("svc")>-1 || n.indexOf("web")>-1; }
-  function isSql(name){ return name.toLowerCase().indexOf("sql")>-1; }
-  function isRedis(name){ return name.toLowerCase().indexOf("redis")>-1; }
 
   function renderEnvPanel(envs, env){
     var p = el("env-panels");
@@ -181,7 +218,7 @@
       var blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
       var card = document.createElement("div"); card.className="card";
 
-      var head = document.createElement("div"); head.className="block-title"; head.style.display="flex"; head.style.justifyContent="space-between"; head.style.alignItems="center";
+      var head = document.createElement("div"); head.style.display="flex"; head.style.justifyContent="space-between"; head.style.alignItems="center";
       var h3 = document.createElement("h3"); h3.textContent = blockName; head.appendChild(h3);
       var actions = document.createElement("div"); actions.className="right";
       var bStartAll = document.createElement("button"); bStartAll.className="btn btn-green"; bStartAll.textContent="Start All";
@@ -192,8 +229,6 @@
       head.appendChild(actions);
 
       var list = document.createElement("div");
-      var listId = "list-" + env + "-" + blk;
-      list.id = listId;
 
       card.appendChild(head);
       card.appendChild(list);
@@ -293,11 +328,6 @@
     fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})});
   }
 
-  // Small helpers
-  function merge(a,b){ var o={}; for(var k in a)o[k]=a[k]; for(var k2 in b)o[k2]=b[k2]; return o; }
-  Object.prototype.with = function(obj){ return merge(this, obj); };
-
-  // Wire buttons & Enter key behavior
   function wireEnter(id, fn){
     var e=el(id); if(!e) return;
     e.addEventListener("keydown", function(ev){
@@ -317,7 +347,6 @@
   wireEnter("username", login);
   wireEnter("password", login);
 
-  // Auto-continue if token exists
   window.addEventListener("load", function(){
     if(TOKEN){ showDash(); loadDashboard(); }
   });
