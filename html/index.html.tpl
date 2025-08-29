@@ -34,6 +34,7 @@
 <div class="wrap">
   <h2>EC2 Dashboard</h2>
 
+  <!-- STEP 1: Email + OTP -->
   <div id="step1" class="card">
     <h3>Step 1: Email OTP (allowed domain: <span class="pill">@${allowed_email_domain}</span>)</h3>
     <div class="row">
@@ -47,6 +48,7 @@
     <div id="msg1" class="muted"></div>
   </div>
 
+  <!-- STEP 2: Username/Password -->
   <div id="step2" class="card" style="display:none">
     <h3>Step 2: Login</h3>
     <div class="row">
@@ -57,6 +59,7 @@
     <div id="msg2" class="muted"></div>
   </div>
 
+  <!-- STEP 3: Dashboard -->
   <div id="dash" style="display:none">
     <div class="card">
       <div id="summary"></div>
@@ -91,40 +94,41 @@ let SVC_CTX = { id:null, name:null };
 function el(id){ return document.getElementById(id); }
 function msg(id, t){ el(id).textContent = t; }
 function toast(t){ const d=document.createElement('div'); d.className='toast'; d.textContent=t; el('toasts').appendChild(d); setTimeout(()=>d.remove(), 4500); }
-function auth(){ return TOKEN ? {'Authorization':'Bearer '+TOKEN} : {}; }
+function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
 
 async function requestOtp(){
-  const email = el('email').value.trim();
+  const email = el("email").value.trim();
   const r = await fetch(`$${API}/request-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email})});
   const j = await r.json();
-  msg('msg1', r.ok ? 'OTP sent. Check your email.' : (j.error || 'Failed'));
+  msg("msg1", r.ok ? "OTP sent. Check your email." : (j.error || "Failed"));
 }
 async function verifyOtp(){
-  const email = el('email').value.trim();
-  const code  = el('otp').value.trim();
+  const email = el("email").value.trim();
+  const code  = el("otp").value.trim();
   const r = await fetch(`$${API}/verify-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email, code})});
   const j = await r.json();
-  if(r.ok){ el('step2').style.display='block'; msg('msg1','OTP verified. Proceed to login.'); } else { msg('msg1', j.error || 'Failed'); }
+  if(r.ok){ el("step2").style.display="block"; msg("msg1","OTP verified. Proceed to login."); } else { msg("msg1", j.error || "Failed"); }
 }
 async function login(){
-  const username = el('username').value.trim();
-  const password = el('password').value.trim();
+  const username = el("username").value.trim();
+  const password = el("password").value.trim();
   const r = await fetch(`$${API}/login`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username,password})});
   const j = await r.json();
-  if(r.ok){ TOKEN = j.token; localStorage.setItem('token', TOKEN); showDash(); await loadDashboard(); }
-  else { msg('msg2', j.error || 'Login failed'); }
+  if(r.ok){ TOKEN = j.token; localStorage.setItem("token", TOKEN); showDash(); await loadDashboard(); }
+  else { msg("msg2", j.error || "Login failed"); }
 }
 function showDash(){
-  if(el('step1')) el('step1').style.display='none';
-  if(el('step2')) el('step2').style.display='none';
-  el('dash').style.display='block';
+  const s1=el("step1"), s2=el("step2");
+  if(s1) s1.style.display="none";
+  if(s2) s2.style.display="none";
+  el("dash").style.display="block";
 }
 
 async function loadDashboard(){
   const r = await fetch(`$${API}/instances`, {headers: auth()});
   const j = await r.json();
-  if(!r.ok){ alert(j.error||'Auth failed'); return; }
-  el('summary').innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
+  if(!r.ok){ alert(j.error||"Auth failed"); return; }
+  el("summary").innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
   <span class="pill">Running: $${j.summary.running}</span>
   <span class="pill">Stopped: $${j.summary.stopped}</span>
   <button class="btn btn-gray" style="float:right" onclick="loadDashboard()">Refresh</button>`;
@@ -132,41 +136,41 @@ async function loadDashboard(){
 }
 
 function renderEnvTabs(envs){
-  const tabs = el('env-tabs'); tabs.innerHTML = '';
+  const tabs = el("env-tabs"); tabs.innerHTML = "";
   ENV_NAMES.forEach((e,i)=>{
-    const t = document.createElement('div');
-    t.className = 'tab'+(i===0?' active':'');
+    const t = document.createElement("div");
+    t.className = "tab"+(i===0?" active":"");
     t.textContent = e;
-    t.onclick = ()=>{ [...tabs.children].forEach(c=>c.classList.remove('active')); t.classList.add('active'); CURRENT_ENV=e; renderEnvPanel(envs,e); };
+    t.onclick = ()=>{ [...tabs.children].forEach(c=>c.classList.remove("active")); t.classList.add("active"); CURRENT_ENV=e; renderEnvPanel(envs,e); };
     tabs.appendChild(t);
   });
   CURRENT_ENV = ENV_NAMES[0]; renderEnvPanel(envs, CURRENT_ENV);
 }
 
-function isWebOrSvc(name){ const n=name.toLowerCase(); return n.includes('svc') || n.includes('web'); }
-function isSql(name){ return name.toLowerCase().includes('sql'); }
-function isRedis(name){ return name.toLowerCase().includes('redis'); }
+function isWebOrSvc(name){ const n=name.toLowerCase(); return n.includes("svc") || n.includes("web"); }
+function isSql(name){ return name.toLowerCase().includes("sql"); }
+function isRedis(name){ return name.toLowerCase().includes("redis"); }
 
 function renderEnvPanel(envs, env){
-  const p = el('env-panels'); const data = envs[env];
-  p.innerHTML = '';
+  const p = el("env-panels"); const data = envs[env];
+  p.innerHTML = "";
   ["DM","EA"].forEach((blk)=>{
     const blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
-    const card = document.createElement('div'); card.className='card';
+    const card = document.createElement("div"); card.className="card";
     card.innerHTML = `<div class="block-title"><h3>$${blockName}</h3>
       <div class="right">
-        <button class="btn btn-green" onclick="groupAction('$${env}','$${blk}','start')">Start All</button>
-        <button class="btn btn-red"   onclick="groupAction('$${env}','$${blk}','stop')">Stop All</button>
+        <button class="btn btn-green" onclick="groupAction(\"$${env}\", \"$${blk}\", \"start\")">Start All</button>
+        <button class="btn btn-red"   onclick="groupAction(\"$${env}\", \"$${blk}\", \"stop\")">Stop All</button>
       </div></div>
       <div id="list-$${env}-$${blk}"></div>`;
     p.appendChild(card);
     const c = card.querySelector(`#list-$${env}-$${blk}`);
     (data[blk]||[]).forEach(inst=>{
       const name = inst.name;
-      const btnStartStop = (inst.state==='running')
-        ? `<button class="btn btn-red"   onclick="act('$${inst.id}','stop','$${name}')">Stop</button>`
-        : `<button class="btn btn-green" onclick="act('$${inst.id}','start','$${name}')">Start</button>`;
-      const svcBtn  = `<button class="btn btn-gray" onclick="openServices('$${inst.id}','$${name.replaceAll("\"","&quot;")}')">Services</button>`;
+      const btnStartStop = (inst.state==="running")
+        ? `<button class="btn btn-red"   onclick="act(\"$${inst.id}\", \"stop\", \"$${name}\")">Stop</button>`
+        : `<button class="btn btn-green" onclick="act(\"$${inst.id}\", \"start\", \"$${name}\")">Start</button>`;
+      const svcBtn  = `<button class="btn btn-gray" onclick="openServices(\"$${inst.id}\", \"$${name}\")">Services</button>`;
       const html = `<div class="inst">
         <div><strong>$${name}</strong> <span class="muted">($${inst.id})</span></div>
         <div class="right">
@@ -175,19 +179,19 @@ function renderEnvPanel(envs, env){
           ${svcBtn}
         </div>
       </div>`;
-      const div = document.createElement('div'); div.innerHTML = html; c.appendChild(div.firstChild);
+      const div = document.createElement("div"); div.innerHTML = html; c.appendChild(div.firstChild);
     });
   });
 }
 
 async function act(id, action, name){
-  toast(`${action==='start'?'Starting':'Stopping'}: ${name}`);
+  toast(`${action==="start"?"Starting":"Stopping"}: ${name}`);
   await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id, action})})
   pollUntilStable();
 }
 
 async function groupAction(env, block, action){
-  toast(`${action==='start'?'Starting':'Stopping'} ALL in ${env} / ${block}`);
+  toast(`${action==="start"?"Starting":"Stopping"} ALL in ${env} / ${block}`);
   await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({env, block, action})});
   pollUntilStable(60);
 }
@@ -204,34 +208,34 @@ async function pollUntilStable(maxSecs=45){
 
 function openServices(id, name){
   SVC_CTX.id = id; SVC_CTX.name=name;
-  el('svcInstName').textContent = name;
-  const iisBtn = document.querySelector('#svcDlg button[data-iis]');
-  if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? 'inline-block' : 'none'); }
-  document.getElementById('svcDlg').showModal();
+  el("svcInstName").textContent = name;
+  const iisBtn = document.querySelector("#svcDlg button[data-iis]");
+  if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? "inline-block" : "none"); }
+  document.getElementById("svcDlg").showModal();
   loadServices();
 }
-function closeSvc(){ document.getElementById('svcDlg').close(); }
+function closeSvc(){ document.getElementById("svcDlg").close(); }
 
 async function loadServices(){
-  const pattern = el('svcFilter').value.trim();
+  const pattern = el("svcFilter").value.trim();
   const r = await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:"list", pattern})});
   const j = await r.json();
   if(j.message) toast(j.message);
-  const list = el('svcList'); list.innerHTML = '';
+  const list = el("svcList"); list.innerHTML = "";
   (j.services||[]).forEach(s=>{
     const name = s.Name || s.name;
     const status = s.Status || s.status;
-    const d = document.createElement('div'); d.className='inst';
+    const d = document.createElement("div"); d.className="inst";
     d.innerHTML = `<div>$${name} <span class="pill">$${status}</span></div>
       <div class="right">
-        <button class="btn btn-green" onclick="svc('$${name}','start')">Start</button>
-        <button class="btn btn-red"   onclick="svc('$${name}','stop')">Stop</button>
+        <button class="btn btn-green" onclick="svc(\"$${name}\", \"start\")">Start</button>
+        <button class="btn btn-red"   onclick="svc(\"$${name}\", \"stop\")">Stop</button>
       </div>`;
     list.appendChild(d);
   });
 }
 async function svc(name, action){
-  toast(`${action==='start'?'Starting':'Stopping'} service: ${name}`);
+  toast(`${action==="start"?"Starting":"Stopping"} service: ${name}`);
   await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
   setTimeout(loadServices, 1200);
 }
@@ -241,19 +245,19 @@ async function iisReset(){
 }
 
 /* Enter to submit (OTP + Login) */
-['email','otp','username','password'].forEach(id=>{
+["email","otp","username","password"].forEach(id=>{
   const e=el(id); if(!e) return;
-  e.addEventListener('keydown', (ev)=>{
-    if(ev.key==='Enter'){
-      if(id==='email') requestOtp();
-      else if(id==='otp') verifyOtp();
-      else if(id==='username' || id==='password') login();
+  e.addEventListener("keydown", (ev)=>{
+    if(ev.key==="Enter"){
+      if(id==="email") requestOtp();
+      else if(id==="otp") verifyOtp();
+      else if(id==="username" || id==="password") login();
     }
   })
 });
 
 /* Persisted session: auto-enter dashboard if token exists */
-window.addEventListener('load', async ()=>{
+window.addEventListener("load", async ()=>{
   if(TOKEN){ showDash(); await loadDashboard(); }
 });
 </script>
