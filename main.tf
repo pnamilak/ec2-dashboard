@@ -1,33 +1,14 @@
+# NOTE: Do NOT add terraform{} or provider "aws"{} here, since backend.tf already has them.
+
 #############################################
-# EC2 Dashboard – complete main.tf
+# EC2 Dashboard – main.tf (no duplicate providers)
 #############################################
 
-terraform {
-  required_version = ">= 1.6.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.50"
-    }
-    archive = {
-      source  = "hashicorp/archive"
-      version = "~> 2.6"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
-  }
-}
-
-provider "aws" {
-  region = var.aws_region
-}
-
-# ---------- Locals ----------
 locals {
-  name_prefix  = "${var.project_name}-${random_id.suffix.hex}"
-  env_filters  = [for e in var.env_names : "*${e}*"]
+  # random_id suffix included at end to keep names unique
+  name_prefix = "${var.project_name}-${random_id.suffix.hex}"
+  # used to match instances by Name tag for the EC2/SSM profile attachment
+  env_filters = [for e in var.env_names : "*${e}*"]
 }
 
 resource "random_id" "suffix" {
@@ -36,7 +17,7 @@ resource "random_id" "suffix" {
 
 data "aws_caller_identity" "me" {}
 
-# ---------- SES sender (identity must be verified by you) ----------
+# ---------- SES sender (you must verify this identity in the chosen region) ----------
 resource "aws_ses_email_identity" "sender" {
   email = var.ses_sender_email
 }
@@ -175,7 +156,7 @@ resource "aws_apigatewayv2_api" "api" {
   cors_configuration {
     allow_headers = ["*"]
     allow_methods = ["GET","POST","OPTIONS"]
-    allow_origins = ["*"] # tighten to CloudFront domain later if you want
+    allow_origins = ["*"] # you can tighten to CloudFront domain later
   }
 }
 
@@ -319,12 +300,13 @@ data "aws_iam_policy_document" "site_bucket" {
     }
   }
 }
+
 resource "aws_s3_bucket_policy" "site" {
   bucket = aws_s3_bucket.website.id
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Upload rendered index.html
+# Upload rendered index.html (Terraform template => be careful with ${} in JS)
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.website.id
   key          = "index.html"
@@ -368,48 +350,33 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# Find instances whose Name tag contains any of the env tokens (NAQA1, APQA1, etc.)
-# Running only
+# Discover instances by state + Name tag matching any env token
 data "aws_instances" "targets_running" {
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name"; values = ["running"] }
+  filter { name = "tag:Name"; values = local.env_filters }
 }
 
-# Stopped only
 data "aws_instances" "targets_stopped" {
-  filter {
-    name   = "instance-state-name"
-    values = ["stopped"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name"; values = ["stopped"] }
+  filter { name = "tag:Name"; values = local.env_filters }
 }
 
-# Select which instances to target based on variable
+# Safer map-based selection (instead of nested ternary)
 locals {
-  target_ids = var.assign_profile_target == "none"    ? [] :
-               var.assign_profile_target == "running" ? data.aws_instances.targets_running.ids :
-               var.assign_profile_target == "stopped" ? data.aws_instances.targets_stopped.ids :
-               distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids)) # both
+  target_ids_map = {
+    none    = []
+    running = data.aws_instances.targets_running.ids
+    stopped = data.aws_instances.targets_stopped.ids
+    both    = distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids))
+  }
+  target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
 # Associate instance profile to selected existing instances.
-# Note: If an instance already has a different profile, set replace = true to swap it.
+# If an instance already has a profile, we replace it.
 resource "aws_iam_instance_profile_association" "attach_profile" {
   for_each             = toset(local.target_ids)
   instance_id          = each.value
   iam_instance_profile = aws_iam_instance_profile.ec2_ssm_profile.name
   replace              = true
 }
-
-#############################################
-# End of main.tf
-#############################################
