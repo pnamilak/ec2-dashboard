@@ -1,7 +1,7 @@
 # NOTE: Do NOT add terraform{} or provider "aws"{} here, since backend.tf already has them.
 
 #############################################
-# EC2 Dashboard – main.tf
+# EC2 Dashboard – main.tf (deduplicated)
 #############################################
 
 locals {
@@ -187,7 +187,7 @@ resource "aws_apigatewayv2_api" "api" {
   cors_configuration {
     allow_headers = ["*"]
     allow_methods = ["GET", "POST", "OPTIONS"]
-    allow_origins = ["*"] # tighten to CloudFront domain if you prefer
+    allow_origins = ["*"] # tighten to CloudFront domain if you want
   }
 }
 
@@ -301,16 +301,12 @@ resource "aws_cloudfront_distribution" "site" {
     cached_methods         = ["GET", "HEAD"]
     forwarded_values {
       query_string = true
-      cookies {
-        forward = "none"
-      }
+      cookies { forward = "none" }
     }
   }
 
   restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
+    geo_restriction { restriction_type = "none" }
   }
 
   viewer_certificate {
@@ -385,7 +381,7 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# Discover instances by state + Name tag matching any env token
+# Discover instances by state + Name tag matching any env token (single definition)
 data "aws_instances" "targets_running" {
   filter {
     name   = "instance-state-name"
@@ -408,43 +404,7 @@ data "aws_instances" "targets_stopped" {
   }
 }
 
-# Safer map-based selection (instead of nested ternary)
-locals {
-  target_ids_map = {
-    none    = []
-    running = data.aws_instances.targets_running.ids
-    stopped = data.aws_instances.targets_stopped.ids
-    both    = distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids))
-  }
-
-  target_ids = local.target_ids_map[var.assign_profile_target]
-}
-
-# --- (keep your role, policy attachment, and instance profile resources above) ---
-
-# Discover instances by state + Name tag matching any env token (already in your file)
-data "aws_instances" "targets_running" {
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
-}
-
-data "aws_instances" "targets_stopped" {
-  filter {
-    name   = "instance-state-name"
-    values = ["stopped"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
-}
-
+# Single locals block for selection
 locals {
   target_ids_map = {
     none    = []
@@ -460,9 +420,9 @@ resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
   triggers = {
-    instance_id         = each.value
-    profile_name        = aws_iam_instance_profile.ec2_ssm_profile.name
-    region              = var.aws_region
+    instance_id  = each.value
+    profile_name = aws_iam_instance_profile.ec2_ssm_profile.name
+    region       = var.aws_region
   }
 
   provisioner "local-exec" {
@@ -486,7 +446,6 @@ resource "null_resource" "attach_profile" {
       if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
         echo "Disassociating old profile $CUR_PROFILE from $IID ..."
         aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
-        # small wait to settle
         sleep 3
       fi
 
