@@ -1,13 +1,14 @@
 # NOTE: Do NOT add terraform{} or provider "aws"{} here, since backend.tf already has them.
 
 #############################################
-# EC2 Dashboard – main.tf (no duplicate providers)
+# EC2 Dashboard – main.tf
 #############################################
 
 locals {
-  # random_id suffix included at end to keep names unique
+  # random_id suffix keeps names unique per deployment
   name_prefix = "${var.project_name}-${random_id.suffix.hex}"
-  # used to match instances by Name tag for the EC2/SSM profile attachment
+
+  # Used to match instances by Name tag for the EC2/SSM profile attachment
   env_filters = [for e in var.env_names : "*${e}*"]
 }
 
@@ -88,12 +89,42 @@ resource "aws_iam_role_policy" "lambda_permissions" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      { Sid = "Logs",  Effect = "Allow", Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], Resource = "*" },
-      { Sid = "SES",   Effect = "Allow", Action = ["ses:SendEmail","ses:SendRawEmail"], Resource = "*" },
-      { Sid = "DDB",   Effect = "Allow", Action = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource = aws_dynamodb_table.otp.arn },
-      { Sid = "EC2",   Effect = "Allow", Action = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"], Resource = "*" },
-      { Sid = "SSMRun",Effect = "Allow", Action = ["ssm:SendCommand","ssm:GetCommandInvocation"], Resource = "*" },
-      { Sid = "SSMParams", Effect = "Allow", Action = ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"], Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*" }
+      {
+        Sid    = "Logs"
+        Effect = "Allow"
+        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "*"
+      },
+      {
+        Sid    = "SES"
+        Effect = "Allow"
+        Action = ["ses:SendEmail", "ses:SendRawEmail"]
+        Resource = "*"
+      },
+      {
+        Sid    = "DDB"
+        Effect = "Allow"
+        Action = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Resource = aws_dynamodb_table.otp.arn
+      },
+      {
+        Sid    = "EC2"
+        Effect = "Allow"
+        Action = ["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"]
+        Resource = "*"
+      },
+      {
+        Sid    = "SSMRun"
+        Effect = "Allow"
+        Action = ["ssm:SendCommand", "ssm:GetCommandInvocation"]
+        Resource = "*"
+      },
+      {
+        Sid    = "SSMParams"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
+        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*"
+      }
     ]
   })
 }
@@ -155,8 +186,8 @@ resource "aws_apigatewayv2_api" "api" {
 
   cors_configuration {
     allow_headers = ["*"]
-    allow_methods = ["GET","POST","OPTIONS"]
-    allow_origins = ["*"] # you can tighten to CloudFront domain later
+    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_origins = ["*"] # tighten to CloudFront domain if you prefer
   }
 }
 
@@ -227,7 +258,7 @@ resource "aws_apigatewayv2_stage" "default" {
 # ---------- Static site: S3 + CloudFront ----------
 resource "aws_s3_bucket" "website" {
   bucket        = var.website_bucket_name != "" ? var.website_bucket_name : "${local.name_prefix}-site"
-  force_destroy = true  # allow terraform destroy without manual empty
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_ownership_controls" "site" {
@@ -266,16 +297,20 @@ resource "aws_cloudfront_distribution" "site" {
   default_cache_behavior {
     target_origin_id       = "s3-site"
     viewer_protocol_policy = "redirect-to-https"
-    allowed_methods        = ["GET","HEAD","OPTIONS"]
-    cached_methods         = ["GET","HEAD"]
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
     forwarded_values {
       query_string = true
-      cookies { forward = "none" }
+      cookies {
+        forward = "none"
+      }
     }
   }
 
   restrictions {
-    geo_restriction { restriction_type = "none" }
+    geo_restriction {
+      restriction_type = "none"
+    }
   }
 
   viewer_certificate {
@@ -306,7 +341,7 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Upload rendered index.html (Terraform template => be careful with ${} in JS)
+# Upload rendered index.html (Terraform template => escape JS `${}` in the file)
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.website.id
   key          = "index.html"
@@ -352,13 +387,25 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
 
 # Discover instances by state + Name tag matching any env token
 data "aws_instances" "targets_running" {
-  filter { name = "instance-state-name"; values = ["running"] }
-  filter { name = "tag:Name"; values = local.env_filters }
+  filter {
+    name   = "instance-state-name"
+    values = ["running"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
 }
 
 data "aws_instances" "targets_stopped" {
-  filter { name = "instance-state-name"; values = ["stopped"] }
-  filter { name = "tag:Name"; values = local.env_filters }
+  filter {
+    name   = "instance-state-name"
+    values = ["stopped"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
 }
 
 # Safer map-based selection (instead of nested ternary)
@@ -369,6 +416,7 @@ locals {
     stopped = data.aws_instances.targets_stopped.ids
     both    = distinct(concat(data.aws_instances.targets_running.ids, data.aws_instances.targets_stopped.ids))
   }
+
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
