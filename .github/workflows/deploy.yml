@@ -30,7 +30,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted  # (use your runner)
+    runs-on: ubuntu-latest  # (use your runner)
     environment: mypersonalAWS   # <— add this line
     env:
       AWS_REGION: ${{ github.event.inputs.AWS_REGION }}
