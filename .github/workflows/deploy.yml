@@ -8,7 +8,9 @@ on:
         required: true
         default: "apply"
         type: choice
-        options: [apply, destroy]
+        options:
+          - apply
+          - destroy
       AWS_REGION:
         description: "AWS Region"
         required: true
@@ -37,18 +39,18 @@ on:
 jobs:
   Ec2-DashBoard:
     runs-on: ubuntu-latest
+    # If you use GitHub Environments (recommended), set it here so it stays manual-only.
     environment: mypersonalAWS
 
     env:
-      ACTION:               ${{ github.event.inputs.ACTION }}
-      AWS_REGION:           ${{ github.event.inputs.AWS_REGION }}
-      AWS_DEFAULT_REGION:   ${{ github.event.inputs.AWS_REGION }}   # <<< ensure SDKs use the same region
-      BACKEND_BUCKET:       ${{ github.event.inputs.BACKEND_BUCKET }}
-      BACKEND_TABLE:        ${{ github.event.inputs.BACKEND_TABLE }}
-      WEBSITE_BUCKET_NAME:  ${{ github.event.inputs.WEBSITE_BUCKET_NAME }}
+      ACTION:             ${{ github.event.inputs.ACTION }}
+      AWS_REGION:         ${{ github.event.inputs.AWS_REGION }}
+      BACKEND_BUCKET:     ${{ github.event.inputs.BACKEND_BUCKET }}
+      BACKEND_TABLE:      ${{ github.event.inputs.BACKEND_TABLE }}
+      WEBSITE_BUCKET_NAME: ${{ github.event.inputs.WEBSITE_BUCKET_NAME }}
       ALLOWED_EMAIL_DOMAIN: ${{ github.event.inputs.ALLOWED_EMAIL_DOMAIN }}
-      SES_SENDER_EMAIL:     ${{ github.event.inputs.SES_SENDER_EMAIL }}
-      TF_IN_AUTOMATION:     "true"
+      SES_SENDER_EMAIL:   ${{ github.event.inputs.SES_SENDER_EMAIL }}
+      TF_IN_AUTOMATION:   "true"
 
     steps:
       - name: Checkout
@@ -69,6 +71,7 @@ jobs:
           sudo ./aws/install --update
           aws --version
 
+      # Backend must exist for BOTH apply and destroy so Terraform can read/write state
       - name: Ensure backend S3 bucket exists
         shell: bash
         run: |
@@ -106,17 +109,17 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      - name: Terraform Init (S3 backend, reconfigure)
+      - name: Terraform Init (S3 backend)
         shell: bash
         run: |
           set -euo pipefail
-          terraform init -reconfigure \
+          terraform init \
             -backend-config="bucket=$BACKEND_BUCKET" \
             -backend-config="key=state/terraform.tfstate" \
             -backend-config="region=$AWS_REGION" \
             -backend-config="dynamodb_table=$BACKEND_TABLE"
 
-      # ---------------- APPLY ----------------
+      # -------- APPLY PATH --------
       - name: Terraform Apply
         if: ${{ env.ACTION == 'apply' }}
         shell: bash
@@ -144,22 +147,27 @@ jobs:
               echo "No matching CloudFront distribution found for $CF_DOMAIN"
             fi
           else
-            echo "No cloudfront_domain output present"
+            echo "No cloudfront_domain output present (maybe first run?)"
           fi
 
       - name: Show outputs
         if: ${{ success() && env.ACTION == 'apply' }}
         run: terraform output
 
-      # ---------------- DESTROY ----------------
+      # -------- DESTROY PATH --------
+      # Optional: empty website bucket before destroy IF your Terraform doesn't have force_destroy=true.
+      # Safe to leave in; it will no-op if the output isn't present or bucket doesn't exist.
       - name: (Destroy) Try emptying website bucket (best-effort)
         if: ${{ env.ACTION == 'destroy' }}
         shell: bash
         run: |
           set -euo pipefail
+          # If you output the bucket name from Terraform as "website_bucket", try to read it:
           BUCKET_OUT=$( (terraform output -raw website_bucket) 2>/dev/null || true )
           TARGET_BUCKET="${WEBSITE_BUCKET_NAME:-}"
-          if [ -n "$BUCKET_OUT" ]; then TARGET_BUCKET="$BUCKET_OUT"; fi
+          if [ -n "$BUCKET_OUT" ]; then
+            TARGET_BUCKET="$BUCKET_OUT"
+          fi
           if [ -n "$TARGET_BUCKET" ]; then
             echo "Attempting to empty bucket: $TARGET_BUCKET (best-effort)"
             aws s3 rm "s3://$TARGET_BUCKET" --recursive || true
