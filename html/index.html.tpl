@@ -39,11 +39,11 @@
     <h3>Step 1: Email OTP (allowed domain: <span class="pill">@${allowed_email_domain}</span>)</h3>
     <div class="row">
       <div class="col"><input id="email" placeholder="you@${allowed_email_domain}" style="width:100%"/></div>
-      <div><button class="btn btn-gray" onclick="requestOtp()">Request OTP</button></div>
+      <div><button class="btn btn-gray" id="btnReqOtp">Request OTP</button></div>
     </div>
     <div class="row">
       <div class="col"><input id="otp" placeholder="Enter 6-digit OTP" style="width:100%"/></div>
-      <div><button class="btn btn-gray" onclick="verifyOtp()">Verify OTP</button></div>
+      <div><button class="btn btn-gray" id="btnVerifyOtp">Verify OTP</button></div>
     </div>
     <div id="msg1" class="muted"></div>
   </div>
@@ -54,7 +54,7 @@
     <div class="row">
       <input id="username" placeholder="Username"/>
       <input id="password" type="password" placeholder="Password"/>
-      <button class="btn btn-gray" onclick="login()">Login</button>
+      <button class="btn btn-gray" id="btnLogin">Login</button>
     </div>
     <div id="msg2" class="muted"></div>
   </div>
@@ -74,9 +74,9 @@
     <h3>Services on <span id="svcInstName"></span></h3>
     <div class="row">
       <input id="svcFilter" placeholder="Type to filter (for SVC/WEB)"/>
-      <button class="btn btn-gray" onclick="loadServices()">Refresh</button>
-      <button class="btn btn-gray" data-iis onclick="iisReset()">IIS Reset</button>
-      <button class="btn btn-gray" onclick="closeSvc()">Close</button>
+      <button class="btn btn-gray" id="btnSvcRefresh">Refresh</button>
+      <button class="btn btn-gray" id="btnIIS" data-iis>IIS Reset</button>
+      <button class="btn btn-gray" id="btnSvcClose">Close</button>
     </div>
     <div id="svcList" style="margin-top:12px"></div>
   </div>
@@ -85,181 +85,243 @@
 <div id="toasts"></div>
 
 <script>
-const API = "${api_base_url}";
-const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
-let TOKEN = localStorage.getItem("token") || null;
-let CURRENT_ENV = null;
-let SVC_CTX = { id:null, name:null };
+(function(){
+  // Immutable Terraform-provided values:
+  var API = "${api_base_url}";
+  var ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 
-function el(id){ return document.getElementById(id); }
-function msg(id, t){ el(id).textContent = t; }
-function toast(t){ const d=document.createElement('div'); d.className='toast'; d.textContent=t; el('toasts').appendChild(d); setTimeout(()=>d.remove(), 4500); }
-function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
+  // Session
+  var TOKEN = localStorage.getItem("token") || null;
+  var CURRENT_ENV = null;
+  var SVC_CTX = { id:null, name:null };
 
-async function requestOtp(){
-  const email = el("email").value.trim();
-  const r = await fetch(`$${API}/request-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email})});
-  const j = await r.json();
-  msg("msg1", r.ok ? "OTP sent. Check your email." : (j.error || "Failed"));
-}
-async function verifyOtp(){
-  const email = el("email").value.trim();
-  const code  = el("otp").value.trim();
-  const r = await fetch(`$${API}/verify-otp`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email, code})});
-  const j = await r.json();
-  if(r.ok){ el("step2").style.display="block"; msg("msg1","OTP verified. Proceed to login."); } else { msg("msg1", j.error || "Failed"); }
-}
-async function login(){
-  const username = el("username").value.trim();
-  const password = el("password").value.trim();
-  const r = await fetch(`$${API}/login`, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username,password})});
-  const j = await r.json();
-  if(r.ok){ TOKEN = j.token; localStorage.setItem("token", TOKEN); showDash(); await loadDashboard(); }
-  else { msg("msg2", j.error || "Login failed"); }
-}
-function showDash(){
-  const s1=el("step1"), s2=el("step2");
-  if(s1) s1.style.display="none";
-  if(s2) s2.style.display="none";
-  el("dash").style.display="block";
-}
+  // Helpers
+  function el(id){ return document.getElementById(id); }
+  function msg(id, t){ el(id).textContent = t; }
+  function toast(t){ var d=document.createElement('div'); d.className='toast'; d.textContent=t; el('toasts').appendChild(d); setTimeout(function(){ d.remove(); }, 4500); }
+  function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
 
-async function loadDashboard(){
-  const r = await fetch(`$${API}/instances`, {headers: auth()});
-  const j = await r.json();
-  if(!r.ok){ alert(j.error||"Auth failed"); return; }
-  el("summary").innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
-  <span class="pill">Running: $${j.summary.running}</span>
-  <span class="pill">Stopped: $${j.summary.stopped}</span>
-  <button class="btn btn-gray" style="float:right" onclick="loadDashboard()">Refresh</button>`;
-  renderEnvTabs(j.envs);
-}
+  // API calls
+  function requestOtp(){
+    var email = el("email").value.trim();
+    fetch(API + "/request-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:email})})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){ msg("msg1", res.ok ? "OTP sent. Check your email." : (res.j.error || "Failed")); });
+  }
+  function verifyOtp(){
+    var email = el("email").value.trim();
+    var code  = el("otp").value.trim();
+    fetch(API + "/verify-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:email, code:code})})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(res.ok){ el("step2").style.display="block"; msg("msg1","OTP verified. Proceed to login."); }
+        else { msg("msg1", res.j.error || "Failed"); }
+      });
+  }
+  function login(){
+    var username = el("username").value.trim();
+    var password = el("password").value.trim();
+    fetch(API + "/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:username,password:password})})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(res.ok){ TOKEN = res.j.token; localStorage.setItem("token", TOKEN); showDash(); loadDashboard(); }
+        else { msg("msg2", res.j.error || "Login failed"); }
+      });
+  }
+  function showDash(){
+    var s1=el("step1"), s2=el("step2");
+    if(s1) s1.style.display="none";
+    if(s2) s2.style.display="none";
+    el("dash").style.display="block";
+  }
 
-function renderEnvTabs(envs){
-  const tabs = el("env-tabs"); tabs.innerHTML = "";
-  ENV_NAMES.forEach((e,i)=>{
-    const t = document.createElement("div");
-    t.className = "tab"+(i===0?" active":"");
-    t.textContent = e;
-    t.onclick = ()=>{ [...tabs.children].forEach(c=>c.classList.remove("active")); t.classList.add("active"); CURRENT_ENV=e; renderEnvPanel(envs,e); };
-    tabs.appendChild(t);
-  });
-  CURRENT_ENV = ENV_NAMES[0]; renderEnvPanel(envs, CURRENT_ENV);
-}
+  function loadDashboard(){
+    fetch(API + "/instances", {headers: auth()})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+      .then(function(res){
+        if(!res.ok){ alert(res.j.error || "Auth failed"); return; }
+        el("summary").innerHTML =
+          '<span class="pill">Total: ' + res.j.summary.total + '</span>' +
+          '<span class="pill">Running: ' + res.j.summary.running + '</span>' +
+          '<span class="pill">Stopped: ' + res.j.summary.stopped + '</span>' +
+          '<button class="btn btn-gray" style="float:right" id="btnRefresh">Refresh</button>';
+        el("btnRefresh").addEventListener("click", loadDashboard);
+        renderEnvTabs(res.j.envs);
+      });
+  }
 
-function isWebOrSvc(name){ const n=name.toLowerCase(); return n.includes("svc") || n.includes("web"); }
-function isSql(name){ return name.toLowerCase().includes("sql"); }
-function isRedis(name){ return name.toLowerCase().includes("redis"); }
-
-function renderEnvPanel(envs, env){
-  const p = el("env-panels"); const data = envs[env];
-  p.innerHTML = "";
-  ["DM","EA"].forEach((blk)=>{
-    const blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
-    const card = document.createElement("div"); card.className="card";
-    card.innerHTML = `<div class="block-title"><h3>$${blockName}</h3>
-      <div class="right">
-        <button class="btn btn-green" onclick="groupAction(\"$${env}\", \"$${blk}\", \"start\")">Start All</button>
-        <button class="btn btn-red"   onclick="groupAction(\"$${env}\", \"$${blk}\", \"stop\")">Stop All</button>
-      </div></div>
-      <div id="list-$${env}-$${blk}"></div>`;
-    p.appendChild(card);
-    const c = card.querySelector(`#list-$${env}-$${blk}`);
-    (data[blk]||[]).forEach(inst=>{
-      const name = inst.name;
-      const btnStartStop = (inst.state==="running")
-        ? `<button class="btn btn-red"   onclick="act(\"$${inst.id}\", \"stop\", \"$${name}\")">Stop</button>`
-        : `<button class="btn btn-green" onclick="act(\"$${inst.id}\", \"start\", \"$${name}\")">Start</button>`;
-      const svcBtn  = `<button class="btn btn-gray" onclick="openServices(\"$${inst.id}\", \"$${name}\")">Services</button>`;
-      const html = `<div class="inst">
-        <div><strong>$${name}</strong> <span class="muted">($${inst.id})</span></div>
-        <div class="right">
-          <span class="status $${inst.state}">$${inst.state}</span>
-          ${btnStartStop}
-          ${svcBtn}
-        </div>
-      </div>`;
-      const div = document.createElement("div"); div.innerHTML = html; c.appendChild(div.firstChild);
+  function renderEnvTabs(envs){
+    var tabs = el("env-tabs"); tabs.innerHTML = "";
+    ENV_NAMES.forEach(function(e, i){
+      var t = document.createElement("div");
+      t.className = "tab" + (i===0 ? " active" : "");
+      t.textContent = e;
+      t.addEventListener("click", function(){
+        Array.prototype.forEach.call(tabs.children, function(c){ c.classList.remove("active"); });
+        t.classList.add("active");
+        CURRENT_ENV = e;
+        renderEnvPanel(envs, e);
+      });
+      tabs.appendChild(t);
     });
+    CURRENT_ENV = ENV_NAMES[0];
+    renderEnvPanel(envs, CURRENT_ENV);
+  }
+
+  function isWebOrSvc(name){ var n=name.toLowerCase(); return n.indexOf("svc")>-1 || n.indexOf("web")>-1; }
+  function isSql(name){ return name.toLowerCase().indexOf("sql")>-1; }
+  function isRedis(name){ return name.toLowerCase().indexOf("redis")>-1; }
+
+  function renderEnvPanel(envs, env){
+    var p = el("env-panels");
+    var data = envs[env];
+    p.innerHTML = "";
+
+    ["DM","EA"].forEach(function(blk){
+      var blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
+      var card = document.createElement("div"); card.className="card";
+
+      var head = document.createElement("div"); head.className="block-title"; head.style.display="flex"; head.style.justifyContent="space-between"; head.style.alignItems="center";
+      var h3 = document.createElement("h3"); h3.textContent = blockName; head.appendChild(h3);
+      var actions = document.createElement("div"); actions.className="right";
+      var bStartAll = document.createElement("button"); bStartAll.className="btn btn-green"; bStartAll.textContent="Start All";
+      bStartAll.addEventListener("click", function(){ groupAction(env, blk, "start"); });
+      var bStopAll = document.createElement("button"); bStopAll.className="btn btn-red"; bStopAll.textContent="Stop All";
+      bStopAll.addEventListener("click", function(){ groupAction(env, blk, "stop"); });
+      actions.appendChild(bStartAll); actions.appendChild(bStopAll);
+      head.appendChild(actions);
+
+      var list = document.createElement("div");
+      var listId = "list-" + env + "-" + blk;
+      list.id = listId;
+
+      card.appendChild(head);
+      card.appendChild(list);
+      p.appendChild(card);
+
+      (data[blk] || []).forEach(function(inst){
+        var row = document.createElement("div"); row.className="inst";
+
+        var left = document.createElement("div");
+        var strong = document.createElement("strong"); strong.textContent = inst.name;
+        var spanId = document.createElement("span"); spanId.className="muted"; spanId.textContent = " (" + inst.id + ")";
+        left.appendChild(strong); left.appendChild(document.createTextNode(" ")); left.appendChild(spanId);
+
+        var right = document.createElement("div"); right.className="right";
+        var status = document.createElement("span"); status.className="status " + inst.state; status.textContent = inst.state;
+
+        var bToggle = document.createElement("button");
+        if(inst.state === "running"){ bToggle.className="btn btn-red"; bToggle.textContent="Stop"; bToggle.addEventListener("click", function(){ act(inst.id, "stop", inst.name); }); }
+        else { bToggle.className="btn btn-green"; bToggle.textContent="Start"; bToggle.addEventListener("click", function(){ act(inst.id, "start", inst.name); }); }
+
+        var bSvc = document.createElement("button"); bSvc.className="btn btn-gray"; bSvc.textContent="Services";
+        bSvc.addEventListener("click", function(){ openServices(inst.id, inst.name); });
+
+        right.appendChild(status); right.appendChild(bToggle); right.appendChild(bSvc);
+
+        row.appendChild(left); row.appendChild(right);
+        list.appendChild(row);
+      });
+    });
+  }
+
+  function act(id, action, name){
+    toast((action==="start"?"Starting":"Stopping") + ": " + name);
+    fetch(API + "/instance-action", {method:"POST", headers:{"Content-Type":"application/json"}.with(auth()), body: JSON.stringify({id:id, action:action})})
+      .then(function(){ pollUntilStable(); });
+  }
+
+  function groupAction(env, block, action){
+    toast((action==="start"?"Starting":"Stopping") + " ALL in " + env + " / " + block);
+    fetch(API + "/instance-action", {method:"POST", headers:{"Content-Type":"application/json"}.with(auth()), body: JSON.stringify({env:env, block:block, action:action})})
+      .then(function(){ pollUntilStable(60); });
+  }
+
+  var pollTimer=null;
+  function pollUntilStable(maxSecs){
+    if(typeof maxSecs!=="number") maxSecs = 45;
+    if(pollTimer) clearInterval(pollTimer);
+    var start=Date.now();
+    pollTimer=setInterval(function(){
+      loadDashboard();
+      if((Date.now()-start)/1000 > maxSecs){ clearInterval(pollTimer); }
+    }, 3000);
+  }
+
+  function openServices(id, name){
+    SVC_CTX.id = id; SVC_CTX.name=name;
+    el("svcInstName").textContent = name;
+    var iisBtn = el("btnIIS");
+    if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? "inline-block" : "none"); }
+    el("svcDlg").showModal();
+    loadServices();
+  }
+  function closeSvc(){ el("svcDlg").close(); }
+
+  function loadServices(){
+    var pattern = el("svcFilter").value.trim();
+    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:"list", pattern:pattern})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(j.message) toast(j.message);
+        var list = el("svcList"); list.innerHTML = "";
+        (j.services||[]).forEach(function(s){
+          var name = s.Name || s.name;
+          var status = s.Status || s.status;
+          var d = document.createElement("div"); d.className="inst";
+          var left = document.createElement("div");
+          left.innerHTML = name + ' <span class="pill">' + status + '</span>';
+          var right = document.createElement("div"); right.className="right";
+          var bStart = document.createElement("button"); bStart.className="btn btn-green"; bStart.textContent="Start";
+          bStart.addEventListener("click", function(){ svc(name, "start"); });
+          var bStop  = document.createElement("button"); bStop.className="btn btn-red"; bStop.textContent="Stop";
+          bStop.addEventListener("click", function(){ svc(name, "stop"); });
+          right.appendChild(bStart); right.appendChild(bStop);
+          d.appendChild(left); d.appendChild(right);
+          list.appendChild(d);
+        });
+      });
+  }
+
+  function svc(name, action){
+    toast((action==="start"?"Starting":"Stopping") + " service: " + name);
+    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})})
+      .then(function(){ setTimeout(loadServices, 1200); });
+  }
+  function iisReset(){
+    toast("Performing IIS Reset...");
+    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})});
+  }
+
+  // Small helpers
+  function merge(a,b){ var o={}; for(var k in a)o[k]=a[k]; for(var k2 in b)o[k2]=b[k2]; return o; }
+  Object.prototype.with = function(obj){ return merge(this, obj); };
+
+  // Wire buttons & Enter key behavior
+  function wireEnter(id, fn){
+    var e=el(id); if(!e) return;
+    e.addEventListener("keydown", function(ev){
+      if(ev.key==="Enter") fn();
+    });
+  }
+
+  el("btnReqOtp").addEventListener("click", requestOtp);
+  el("btnVerifyOtp").addEventListener("click", verifyOtp);
+  el("btnLogin").addEventListener("click", login);
+  el("btnSvcRefresh").addEventListener("click", loadServices);
+  el("btnSvcClose").addEventListener("click", closeSvc);
+  el("btnIIS").addEventListener("click", iisReset);
+
+  wireEnter("email", requestOtp);
+  wireEnter("otp", verifyOtp);
+  wireEnter("username", login);
+  wireEnter("password", login);
+
+  // Auto-continue if token exists
+  window.addEventListener("load", function(){
+    if(TOKEN){ showDash(); loadDashboard(); }
   });
-}
-
-async function act(id, action, name){
-  toast(`${action==="start"?"Starting":"Stopping"}: ${name}`);
-  await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id, action})})
-  pollUntilStable();
-}
-
-async function groupAction(env, block, action){
-  toast(`${action==="start"?"Starting":"Stopping"} ALL in ${env} / ${block}`);
-  await fetch(`$${API}/instance-action`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({env, block, action})});
-  pollUntilStable(60);
-}
-
-let pollTimer=null;
-async function pollUntilStable(maxSecs=45){
-  if(pollTimer) clearInterval(pollTimer);
-  const start=Date.now();
-  pollTimer=setInterval(async ()=>{
-    await loadDashboard();
-    if((Date.now()-start)/1000 > maxSecs){ clearInterval(pollTimer); }
-  }, 3000);
-}
-
-function openServices(id, name){
-  SVC_CTX.id = id; SVC_CTX.name=name;
-  el("svcInstName").textContent = name;
-  const iisBtn = document.querySelector("#svcDlg button[data-iis]");
-  if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? "inline-block" : "none"); }
-  document.getElementById("svcDlg").showModal();
-  loadServices();
-}
-function closeSvc(){ document.getElementById("svcDlg").close(); }
-
-async function loadServices(){
-  const pattern = el("svcFilter").value.trim();
-  const r = await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:"list", pattern})});
-  const j = await r.json();
-  if(j.message) toast(j.message);
-  const list = el("svcList"); list.innerHTML = "";
-  (j.services||[]).forEach(s=>{
-    const name = s.Name || s.name;
-    const status = s.Status || s.status;
-    const d = document.createElement("div"); d.className="inst";
-    d.innerHTML = `<div>$${name} <span class="pill">$${status}</span></div>
-      <div class="right">
-        <button class="btn btn-green" onclick="svc(\"$${name}\", \"start\")">Start</button>
-        <button class="btn btn-red"   onclick="svc(\"$${name}\", \"stop\")">Stop</button>
-      </div>`;
-    list.appendChild(d);
-  });
-}
-async function svc(name, action){
-  toast(`${action==="start"?"Starting":"Stopping"} service: ${name}`);
-  await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
-  setTimeout(loadServices, 1200);
-}
-async function iisReset(){
-  toast("Performing IIS Reset...");
-  await fetch(`$${API}/services`, {method:"POST", headers:{"Content-Type":"application/json", ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})});
-}
-
-/* Enter to submit (OTP + Login) */
-["email","otp","username","password"].forEach(id=>{
-  const e=el(id); if(!e) return;
-  e.addEventListener("keydown", (ev)=>{
-    if(ev.key==="Enter"){
-      if(id==="email") requestOtp();
-      else if(id==="otp") verifyOtp();
-      else if(id==="username" || id==="password") login();
-    }
-  })
-});
-
-/* Persisted session: auto-enter dashboard if token exists */
-window.addEventListener("load", async ()=>{
-  if(TOKEN){ showDash(); await loadDashboard(); }
-});
+})();
 </script>
 </body>
 </html>
