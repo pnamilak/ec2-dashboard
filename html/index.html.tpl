@@ -113,9 +113,9 @@ async function loadDashboard(){
   const r = await fetch(`${API}/instances`, {headers: auth()});
   const j = await r.json();
   if(!r.ok){ alert(j.error||'Auth failed'); return; }
-  el('summary').innerHTML = `<span class="pill">Total: ${j.summary.total}</span>
-  <span class="pill">Running: ${j.summary.running}</span>
-  <span class="pill">Stopped: ${j.summary.stopped}</span>`;
+  el('summary').innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
+  <span class="pill">Running: $${j.summary.running}</span>
+  <span class="pill">Stopped: $${j.summary.stopped}</span>`;
   renderEnvTabs(j.envs);
 }
 
@@ -137,23 +137,23 @@ function renderEnvPanel(envs, env){
   ["DM","EA"].forEach(block=>{
     const blockName = block==="DM" ? "Dream Mapper" : "Encore Anywhere";
     const card = document.createElement('div'); card.className='card';
-    card.innerHTML = `<div class="block-title"><h3>${blockName}</h3>
+    card.innerHTML = `<div class="block-title"><h3>$${blockName}</h3>
       <div class="right">
-        <button onclick="groupAction('${env}','${block}','start')">Start All</button>
-        <button onclick="groupAction('${env}','${block}','stop')">Stop All</button>
+        <button onclick="groupAction('$${env}','$${block}','start')">Start All</button>
+        <button onclick="groupAction('$${env}','$${block}','stop')">Stop All</button>
       </div></div>
-      <div id="list-${env}-${block}"></div>`;
+      <div id="list-$${env}-$${block}"></div>`;
     p.appendChild(card);
-    const c = card.querySelector(`#list-${env}-${block}`);
+    const c = card.querySelector(`#list-$${env}-$${block}`);
     (data[block]||[]).forEach(inst=>{
       const div = document.createElement('div'); div.className='inst';
-      div.innerHTML = `<div><strong>${inst.name}</strong> <span class="muted">(${inst.id})</span></div>
+      div.innerHTML = `<div><strong>$${inst.name}</strong> <span class="muted">($${inst.id})</span></div>
         <div class="right">
-          <span class="status ${inst.state}">${inst.state}</span>
-          ${inst.state==='running'
-            ? `<button onclick="act('${inst.id}','stop')">Stop</button>`
-            : `<button onclick="act('${inst.id}','start')">Start</button>`}
-          <button onclick="openServices('${inst.id}','${inst.name.replaceAll('"','&quot;')}')">Services</button>
+          <span class="status $${inst.state}">$${inst.state}</span>
+          $${inst.state==='running'
+            ? `<button onclick="act('$${inst.id}','stop')">Stop</button>`
+            : `<button onclick="act('$${inst.id}','start')">Start</button>`}
+          <button onclick="openServices('$${inst.id}','$${inst.name.replaceAll('"','&quot;')}')">Services</button>
         </div>`;
       c.appendChild(div);
     });
@@ -185,10 +185,10 @@ async function loadServices(){
   const list = el('svcList'); list.innerHTML = '';
   (j.services||[]).forEach(s=>{
     const d = document.createElement('div'); d.className='inst';
-    d.innerHTML = `<div>${s.Name || s.name} <span class="pill">${s.Status || s.status}</span></div>
+    d.innerHTML = `<div>$${s.Name || s.name} <span class="pill">$${s.Status || s.status}</span></div>
       <div class="right">
-        <button onclick="svc('${s.Name || s.name}','start')">Start</button>
-        <button onclick="svc('${s.Name || s.name}','stop')">Stop</button>
+        <button onclick="svc('$${s.Name || s.name}','start')">Start</button>
+        <button onclick="svc('$${s.Name || s.name}','stop')">Stop</button>
       </div>`;
     list.appendChild(d);
   });
