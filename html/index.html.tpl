@@ -7,9 +7,9 @@
 <style>
   :root{
     --bg:#0b1220; --card:#111827; --ink:#e5e7eb; --muted:#9aa3b2; --line:#1f2937; --pill:#0f172a;
-    --green:#4ade80;  --green-d:#22c55e;
-    --red:#f87171;    --red-d:#ef4444;
-    --blue:#93c5fd;   --blue-d:#3b82f6;
+    --green:#4ade80; --green-d:#22c55e;
+    --red:#f87171;   --red-d:#ef4444;
+    --blue:#93c5fd;  --blue-d:#3b82f6;
   }
   body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
   .wrap{max-width:1100px;margin:0 auto;padding:28px}
@@ -38,8 +38,6 @@
   .btn-gray:hover{background:var(--blue-d);border-color:var(--blue-d);color:#fff}
   #toasts{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;gap:8px;z-index:50}
   .toast{background:#0f172a;border:1px solid var(--line);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
-
-  /* Top bar */
   .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
   .userbox{display:flex;align-items:center;gap:10px}
   .role{font-weight:800;text-transform:uppercase}
@@ -84,9 +82,7 @@
 
   <!-- STEP 3: Dashboard -->
   <div id="dash" style="display:none">
-    <div class="card">
-      <div id="summary"></div>
-    </div>
+    <div class="card"><div id="summary"></div></div>
     <div class="row" id="env-tabs"></div>
     <div id="env-panels"></div>
   </div>
@@ -142,15 +138,15 @@
   function requestOtp(){
     var email = el("email").value.trim();
     fetch(API + "/request-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:email})})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-      .then(function(res){ msg("msg1", res.ok ? "OTP sent. Check your email." : (res.j.error || "Failed")); });
+      .then(r => r.json().then(j => ({ok:r.ok, j})))
+      .then(res => { msg("msg1", res.ok ? "OTP sent. Check your email." : (res.j.error || "Failed")); });
   }
   function verifyOtp(){
     var email = el("email").value.trim();
     var code  = el("otp").value.trim();
     fetch(API + "/verify-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:email, code:code})})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-      .then(function(res){
+      .then(r => r.json().then(j => ({ok:r.ok, j})))
+      .then(res => {
         if(res.ok){ el("step2").style.display="block"; msg("msg1","OTP verified. Proceed to login."); }
         else { msg("msg1", res.j.error || "Failed"); }
       });
@@ -158,20 +154,15 @@
   function login(){
     var username = el("username").value.trim();
     var password = el("password").value.trim();
-    fetch(API + "/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:username,password:password})})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-      .then(function(res){
+    fetch(API + "/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username,password})})
+      .then(r => r.json().then(j => ({ok:r.ok, j})))
+      .then(res => {
         if(res.ok){
           TOKEN = res.j.token; localStorage.setItem("token", TOKEN);
           showDash();
-          // load user profile (name/email/role)
-          fetch(API + "/me", {headers: auth()})
-            .then(function(r){ return r.ok ? r.json() : {}; })
-            .then(function(u){ showUserBox(u || {}); });
+          fetch(API + "/me", {headers: auth()}).then(r => r.ok ? r.json() : {}).then(u => showUserBox(u || {}));
           loadDashboard();
-        } else {
-          msg("msg2", res.j.error || "Login failed");
-        }
+        } else { msg("msg2", res.j.error || "Login failed"); }
       });
   }
   function showDash(){
@@ -182,8 +173,8 @@
 
   function loadDashboard(){
     fetch(API + "/instances", {headers: auth()})
-      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-      .then(function(res){
+      .then(r => r.json().then(j => ({ok:r.ok, j})))
+      .then(res => {
         if(!res.ok){ alert(res.j.error || "Auth failed"); return; }
         el("summary").innerHTML =
           '<span class="pill">Total: ' + res.j.summary.total + '</span>' +
@@ -197,11 +188,7 @@
 
   function renderEnvTabs(envs){
     var tabs = el("env-tabs"); tabs.innerHTML = "";
-
-    // Keep last selected env; default only if none stored
-    if(!CURRENT_ENV || ENV_NAMES.indexOf(CURRENT_ENV) === -1){
-      CURRENT_ENV = ENV_NAMES[0] || null;
-    }
+    if(!CURRENT_ENV || ENV_NAMES.indexOf(CURRENT_ENV) === -1){ CURRENT_ENV = ENV_NAMES[0] || null; }
 
     ENV_NAMES.forEach(function(e){
       var t = document.createElement("div");
@@ -210,17 +197,15 @@
       t.addEventListener("click", function(){
         Array.prototype.forEach.call(tabs.children, function(c){ c.classList.remove("active"); });
         t.classList.add("active");
-        CURRENT_ENV = e;
-        localStorage.setItem("current_env", CURRENT_ENV);
+        CURRENT_ENV = e; localStorage.setItem("current_env", e);
         renderEnvPanel(envs, e);
       });
       tabs.appendChild(t);
     });
-
     if(CURRENT_ENV){ renderEnvPanel(envs, CURRENT_ENV); }
   }
 
-  function isWebOrSvc(name){ var n=name.toLowerCase(); return n.indexOf("svc")>-1 || n.indexOf("web")>-1; }
+  function isWebOrSvc(name){ var n=name.toLowerCase(); return n.includes("svc") || n.includes("web"); }
 
   function renderEnvPanel(envs, env){
     var p = el("env-panels");
@@ -242,14 +227,10 @@
       head.appendChild(actions);
 
       var list = document.createElement("div");
-
-      card.appendChild(head);
-      card.appendChild(list);
-      p.appendChild(card);
+      card.appendChild(head); card.appendChild(list); p.appendChild(card);
 
       (data[blk] || []).forEach(function(inst){
         var row = document.createElement("div"); row.className="inst";
-
         var left = document.createElement("div");
         var strong = document.createElement("strong"); strong.textContent = inst.name;
         var spanId = document.createElement("span"); spanId.className="muted"; spanId.textContent = " (" + inst.id + ")";
@@ -271,7 +252,6 @@
         bSvc.addEventListener("click", function(){ openServices(inst.id, inst.name); });
 
         right.appendChild(status); right.appendChild(bToggle); right.appendChild(bSvc);
-
         row.appendChild(left); row.appendChild(right);
         list.appendChild(row);
       });
@@ -281,10 +261,8 @@
   function act(id, action, name){
     toast((action==="start"?"Starting":"Stopping") + ": " + name);
     fetch(API + "/instance-action", {method:"POST", headers:{"Content-Type":"application/json"}.with(auth()), body: JSON.stringify({id:id, action:action})})
-      // Do NOT reset tabs; just poll
       .then(function(){ pollUntilStable(); });
   }
-
   function groupAction(env, block, action){
     toast((action==="start"?"Starting":"Stopping") + " ALL in " + env + " / " + block);
     fetch(API + "/instance-action", {method:"POST", headers:{"Content-Type":"application/json"}.with(auth()), body: JSON.stringify({env:env, block:block, action:action})})
@@ -297,26 +275,66 @@
     if(pollTimer) clearInterval(pollTimer);
     var start=Date.now();
     pollTimer=setInterval(function(){
-      loadDashboard(); // re-renders but keeps CURRENT_ENV from localStorage
+      loadDashboard(); // keeps CURRENT_ENV
       if((Date.now()-start)/1000 > maxSecs){ clearInterval(pollTimer); }
     }, 3000);
   }
 
+  // ====== YOUR REQUESTED CHANGES START HERE ======
   function openServices(id, name){
-    SVC_CTX.id = id; SVC_CTX.name=name;
+    SVC_CTX.id = id; SVC_CTX.name = name;
     el("svcInstName").textContent = name;
+
+    var n = name.toLowerCase();
+
+    // Default: hide filter textbox
+    el("svcFilter").style.display = "none";
+
+    // IIS Reset only for svc/web
     var iisBtn = el("btnIIS");
-    if(iisBtn){ iisBtn.style.display = (isWebOrSvc(name) ? "inline-block" : "none"); }
+    if(iisBtn) iisBtn.style.display = (n.includes("svc") || n.includes("web")) ? "inline-block" : "none";
+
+    // Show textbox only for svc/web
+    if(n.includes("svc") || n.includes("web")) {
+      el("svcFilter").style.display = "inline-block";
+    }
+
     el("svcDlg").showModal();
-    loadServices();
+
+    // Auto-list known services for SQL/Redis
+    if(n.includes("sql")) {
+      loadServicesFixed(["MSSQLSERVER", "SQLSERVERAGENT"]);
+    } else if(n.includes("redis")) {
+      loadServicesFixed(["Redis"]);
+    } else {
+      loadServices(); // uses textbox pattern
+    }
   }
-  function closeSvc(){ el("svcDlg").close(); }
+
+  function loadServicesFixed(list){
+    var svcList = el("svcList");
+    svcList.innerHTML = "";
+    list.forEach(function(svcName){
+      var d = document.createElement("div"); d.className="inst";
+      var left = document.createElement("div");
+      left.innerHTML = svcName;
+      var right = document.createElement("div"); right.className="right";
+      var bStart = document.createElement("button"); bStart.className="btn btn-green"; bStart.textContent="Start";
+      bStart.addEventListener("click", function(){ svc(svcName, "start"); });
+      var bStop  = document.createElement("button"); bStop.className="btn btn-red"; bStop.textContent="Stop";
+      bStop.addEventListener("click", function(){ svc(svcName, "stop"); });
+      right.appendChild(bStart); right.appendChild(bStop);
+      d.appendChild(left); d.appendChild(right);
+      svcList.appendChild(d);
+    });
+  }
+  // ====== YOUR REQUESTED CHANGES END HERE ======
 
   function loadServices(){
     var pattern = el("svcFilter").value.trim();
     fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:"list", pattern:pattern})})
-      .then(function(r){ return r.json(); })
-      .then(function(j){
+      .then(r => r.json())
+      .then(j => {
         if(j.message) toast(j.message);
         var list = el("svcList"); list.innerHTML = "";
         (j.services||[]).forEach(function(s){
@@ -342,10 +360,23 @@
     fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})})
       .then(function(){ setTimeout(loadServices, 1200); });
   }
+
+  // ====== Confirm IIS Reset (requested) ======
   function iisReset(){
     toast("Performing IIS Reset...");
-    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})});
+    fetch(API + "/services", {
+      method:"POST",
+      headers: merge({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})
+    })
+    .then(function(r){ return r.json().then(j => ({ok:r.ok, j})); })
+    .then(function(res){
+      if(res.ok) toast("IIS Reset completed on " + SVC_CTX.name);
+      else toast("IIS Reset failed: " + (res.j.error || "Unknown error"));
+    })
+    .catch(err => toast("IIS Reset request failed: " + err));
   }
+  // ===========================================
 
   function wireEnter(id, fn){
     var e=el(id); if(!e) return;
@@ -372,8 +403,8 @@
     if(TOKEN){
       showDash();
       fetch(API + "/me", {headers: auth()})
-        .then(function(r){ return r.ok ? r.json() : {}; })
-        .then(function(u){ showUserBox(u || {}); });
+        .then(r => r.ok ? r.json() : {})
+        .then(u => showUserBox(u || {}));
       loadDashboard();
     }
   });
