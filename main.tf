@@ -1,318 +1,315 @@
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-    archive = {
-      source  = "hashicorp/archive"
-      version = ">= 2.4.0"
-    }
-    template = {
-      source  = "hashicorp/template"
-      version = ">= 2.2.0"
+locals {
+  name_prefix = "${var.project_name}-${random_id.suffix.hex}"
+}
+
+resource "random_id" "suffix" {
+  byte_length = 2
+}
+
+# ---------- SES sender (ensure you verify email if not already) ----------
+resource "aws_ses_email_identity" "sender" {
+  email = var.ses_sender_email
+}
+
+# ---------- DynamoDB: OTP store ----------
+resource "aws_dynamodb_table" "otp" {
+  name           = "${local.name_prefix}-otp"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "email"
+
+  attribute {
+    name = "email"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+}
+
+# ---------- SSM Parameters ----------
+# Secret for signing tokens
+resource "random_password" "jwt_secret" {
+  length  = 32
+  special = false
+}
+
+resource "aws_ssm_parameter" "jwt_secret" {
+  name  = "/${var.project_name}/jwt_secret"
+  type  = "SecureString"
+  value = random_password.jwt_secret.result
+}
+
+# User credentials (plaintext -> stored as SecureString; rotate to hashed later if desired)
+resource "aws_ssm_parameter" "user_params" {
+  for_each = var.app_users
+  name     = "/${var.project_name}/users/${each.key}"
+  type     = "SecureString"
+  value    = each.value
+}
+
+# ---------- Lambda (API) ----------
+data "archive_file" "api_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/lambda"
+  output_path = "${path.module}/lambda-packaged.zip"
+}
+
+resource "aws_iam_role" "lambda_exec" {
+  name               = "${local.name_prefix}-lambda-exec"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "lambda_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
     }
   }
 }
 
-provider "aws" {
-  region = var.aws_region
-}
-
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-##########################
-# Standardized source paths
-##########################
-# Place your files like this:
-#   lambda/handler.py
-#   lambda/authorizer.py
-#   html/index.html.tpl
-locals {
-  lambda_dir = "${path.module}/lambda"
-  web_dir    = "${path.module}/html"
-}
-
-##########################
-# Bucket name resolution
-##########################
-locals {
-  resolved_bucket_name = var.bucket_name != "" ? var.bucket_name : "ec2-dashboard-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}"
-}
-
-##########################
-# S3 Bucket for Frontend
-##########################
-resource "aws_s3_bucket" "frontend" {
-  bucket        = local.resolved_bucket_name
-  force_destroy = true
-}
-
-resource "aws_s3_bucket_website_configuration" "frontend" {
-  bucket = aws_s3_bucket.frontend.id
-
-  index_document {
-    suffix = "index.html"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "frontend" {
-  bucket                  = aws_s3_bucket.frontend.id
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
-}
-
-resource "aws_s3_bucket_policy" "frontend_policy" {
-  bucket = aws_s3_bucket.frontend.id
-
+resource "aws_iam_role_policy" "lambda_permissions" {
+  name = "${local.name_prefix}-lambda-policy"
+  role = aws_iam_role.lambda_exec.id
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Principal = "*",
-      Action    = ["s3:GetObject"],
-      Resource  = "${aws_s3_bucket.frontend.arn}/*"
-    }]
+    Statement = [
+      { Sid = "Logs", Effect = "Allow", Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], Resource = "*" },
+      { Sid = "SES",  Effect = "Allow", Action = ["ses:SendEmail","ses:SendRawEmail"], Resource = "*" },
+      { Sid = "DDB",  Effect = "Allow", Action = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource = aws_dynamodb_table.otp.arn },
+      { Sid = "EC2",  Effect = "Allow", Action = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"], Resource = "*" },
+      { Sid = "SSMRun",Effect = "Allow", Action = ["ssm:SendCommand","ssm:GetCommandInvocation"], Resource = "*" },
+      { Sid = "SSMParams", Effect = "Allow", Action = ["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"], Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*" }
+    ]
   })
-  depends_on = [aws_s3_bucket_public_access_block.frontend]
 }
 
-##########################
-# Package Lambda Code
-##########################
-# Zips the two Python files from ./lambda
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  output_path = "${path.module}/lambda_payload.zip"
+data "aws_caller_identity" "me" {}
 
-  source {
-    content  = file("${local.lambda_dir}/handler.py")
-    filename = "handler.py"
-  }
-
-  source {
-    content  = file("${local.lambda_dir}/authorizer.py")
-    filename = "authorizer.py"
+resource "aws_lambda_function" "api" {
+  function_name = "${local.name_prefix}-api"
+  role          = aws_iam_role.lambda_exec.arn
+  filename      = data.archive_file.api_zip.output_path
+  handler       = "handler.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 30
+  environment {
+    variables = {
+      REGION            = var.aws_region
+      OTP_TABLE         = aws_dynamodb_table.otp.name
+      SES_SENDER        = var.ses_sender_email
+      ALLOWED_DOMAIN    = var.allowed_email_domain
+      PARAM_USER_PREFIX = "/${var.project_name}/users"
+      JWT_PARAM         = "/${var.project_name}/jwt_secret"
+      ENV_NAMES         = join(",", var.env_names)
+    }
   }
 }
 
-##########################
-# API Gateway (HTTP API v2)
-##########################
+# ---------- Lambda (Authorizer) ----------
+resource "aws_lambda_function" "authorizer" {
+  function_name = "${local.name_prefix}-authorizer"
+  role          = aws_iam_role.lambda_exec.arn
+  filename      = data.archive_file.api_zip.output_path
+  handler       = "authorizer.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 10
+  environment {
+    variables = {
+      REGION    = var.aws_region
+      JWT_PARAM = "/${var.project_name}/jwt_secret"
+    }
+  }
+}
+
+# Permissions so API Gateway can invoke both Lambdas
+resource "aws_lambda_permission" "api_invoke" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api.function_name
+  principal     = "apigateway.amazonaws.com"
+}
+
+resource "aws_lambda_permission" "auth_invoke" {
+  statement_id  = "AllowAPIGatewayInvokeAuthorizer"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+}
+
+# ---------- API Gateway HTTP API ----------
 resource "aws_apigatewayv2_api" "api" {
-  name                       = "ec2-control-api"
-  protocol_type              = "HTTP"
-  route_selection_expression = "$request.method $request.path"
+  name          = "${local.name_prefix}-httpapi"
+  protocol_type = "HTTP"
 
   cors_configuration {
-    allow_origins = ["*"]
-    allow_methods = ["GET", "OPTIONS"]
-    allow_headers = ["Authorization", "Content-Type"]
+    allow_headers = ["*"]
+    allow_methods = ["GET","POST","OPTIONS"]
+    allow_origins = ["*"] # tighten to CloudFront domain after first deploy if desired
   }
 }
 
-resource "aws_lambda_function" "authorizer" {
-  function_name = "ec2-control-authorizer"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "authorizer.lambda_handler"
-  runtime       = "python3.9"
-
-  filename         = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-
-  timeout     = 5
-  memory_size = 128
-}
-
-resource "aws_lambda_function" "ec2_handler" {
-  function_name = "ec2-control-handler"
-  role          = aws_iam_role.lambda_role.arn
-  handler       = "handler.lambda_handler"
-  runtime       = "python3.9"
-
-  filename         = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-
-  timeout     = 10
-  memory_size = 128
-}
-
-resource "aws_apigatewayv2_authorizer" "lambda_auth" {
-  api_id                            = aws_apigatewayv2_api.api.id
-  name                              = "lambda-auth"
-  authorizer_type                   = "REQUEST"
-  authorizer_payload_format_version = "2.0"
-  enable_simple_responses           = true
-  identity_sources                  = ["$request.header.Authorization"]
-
-  # Use the FUNCTION ARN here (not invoke_arn)
-  authorizer_uri = "arn:aws:apigateway:${data.aws_region.current.name}:lambda:path/2015-03-31/functions/${aws_lambda_function.authorizer.arn}/invocations"
-
-  # (Optional) ensure the Lambda permission exists before creating the authorizer
-  depends_on = [aws_lambda_permission.apigw_auth]
-}
-
-
-resource "aws_apigatewayv2_integration" "lambda" {
+resource "aws_apigatewayv2_integration" "api_lambda" {
   api_id                 = aws_apigatewayv2_api.api.id
   integration_type       = "AWS_PROXY"
-  integration_method     = "POST"
+  integration_uri        = aws_lambda_function.api.invoke_arn
   payload_format_version = "2.0"
-
-  integration_uri = aws_lambda_function.ec2_handler.invoke_arn
 }
 
-resource "aws_apigatewayv2_route" "instances_route" {
+# Lambda authorizer (simple responses)
+resource "aws_apigatewayv2_authorizer" "auth" {
+  api_id                            = aws_apigatewayv2_api.api.id
+  authorizer_type                   = "REQUEST"
+  name                              = "${local.name_prefix}-authz"
+  authorizer_uri                    = aws_lambda_function.authorizer.invoke_arn
+  identity_sources                  = ["$request.header.Authorization"]
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  authorizer_result_ttl_in_seconds  = 60
+}
+
+# Public routes
+resource "aws_apigatewayv2_route" "request_otp" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /request-otp"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "verify_otp" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /verify-otp"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "login" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /login"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+}
+
+# Protected routes
+resource "aws_apigatewayv2_route" "instances" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "GET /instances"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
   authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.lambda_auth.id
-  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+
+resource "aws_apigatewayv2_route" "instance_action" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /instance-action"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+
+resource "aws_apigatewayv2_route" "services" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /services"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.api.id
-  name        = "prod"
+  name        = "$default"
   auto_deploy = true
 }
 
-##########################
-# IAM for Lambda
-##########################
-resource "aws_iam_role" "lambda_role" {
-  name_prefix = "ec2-control-lambda-role-"
-  assume_role_policy = jsonencode({
-    Version   = "2012-10-17",
-    Statement = [{
-      Effect    = "Allow",
-      Action    = "sts:AssumeRole",
-      Principal = { Service = "lambda.amazonaws.com" }
-    }]
-  })
+# ---------- Static site: S3 + CloudFront (OAC) ----------
+resource "aws_s3_bucket" "website" {
+  bucket = var.website_bucket_name != "" ? var.website_bucket_name : "${local.name_prefix}-site"
 }
 
-# Basic logging
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-# EC2 Describe/Start/Stop
-resource "aws_iam_policy" "ec2_control_policy" {
-  name_prefix = "ec2-control-policy-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = [
-        "ec2:DescribeInstances",
-        "ec2:StartInstances",
-        "ec2:StopInstances"
-      ],
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ec2" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ec2_control_policy.arn
-}
-
-# If authorizer reads SSM parameters for auth (e.g., /ec2-auth/*)
-resource "aws_iam_policy" "ssm_read_auth" {
-  name_prefix = "ssm-read-auth-params-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"],
-      Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/ec2-auth/*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.ssm_read_auth.arn
-}
-
-# ✅ SSM command permissions for service controls
-resource "aws_iam_policy" "lambda_ssm_commands" {
-  name_prefix = "lambda-ssm-commands-"
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [{
-      Effect   = "Allow",
-      Action   = [
-        "ssm:SendCommand",
-        "ssm:GetCommandInvocation",
-        "ssm:ListCommands",
-        "ssm:ListCommandInvocations",
-        "ssm:CancelCommand"
-      ],
-      Resource = "*"
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_ssm_commands" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_ssm_commands.arn
-}
-
-##########################
-# Lambda invoke permissions from API Gateway
-##########################
-resource "aws_lambda_permission" "apigw_auth" {
-  statement_id  = "AllowExecutionFromAPIGatewayAuth"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.authorizer.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/authorizers/*"
-}
-
-resource "aws_lambda_permission" "apigw_handler" {
-  statement_id  = "AllowExecutionFromAPIGateway"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ec2_handler.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
-}
-
-##########################
-# HTML → S3 (templated)
-##########################
-data "template_file" "html" {
-  template = file("${local.web_dir}/index.html.tpl")
-  vars = {
-    api_url = aws_apigatewayv2_stage.default.invoke_url
+resource "aws_s3_bucket_ownership_controls" "site" {
+  bucket = aws_s3_bucket.website.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
-resource "aws_s3_object" "index_html" {
-  bucket       = aws_s3_bucket.frontend.id
+resource "aws_s3_bucket_public_access_block" "site" {
+  bucket                  = aws_s3_bucket.website.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name                              = "${local.name_prefix}-oac"
+  description                       = "OAC for S3 website"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "site" {
+  enabled             = true
+  default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.website.bucket_regional_domain_name
+    origin_id                = "s3-site"
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "s3-site"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET","HEAD","OPTIONS"]
+    cached_methods         = ["GET","HEAD"]
+    forwarded_values {
+      query_string = true
+      cookies { forward = "none" }
+    }
+  }
+
+  restrictions {
+    geo_restriction { restriction_type = "none" }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+# Bucket policy to allow CloudFront OAC
+data "aws_iam_policy_document" "site_bucket" {
+  statement {
+    sid     = "AllowCloudFrontRead"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.website.arn}/*"]
+    principals {
+      type        = "Service"
+      identifiers = ["cloudfront.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "AWS:SourceArn"
+      values   = [aws_cloudfront_distribution.site.arn]
+    }
+  }
+}
+resource "aws_s3_bucket_policy" "site" {
+  bucket = aws_s3_bucket.website.id
+  policy = data.aws_iam_policy_document.site_bucket.json
+}
+
+# Upload rendered index.html
+resource "aws_s3_object" "index" {
+  bucket       = aws_s3_bucket.website.id
   key          = "index.html"
-  content      = data.template_file.html.rendered
   content_type = "text/html"
-}
-
-##########################
-# (Optional) SSM VPC Interface Endpoints
-##########################
-locals {
-  ssm_endpoints = ["ssm", "ssmmessages", "ec2messages"]
-}
-
-resource "aws_vpc_endpoint" "ssm_endpoints" {
-  count               = var.create_ssm_endpoints ? length(local.ssm_endpoints) : 0
-  vpc_id              = var.vpc_id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.${local.ssm_endpoints[count.index]}"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = var.private_subnet_ids
-  security_group_ids  = var.endpoint_sg_id != null ? [var.endpoint_sg_id] : []
-  private_dns_enabled = true
+  content      = templatefile("${path.module}/html/index.html.tpl", {
+    api_base_url         = aws_apigatewayv2_api.api.api_endpoint
+    allowed_email_domain = var.allowed_email_domain
+    env_names            = join(",", var.env_names)
+  })
 }
