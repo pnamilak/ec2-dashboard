@@ -9,14 +9,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     :root { --bg:#0b1020; --card:#121a35; --muted:#8fa1c9; --accent:#6ea8fe; --accent2:#9bffd6; --error:#ff6b6b; }
-    *{box-sizing:border-box}
-    html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 80% -10%, #1b2a5b 0%, transparent 60%), #0b1020;color:#e9f0ff;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    *{box-sizing:border-box} html,body{height:100%;margin:0;background:#0b1020;color:#e9f0ff;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
     .wrap{min-height:100%;display:grid;place-items:center;padding:24px}
-    .card{width:100%;max-width:420px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);box-shadow:0 20px 60px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);border-radius:20px;padding:28px;backdrop-filter:blur(8px)}
+    .card{width:100%;max-width:420px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px}
     .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
-    .logo{width:36px;height:36px;border-radius:9px;background:conic-gradient(from 180deg,#6ea8fe,#9bffd6,#6ea8fe);filter:drop-shadow(0 6px 14px rgba(110,168,254,.35))}
-    h1{margin:0;font-size:20px;font-weight:700}
-    p.sub{margin:6px 0 22px;color:var(--muted);font-size:13px}
+    .logo{width:36px;height:36px;border-radius:9px;background:conic-gradient(from 180deg,#6ea8fe,#9bffd6,#6ea8fe)}
+    h1{margin:0;font-size:20px;font-weight:700} p.sub{margin:6px 0 22px;color:var(--muted);font-size:13px}
     label{font-size:13px;color:#cfe0ff;display:block;margin-bottom:8px}
     .field{background:#0f1630;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px 14px;margin-bottom:14px}
     .field input{width:100%;background:transparent;border:0;outline:0;color:#e9f0ff;font-size:14px}
@@ -46,7 +44,7 @@
       </form>
 
       <div class="footer">
-        You’ve just verified your email OTP. If this page appeared without OTP, <a href="./" style="color:#9bffd6;text-underline-offset:3px;">go back</a>.
+        If this page appeared without OTP, <a href="./" style="color:#9bffd6;text-underline-offset:3px;">go back</a>.
       </div>
     </div>
   </div>

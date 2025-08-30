@@ -45,7 +45,6 @@
   </div>
 
   <div class="tabs row" id="envTabs"></div>
-
   <div id="envMount"></div>
 </div>
 
@@ -100,6 +99,8 @@
 <script>
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
+  // Let login.js pick this up without templating
+  try { localStorage.setItem("api_base_url", API); } catch(e) {}
 
   function http(path, method, obj, bearer){
     var h = {"content-type":"application/json"};
@@ -116,8 +117,7 @@
 
   function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
   function logout(){
-    localStorage.removeItem("jwt"); localStorage.removeItem("role");
-    localStorage.removeItem("user"); localStorage.removeItem("otp_verified");
+    ["jwt","role","user","otp_verified","otp_verified_until","allowed_domain"].forEach(k=>localStorage.removeItem(k));
     refresh();
   }
   function closeAuth(){ $("authModal").style.display = "none"; }
@@ -129,15 +129,22 @@
     if(!em){ toast("enter email"); return; }
     http("/request-otp","POST",{email:em}).then(()=>toast("OTP sent")).catch(e=>toast(e.message));
   }
+
+  // ✅ Redirect to a SEPARATE page after OTP success
   function verifyOtp(){
     var em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
     if(!em || !cd){ toast("enter email and code"); return; }
     http("/verify-otp","POST",{email:em, code:cd})
       .then(function(){
         localStorage.setItem("otp_verified","1");
-        showPwd(); $("btnLogin").disabled=false; $("uName").focus();
-      }).catch(e=>toast(e.message));
+        localStorage.setItem("allowed_domain","${allowed_email_domain}");
+        localStorage.setItem("otp_verified_until", String(Date.now() + (10 * 60 * 1000))); // 10 min
+        window.location.assign("/login.html");
+      })
+      .catch(e=>toast(e.message));
   }
+
+  // (kept for backwards-compat if someone opens modal)
   function doLogin(){
     var u = $("uName").value.trim(), p = $("uPass").value;
     if(!u || !p){ toast("missing credentials"); return; }

@@ -1,13 +1,13 @@
 import os, json, time, boto3, base64, uuid
 from botocore.exceptions import ClientError
 
-# --- JWT helpers (ADD THIS) ---
-import base64, hmac, hashlib, time
-
+import base64, hmac, hashlib, time, json  # ADD
+# --- JWT helpers (ADD) ---
 def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
 
 def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seconds: int = 3600) -> str:
+    """Create an HS256 JWT that the API Gateway Lambda Authorizer accepts."""
     header  = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     now     = int(time.time())
     payload = _b64url(json.dumps({"sub": username, "role": role, "iat": now, "exp": now + ttl_seconds}).encode())
@@ -15,6 +15,7 @@ def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seco
     sig     = _b64url(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{sig}"
 # --- end helpers ---
+
 
 REGION = os.environ.get("REGION", "us-east-2")
 OTP_TABLE = os.environ["OTP_TABLE"]
@@ -58,38 +59,19 @@ def verify_otp(data):
     return ok({"ok":True})
 
 # ---------- Users from SSM ----------
-def _read_user(username):
-    """
-    Accept either:
-      /<project>/users/<name>  or  /<project>/auth/<name>
-    Value may be 'password' or 'password|role'
-    """
-    paths = [f"{PARAM_USER_PREFIX}/{username}"]
-    # legacy /auth support
-    base = PARAM_USER_PREFIX.rsplit("/",1)[0]
-    paths.append(f"{base}/auth/{username}")
-    for name in paths:
-        try:
-            p = ssm.get_parameter(Name=name, WithDecryption=True)
-            v = (p["Parameter"]["Value"] or "").strip()
-            if v.startswith("{"):  # optional JSON payload
-                obj = json.loads(v)
-                pwd = obj.get("password","")
-                role = obj.get("role","admin")
-            else:
-                pwd, role = (v.split("|",1)+["admin"])[:2]
-            return {"username":username,"password":pwd,"role":role}
-        except ClientError as e:
-            if e.response["Error"]["Code"] == "ParameterNotFound":
-                continue
-            raise
-    return None
+def _read_user(username: str):
+    """Reads /<prefix>/<username> -> 'password|role' from SSM and returns dict."""
+    p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
+    val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"]
+    parts = val.split("|", 1)
+    pwd = parts[0]
+    role = (parts[1] if len(parts) > 1 else "read").strip().lower()
+    return {"password": pwd, "role": role or "read"}
+
 
 def login(data):
     """
     Body JSON: { "username": "...", "password": "..." }
-    Reads user from SSM at f"{PARAM_USER_PREFIX}/{username}"
-    Value format: "password|role"  (role default: "admin" if not supplied)
     Returns: { token, role, user: { username, role } }
     """
     u = (data.get("username") or "").strip()
@@ -105,11 +87,14 @@ def login(data):
     if user.get("password") != p:
         return bad(401, "invalid_password")
 
-    # ✅ Issue a real JWT that your Lambda Authorizer already validates (JWT_PARAM)
-    token = _jwt_for(u, user.get("role", "read"), ssm, JWT_PARAM, ttl_seconds=3600)
+    role = user.get("role") or "read"
+    token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
 
-    # You can also set a Set-Cookie header here if you prefer cookies:
-    body = {"token": token, "role": user.get("role", "read"), "user": {"username": u, "role": user.get("role", "read")}}
+    body = {
+        "token": token,
+        "role": role,
+        "user": {"username": u, "role": role, "name": u}
+    }
     return {
         "statusCode": 200,
         "headers": {
