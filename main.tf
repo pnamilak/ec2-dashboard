@@ -400,6 +400,20 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
+resource "aws_s3_object" "login_html" {
+  bucket       = aws_s3_bucket.website.bucket
+  key          = "login.html"
+  source       = "${path.module}/html/login.html"
+  content_type = "text/html"
+}
+
+resource "aws_s3_object" "login_js" {
+  bucket       = aws_s3_bucket.website.bucket
+  key          = "login.js"
+  source       = "${path.module}/html/login.js"
+  content_type = "application/javascript"
+}
+
 # Discover instances
 data "aws_instances" "targets_running" {
   filter {

@@ -1,6 +1,21 @@
 import os, json, time, boto3, base64, uuid
 from botocore.exceptions import ClientError
 
+# --- JWT helpers (ADD THIS) ---
+import base64, hmac, hashlib, time
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seconds: int = 3600) -> str:
+    header  = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    now     = int(time.time())
+    payload = _b64url(json.dumps({"sub": username, "role": role, "iat": now, "exp": now + ttl_seconds}).encode())
+    secret  = ssm_client.get_parameter(Name=jwt_param_name, WithDecryption=True)["Parameter"]["Value"].encode()
+    sig     = _b64url(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    return f"{header}.{payload}.{sig}"
+# --- end helpers ---
+
 REGION = os.environ.get("REGION", "us-east-2")
 OTP_TABLE = os.environ["OTP_TABLE"]
 SES_SENDER = os.environ["SES_SENDER"]
@@ -71,14 +86,41 @@ def _read_user(username):
     return None
 
 def login(data):
+    """
+    Body JSON: { "username": "...", "password": "..." }
+    Reads user from SSM at f"{PARAM_USER_PREFIX}/{username}"
+    Value format: "password|role"  (role default: "admin" if not supplied)
+    Returns: { token, role, user: { username, role } }
+    """
     u = (data.get("username") or "").strip()
     p = (data.get("password") or "")
-    user = _read_user(u)
-    if not user or user["password"] != p:
-        return bad(401,"bad_credentials")
-    # simple base64 token (authorizer is backward-compatible and also supports JWT if you use it)
-    token = base64.b64encode(f"{u}|{user['role']}|{int(time.time())}".encode()).decode()
-    return ok({"token":token,"role":user["role"],"user":{"username":u,"role":user["role"],"name":u}})
+    if not u or not p:
+        return bad(400, "missing_credentials")
+
+    try:
+        user = _read_user(u)  # expects {"password": "...", "role": "..."}
+    except Exception:
+        return bad(401, "invalid_user")
+
+    if user.get("password") != p:
+        return bad(401, "invalid_password")
+
+    # ✅ Issue a real JWT that your Lambda Authorizer already validates (JWT_PARAM)
+    token = _jwt_for(u, user.get("role", "read"), ssm, JWT_PARAM, ttl_seconds=3600)
+
+    # You can also set a Set-Cookie header here if you prefer cookies:
+    body = {"token": token, "role": user.get("role", "read"), "user": {"username": u, "role": user.get("role", "read")}}
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "authorization,content-type",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        },
+        "body": json.dumps(body),
+    }
+
 
 # ---------- Auth helper for protected endpoints ----------
 def _auth(event):
