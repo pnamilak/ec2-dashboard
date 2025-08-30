@@ -36,8 +36,6 @@
     .input{background:#101a2e;border:1px solid #283a63;color:var(--ink);border-radius:8px;padding:8px 10px}
     .split{display:flex;gap:10px;flex-wrap:wrap}
     .toast{position:fixed;top:12px;right:12px;background:#2b2132;color:#ffd7ef;border:1px solid #5a3c63;padding:8px 10px;border-radius:8px;display:none;z-index:11}
-    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;background:#121a2e;border:1px solid #284; padding:2px 6px;border-radius:6px}
-    .tag{display:inline-flex;gap:6px;align-items:center}
   </style>
 </head>
 <body>
@@ -56,9 +54,9 @@
   <!-- counters -->
   <div class="row space" style="margin-top:12px;">
     <div class="badge">
-      <span class="tag">Total: <b id="t_total">0</b></span>
-      <span class="tag">Running: <b id="t_run">0</b></span>
-      <span class="tag">Stopped: <b id="t_stop">0</b></span>
+      <span>Total: <b id="t_total">0</b></span>
+      <span>Running: <b id="t_run">0</b></span>
+      <span>Stopped: <b id="t_stop">0</b></span>
     </div>
     <div class="row">
       <button id="refreshBtn" class="btn">Refresh</button>
@@ -100,14 +98,14 @@
 <script>
 /* ---------- Config from Terraform ---------- */
 const API = "${api_base_url}";
-const ENV_NAMES = "${env_names}".split(",").filter(Boolean);   // ["NAQA1", ...]
+const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 const READ_ONLY_ROLE = "viewer";
 
 /* ---------- State ---------- */
 let token = localStorage.getItem("token") || "";
 let user  = JSON.parse(localStorage.getItem("user") || "null");
-let cacheByEnv = {};   // { ENV: { DM:[{id,name,state}], EA:[...] } }
-let currentTab = "";   // active env
+let cacheByEnv = {};
+let currentTab = "";
 let currentInst = null;
 
 /* ---------- Helpers ---------- */
@@ -123,7 +121,7 @@ function badgeState(state){
   const s=(state||"").toLowerCase();
   if(s==="running") return `<span class="chip" style="border-color:#2e7; background:#173;">running</span>`;
   if(s==="stopped") return `<span class="chip" style="border-color:#e72; background:#431;">stopped</span>`;
-  return `<span class="chip">${s||"unknown"}</span>`;
+  return `<span class="chip">$${state||"unknown"}</span>`;
 }
 
 /* ---------- Auth UI ---------- */
@@ -150,15 +148,13 @@ async function loadInstances(){
   try{
     const r = await fetch(API+"/instances",{headers:authz()});
     const j = await r.json(); if(!r.ok) throw new Error(j.error||"internal");
-    // counters
     document.getElementById('t_total').innerText=j.summary.total;
     document.getElementById('t_run').innerText=j.summary.running;
     document.getElementById('t_stop').innerText=j.summary.stopped;
 
     cacheByEnv = j.envs || {};
     const envList = ENV_NAMES.length ? ENV_NAMES : Object.keys(cacheByEnv);
-    // tabs
-    const tabs = envList.map(e => `<div class="tab ${currentTab===e ? "active":""}" data-tab="${e}">${e}</div>`).join("");
+    const tabs = envList.map(e => `<div class="tab $${currentTab===e ? "active":""}" data-tab="$${e}">$${e}</div>`).join("");
     document.getElementById('envTabs').innerHTML = tabs;
     if(!currentTab && envList.length) currentTab = envList[0];
     document.querySelectorAll('[data-tab]').forEach(el => el.onclick = (ev)=>{ currentTab = ev.target.getAttribute('data-tab'); renderEnvCards(); });
@@ -176,19 +172,18 @@ function renderEnvCards(){
     const arr = data[key] || [];
     const canBulk = !readOnly() && arr.length>0;
     const hdr =
-      `<div class="row space"><h3>${block}</h3>
+      `<div class="row space"><h3>$${block}</h3>
         <div class="row">
-          <button class="btn green" data-bulk='${JSON.stringify({env,blk:key,action:"start"})}' ${canBulk?"":"disabled"}>Start All</button>
-          <button class="btn red" data-bulk='${JSON.stringify({env,blk:key,action:"stop"})}' ${canBulk?"":"disabled"}>Stop All</button>
+          <button class="btn green" data-bulk='$${JSON.stringify({env,blk:key,action:"start"})}' $${canBulk?"":"disabled"}>Start All</button>
+          <button class="btn red" data-bulk='$${JSON.stringify({env,blk:key,action:"stop"})}'  $${canBulk?"":"disabled"}>Stop All</button>
         </div>
       </div>`;
 
     const rows = arr.map(it => instRow(it)).join("") || `<div class="muted">No instances</div>`;
-    blocks.push(`<div class="card">${hdr}${rows}</div>`);
+    blocks.push(`<div class="card">$${hdr}$${rows}</div>`);
   }
   document.getElementById('envBlocks').innerHTML = blocks.join("");
 
-  // wire
   document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = async (e)=>{
     if(readOnly()) return;
     const cfg = JSON.parse(e.currentTarget.getAttribute('data-bulk'));
@@ -202,12 +197,12 @@ function instRow(it){
   const startDis = readOnly() || isRunning ? "disabled":"";
   const stopDis  = readOnly() || !isRunning ? "disabled":"";
   return `<div class="grid" style="margin-top:8px; border-top:1px solid var(--line); padding-top:8px;">
-    <div><b>${it.name}</b> <span class="muted">( ${it.id} )</span></div>
-    <div>${badgeState(it.state)}</div>
+    <div><b>$${it.name}</b> <span class="muted">( $${it.id} )</span></div>
+    <div>$${badgeState(it.state)}</div>
     <div class="row" style="justify-content:flex-end; gap:8px;">
-      <button class="btn green" data-start="${it.id}" ${startDis}>Start</button>
-      <button class="btn red" data-stop="${it.id}" ${stopDis}>Stop</button>
-      <button class="btn" data-services='${JSON.stringify(it)}'>Services</button>
+      <button class="btn green" data-start="$${it.id}" $${startDis}>Start</button>
+      <button class="btn red" data-stop="$${it.id}"  $${stopDis}>Stop</button>
+      <button class="btn" data-services='$${JSON.stringify(it)}'>Services</button>
     </div>
   </div>`;
 }
@@ -254,7 +249,7 @@ async function bulkAction(env, blk, action){
 /* ---------- Services Modal ---------- */
 function openModal(inst){
   currentInst = inst;
-  document.getElementById('modalTitle').innerText = `Services on ${inst.name}`;
+  document.getElementById('modalTitle').innerText = `Services on $${inst.name}`;
   document.getElementById('svcArea').innerHTML = '';
   document.getElementById('modal').style.display='flex';
   document.getElementById('iisBtn').disabled = readOnly();
@@ -268,7 +263,7 @@ document.getElementById('ssmPingBtn').onclick = async ()=>{
   if(!currentInst) return;
   const r = await fetch(API+"/ssm-ping",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id})});
   const j = await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-  toast(`Host: ${j.ping.Host} @ ${j.ping.Time}`);
+  toast(`Host: $${j.ping.Host} @ $${j.ping.Time}`);
 };
 
 document.getElementById('iisBtn').onclick = async ()=>{
@@ -284,21 +279,21 @@ document.getElementById('sqlBtn').onclick = async ()=>{
   const j = await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
   const s = j.services || [];
   const os = j.os || {};
-  const vers = (j.sql||[]).map(x => `<span class="chip">SQL ${x.Instance} — ${x.Version} (${x.PatchLevel})</span>`).join(" ");
+  const vers = (j.sql||[]).map(x => `<span class="chip">SQL $${x.Instance} — $${x.Version} ($${x.PatchLevel})</span>`).join(" ");
   const svc = Array.isArray(s) ? s : (s ? [s] : []);
   document.getElementById('svcArea').innerHTML =
     `<div class="chips" style="margin-bottom:8px;">
-       <span class="chip">OS: ${os.Caption||"?"} ${os.Version||""} (${os.BuildNumber||""})</span>
-       ${vers || `<span class="muted">No SQL version data</span>`}
+       <span class="chip">OS: $${os.Caption||"?"} $${os.Version||""} ($${os.BuildNumber||""})</span>
+       $${vers || `<span class="muted">No SQL version data</span>`}
      </div>
-     ${svc.map(row => svcRow(row)).join("")}`;
+     $${svc.map(row => svcRow(row)).join("")}`;
 };
 
 async function fetchServices(pattern){
   if(!currentInst) return;
   const r = await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"list",pattern})});
   const j = await r.json();
-  if(!r.ok){ document.getElementById('svcArea').innerHTML = `<div class="muted">${j.error||"internal"}</div>`; return; }
+  if(!r.ok){ document.getElementById('svcArea').innerHTML = `<div class="muted">$${j.error||"internal"}</div>`; return; }
   renderServices(j.services);
 }
 
@@ -315,10 +310,10 @@ function svcRow(row){
   const startDis = readOnly() || on ? "disabled":"";
   const stopDis  = readOnly() || !on ? "disabled":"";
   return `<div class="row space" style="border-top:1px solid var(--line); padding:8px 2px; margin-top:4px;">
-    <div><b>${name}</b> <span class="muted">${st||"unknown"}</span></div>
+    <div><b>$${name}</b> <span class="muted">$${st||"unknown"}</span></div>
     <div class="row" style="gap:8px;">
-      <button class="btn green" data-sstart="${name}" ${startDis}>Start</button>
-      <button class="btn red" data-sstop="${name}" ${stopDis}>Stop</button>
+      <button class="btn green" data-sstart="$${name}" $${startDis}>Start</button>
+      <button class="btn red" data-sstop="$${name}"  $${stopDis}>Stop</button>
     </div>
   </div>`;
 }
