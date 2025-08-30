@@ -59,13 +59,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install AWS CLI v2
-        run: |
-          curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-          unzip -q awscliv2.zip
-          sudo ./aws/install --update
-          aws --version
-
       - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -129,37 +122,40 @@ jobs:
           TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
           TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
+        run: terraform apply -auto-approve
+
+      # Get outputs for subsequent steps
+      - name: Export TF outputs
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
+        id: tf
+        shell: bash
         run: |
-          terraform apply -auto-approve
+          echo "SITE_BUCKET=$(terraform output -raw site_bucket)" >> "$GITHUB_ENV"
+          echo "CLOUDFRONT_ID=$(terraform output -raw cloudfront_id)" >> "$GITHUB_ENV"
+          echo "Bucket: ${SITE_BUCKET:-<empty>}"
+          echo "CF ID : ${CLOUDFRONT_ID:-<empty>}"
+
       - name: Upload login HTML/JS
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
+        shell: bash
         run: |
-          aws s3 cp html/login.html s3://$SITE_BUCKET/login.html \
+          set -euo pipefail
+          : "${SITE_BUCKET:?Terraform output site_bucket is empty}"
+          aws s3 cp html/login.html "s3://${SITE_BUCKET}/login.html" \
             --content-type text/html \
             --cache-control "no-store, no-cache, must-revalidate, max-age=0"
-
-          aws s3 cp html/login.js s3://$SITE_BUCKET/login.js \
+          aws s3 cp html/login.js "s3://${SITE_BUCKET}/login.js" \
             --content-type application/javascript \
             --cache-control "no-store, no-cache, must-revalidate, max-age=0"
 
       - name: Invalidate CloudFront
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id $CLOUDFRONT_ID \
-            --paths "/*"
-
-      - name: CloudFront Invalidate (after apply)
         if: ${{ github.event.inputs.ACTION == 'apply' }}
         shell: bash
         run: |
-          set -e
-          CF_DOMAIN=$(terraform output -raw cloudfront_domain || true)
-          if [ -n "$CF_DOMAIN" ]; then
-            DIST_ID=$(aws cloudfront list-distributions \
-              --query "DistributionList.Items[?DomainName=='$CF_DOMAIN'].Id | [0]" --output text)
-            if [ "$DIST_ID" != "None" ]; then
-              aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
-            fi
-          fi
+          : "${CLOUDFRONT_ID:?Terraform output cloudfront_id is empty}"
+          aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_ID" \
+            --paths "/*"
 
       # ---------- DESTROY ----------
       - name: Try to empty website bucket (best-effort)
@@ -168,12 +164,12 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          BUCKET=$(terraform output -raw website_bucket 2>/dev/null || true)
+          BUCKET=$(terraform output -raw site_bucket 2>/dev/null || true)
           if [ -n "$BUCKET" ]; then
             echo "Attempting to empty s3://$BUCKET ..."
             aws s3 rm "s3://$BUCKET" --recursive || true
           else
-            echo "No website_bucket output (maybe never applied)."
+            echo "No site_bucket output (maybe never applied)."
           fi
 
       - name: Terraform Destroy
@@ -185,8 +181,7 @@ jobs:
           TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
           TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
-        run: |
-          terraform destroy -auto-approve
+        run: terraform destroy -auto-approve
 
       - name: Post-destroy note
         if: ${{ github.event.inputs.ACTION == 'destroy' }}

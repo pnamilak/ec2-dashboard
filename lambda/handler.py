@@ -1,12 +1,4 @@
-import os
-import json
-import time
-import uuid
-import base64
-import hmac
-import hashlib
-
-import boto3
+import os, json, time, uuid, base64, hmac, hashlib, boto3
 from botocore.exceptions import ClientError
 
 # ---------- JWT helpers ----------
@@ -14,7 +6,6 @@ def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
 
 def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seconds: int = 3600) -> str:
-    """Create an HS256 JWT that the API Gateway Lambda Authorizer accepts."""
     header  = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
     now     = int(time.time())
     payload = _b64url(json.dumps({"sub": username, "role": role, "iat": now, "exp": now + ttl_seconds}).encode())
@@ -23,29 +14,43 @@ def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seco
     return f"{header}.{payload}.{sig}"
 # ----------------------------------
 
-REGION = os.environ.get("REGION", "us-east-2")
-OTP_TABLE = os.environ["OTP_TABLE"]
-SES_SENDER = os.environ["SES_SENDER"]
-ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "example.com")
+REGION            = os.environ.get("REGION", "us-east-2")
+OTP_TABLE         = os.environ["OTP_TABLE"]
+SES_SENDER        = os.environ["SES_SENDER"]
+ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "example.com")
 PARAM_USER_PREFIX = os.environ["PARAM_USER_PREFIX"]   # e.g. /ec2-dashboard/users
-JWT_PARAM = os.environ["JWT_PARAM"]
-ENV_NAMES = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",") if e.strip()]
+JWT_PARAM         = os.environ["JWT_PARAM"]
+ENV_NAMES         = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",") if e.strip()]
 
-ddb = boto3.resource("dynamodb", region_name=REGION)
-ses = boto3.client("ses", region_name=REGION)
-ssm = boto3.client("ssm", region_name=REGION)
-ec2 = boto3.client("ec2", region_name=REGION)
+ddb   = boto3.resource("dynamodb", region_name=REGION)
+ses   = boto3.client("ses", region_name=REGION)
+ssm   = boto3.client("ssm", region_name=REGION)
+ec2   = boto3.client("ec2", region_name=REGION)
 table = ddb.Table(OTP_TABLE)
 
-# ---------- Response helpers (uniform CORS everywhere) ----------
-_CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "authorization,content-type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Content-Type": "application/json",
-}
-def ok(b):   return {"statusCode": 200, "headers": _CORS, "body": json.dumps(b)}
-def bad(c,m): return {"statusCode": c, "headers": _CORS, "body": json.dumps({"error": m})}
+def ok(body):
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "authorization,content-type",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        },
+        "body": json.dumps(body),
+    }
+
+def bad(code, msg):
+    return {
+        "statusCode": code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "authorization,content-type",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        },
+        "body": json.dumps({"error": msg}),
+    }
 
 # ---------- OTP ----------
 def request_otp(data):
@@ -74,63 +79,49 @@ def verify_otp(data):
 # ---------- Users from SSM ----------
 def _read_user(username: str):
     """
-    Reads SSM value and supports either format:
+    Supports BOTH:
       - 'password|role'
       - 'password,role[,email[,name]]'
-    Returns dict with password, role, email, name.
+    Returns dict: {password, role, email, name}
     """
     p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
     val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"].strip()
 
     email = ""
-    name = username
+    name  = username
 
     if "|" in val:
-        pwd, role = val.split("|", 1)
+        parts = val.split("|", 1)
+        pwd  = (parts[0] if len(parts)>0 else "").strip()
+        role = (parts[1] if len(parts)>1 else "read").strip().lower()
     else:
         parts = [x.strip() for x in val.split(",")]
-        pwd  = parts[0] if len(parts) > 0 else ""
-        role = parts[1] if len(parts) > 1 else "read"
-        email = parts[2] if len(parts) > 2 else ""
-        name  = parts[3] if len(parts) > 3 else username
+        pwd  = parts[0] if len(parts)>0 else ""
+        role = (parts[1] if len(parts)>1 else "read")
+        email = parts[2] if len(parts)>2 else ""
+        name  = parts[3] if len(parts)>3 else username
+        role  = (role or "read").strip().lower()
 
-    pwd  = (pwd or "").strip()
-    role = (role or "read").strip().lower() or "read"
+    role = role or "read"
     return {"password": pwd, "role": role, "email": email, "name": name}
-
 
 def login(data):
     u = (data.get("username") or "").strip()
     p = (data.get("password") or "")
     if not u or not p:
         return bad(400, "missing_credentials")
-
     try:
         user = _read_user(u)
     except Exception:
         return bad(401, "invalid_user")
-
     if user.get("password") != p:
-        return bad(401, "bad_credentials")
-
-    role = user.get("role") or "read"
+        return bad(401, "invalid_password")
+    role  = user.get("role") or "read"
     token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
+    return ok({"token":token, "role":role, "user":{"username":u, "role":role, "name":user.get("name") or u, "email":user.get("email","")}})
 
-    return ok({
-        "token": token,
-        "role": role,
-        "user": {
-            "username": u,
-            "role": role,
-            "name": user.get("name") or u,
-            "email": user.get("email", "")
-        }
-    })
-
-
-# ---------- Auth helper for protected endpoints ----------
+# ---------- Auth helper ----------
 def _auth(event):
-    # If you use a Lambda Authorizer in API Gateway, this just checks presence.
     auth = event.get("headers",{}).get("authorization") or event.get("headers",{}).get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         raise Exception("no_token")
@@ -157,28 +148,7 @@ def instances(event, _):
             summary["stopped"]+= (state=="stopped")
     return ok({"summary":summary,"envs":envs})
 
-# ---------- Start/Stop EC2 ----------
-def instance_action(event, _):
-    body=json.loads(event.get("body") or "{}")
-    iid=body.get("id")
-    action=(body.get("action") or "").lower()
-    if not iid or action not in ("start","stop"):
-        return ok({"error":"bad_request"})
-    try:
-        if action == "start":
-            ec2.start_instances(InstanceIds=[iid])
-        else:
-            ec2.stop_instances(InstanceIds=[iid])
-        return ok({"ok":True})
-    except ClientError as e:
-        code = e.response.get("Error",{}).get("Code","error")
-        return ok({"error":"ec2_error","reason":code})
-
-# Back-compat alias (some frontends used /instance-action hitting 'instances_action')
-def instances_action(event, ctx):
-    return instance_action(event, ctx)
-
-# ---------- SSM helpers / services ----------
+# ---------- SSM helpers ----------
 def ssm_online(instance_id):
     try:
         r = ssm.describe_instance_information(Filters=[{"Key":"InstanceIds","Values":[instance_id]}])
@@ -208,7 +178,7 @@ if ($Mode -eq "stop")  { Stop-Service -Name $Name -Force -ErrorAction SilentlyCo
 $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
 if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,DisplayName,Status | ConvertTo-Json }
 """
-POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
+POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{\"ok\":true}'"
 
 def _run_ps(instance_id, script, timeout=30):
     try:
@@ -265,27 +235,23 @@ def services(event,_):
         return ok({"ok":True})
     return ok({"error":"bad_request"})
 
-# ---------- Router ----------
 def lambda_handler(event, ctx):
-    path = (event.get("rawPath") or event.get("path") or "").lower()
+    # Basic CORS preflight for HTTP API
     method = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
+    path   = (event.get("rawPath") or event.get("path") or "").lower()
 
-    # CORS preflight (if API GW isn't handling)
     if method == "OPTIONS":
-        return ok({})
+        return ok({"ok": True})
 
-    # Public endpoints
     if path.endswith("/request-otp") and method=="POST":  return request_otp(json.loads(event.get("body") or "{}"))
-    if path.endswith("/verify-otp") and method=="POST":   return verify_otp(json.loads(event.get("body") or "{}"))
-    if path.endswith("/login") and method=="POST":        return login(json.loads(event.get("body") or "{}"))
+    if path.endswith("/verify-otp")  and method=="POST":  return verify_otp(json.loads(event.get("body") or "{}"))
+    if path.endswith("/login")       and method=="POST":  return login(json.loads(event.get("body") or "{}"))
 
-    # Protected endpoints (assumes Lambda Authorizer validates JWT; we only check presence)
     try: _auth(event)
     except Exception: return bad(401,"unauthorized")
 
-    if path.endswith("/instances") and method=="GET":           return instances(event, ctx)
-    if path.endswith("/instance-action") and method=="POST":    return instance_action(event, ctx)
-    if path.endswith("/instances-action") and method=="POST":   return instances_action(event, ctx)  # back-compat
-    if path.endswith("/services") and method=="POST":           return services(event, ctx)
+    if path.endswith("/instances")        and method=="GET":  return instances(event, ctx)
+    if path.endswith("/instance-action")  and method=="POST": return instances(event, ctx)  # compatibility alias
+    if path.endswith("/services")         and method=="POST": return services(event, ctx)
 
     return bad(404,"not_found")
