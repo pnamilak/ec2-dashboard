@@ -15,6 +15,13 @@ locals {
       "*${upper(e)}*"
     ]
   ])
+
+  # Render index.html once so we can md5 it for etag
+  index_html_rendered = templatefile("${path.module}/html/index.html.tpl", {
+    api_base_url         = aws_apigatewayv2_api.api.api_endpoint
+    allowed_email_domain = var.allowed_email_domain
+    env_names            = join(",", var.env_names)
+  })
 }
 
 resource "random_id" "suffix" {
@@ -360,16 +367,47 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Upload rendered index.html
+# --------- Site objects (with cache bust + CF invalidation) ---------
+
+# index.html (rendered from template) – add etag + cache control
 resource "aws_s3_object" "index" {
-  bucket       = aws_s3_bucket.website.id
-  key          = "index.html"
-  content_type = "text/html"
-  content = templatefile("${path.module}/html/index.html.tpl", {
-    api_base_url         = aws_apigatewayv2_api.api.api_endpoint
-    allowed_email_domain = var.allowed_email_domain
-    env_names            = join(",", var.env_names)
-  })
+  bucket        = aws_s3_bucket.website.id
+  key           = "index.html"
+  content_type  = "text/html"
+  content       = local.index_html_rendered
+  etag          = md5(local.index_html_rendered)
+  cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+}
+
+# login.html – always push if file changes (etag = md5(file))
+resource "aws_s3_object" "login_html" {
+  bucket        = aws_s3_bucket.website.bucket
+  key           = "login.html"
+  source        = "${path.module}/html/login.html"
+  content_type  = "text/html"
+  etag          = filemd5("${path.module}/html/login.html")
+  cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+}
+
+# login.js – always push if file changes (etag = md5(file))
+resource "aws_s3_object" "login_js" {
+  bucket        = aws_s3_bucket.website.bucket
+  key           = "login.js"
+  source        = "${path.module}/html/login.js"
+  content_type  = "application/javascript"
+  etag          = filemd5("${path.module}/html/login.js")
+  cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+}
+
+# Invalidate CloudFront so the latest files serve immediately
+resource "aws_cloudfront_invalidation" "site_invalidation" {
+  distribution_id = aws_cloudfront_distribution.site.id
+  paths           = ["/*"]
+  depends_on = [
+    aws_s3_object.index,
+    aws_s3_object.login_html,
+    aws_s3_object.login_js
+  ]
 }
 
 # ============================================================
@@ -398,20 +436,6 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "${local.name_prefix}-ec2-ssm-profile"
   role = aws_iam_role.ec2_ssm_role.name
-}
-
-resource "aws_s3_object" "login_html" {
-  bucket       = aws_s3_bucket.website.bucket
-  key          = "login.html"
-  source       = "${path.module}/html/login.html"
-  content_type = "text/html"
-}
-
-resource "aws_s3_object" "login_js" {
-  bucket       = aws_s3_bucket.website.bucket
-  key          = "login.js"
-  source       = "${path.module}/html/login.js"
-  content_type = "application/javascript"
 }
 
 # Discover instances
