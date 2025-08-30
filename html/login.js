@@ -1,16 +1,7 @@
-// --- Resolve API base ---
-// Primary source: index.html.tpl seeds it → localStorage.setItem("api_base_url", API)
-let API_BASE = (localStorage.getItem("api_base_url") || "").trim();
-
-// OPTIONAL hard override: uncomment and set your API Gateway endpoint if needed:
-// API_BASE = "https://YOURID.execute-api.us-east-2.amazonaws.com";
-
-function normalizeBase(u) {
-  if (!u) return "";
-  if (!/^https?:\/\//i.test(u) || u.includes("${api_base_url}")) return "";
-  return u.replace(/\/+$/,"");
-}
-API_BASE = normalizeBase(API_BASE);
+// ----- API base (REQUIRED) -----
+// Paste your exact API Gateway endpoint (with stage) between the quotes:
+const API_BASE = "https://REPLACE_ME.execute-api.us-east-2.amazonaws.com/prod";
+// --------------------------------
 
 const OTP_FLAG_KEY = "otp_verified_until";
 const allowedDomain = localStorage.getItem("allowed_domain");
@@ -30,12 +21,10 @@ if (allowedDomain && domainHintEl) domainHintEl.textContent = `Only users from $
 const form = document.getElementById("login-form");
 const errorEl = document.getElementById("error");
 
-function showNiceError(status, text) {
+function niceError(status, text) {
   const looksHtml = /<\s*html|<\s*!doctype/i.test(text || "");
   if (status === 403 && looksHtml) {
-    errorEl.textContent = "403 from CloudFront: your login request is hitting the site domain.\nFix: set API_BASE to your API Gateway endpoint.";
-  } else if (!API_BASE) {
-    errorEl.textContent = "API base URL is not set. Ensure index.html.tpl saves it (api_base_url), or hardcode it in login.js.";
+    errorEl.textContent = "403 from CloudFront: your login request is hitting the site domain.\nFix: API_BASE must be your API Gateway URL.";
   } else {
     errorEl.textContent = (text && text.slice(0,300)) || `Login failed (${status || "network"})`;
   }
@@ -47,9 +36,7 @@ form.addEventListener("submit", async (e) => {
 
   const username = document.getElementById("username").value.trim();
   const password = document.getElementById("password").value;
-
   if (!username || !password) { errorEl.textContent = "Please enter both username and password."; return; }
-  if (!API_BASE) { showNiceError(null, "no-api"); return; }
 
   try {
     const resp = await fetch(`${API_BASE}/login`, {
@@ -60,7 +47,7 @@ form.addEventListener("submit", async (e) => {
     });
 
     const raw = await resp.text();
-    if (!resp.ok) { showNiceError(resp.status, raw); return; }
+    if (!resp.ok) { niceError(resp.status, raw); return; }
 
     const data = JSON.parse(raw || "{}");
     if (data?.token) localStorage.setItem("jwt", data.token);
@@ -70,6 +57,6 @@ form.addEventListener("submit", async (e) => {
     // Back to dashboard
     window.location.href = "./";
   } catch (err) {
-    showNiceError(null, String(err && err.message || err));
+    niceError(null, String(err && err.message || err));
   }
 });

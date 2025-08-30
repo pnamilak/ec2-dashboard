@@ -1,8 +1,15 @@
-import os, json, time, boto3, base64, uuid
+import os
+import json
+import time
+import uuid
+import base64
+import hmac
+import hashlib
+
+import boto3
 from botocore.exceptions import ClientError
 
-import base64, hmac, hashlib, time, json  # ADD
-# --- JWT helpers (ADD) ---
+# ---------- JWT helpers ----------
 def _b64url(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).decode().rstrip("=")
 
@@ -14,8 +21,7 @@ def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seco
     secret  = ssm_client.get_parameter(Name=jwt_param_name, WithDecryption=True)["Parameter"]["Value"].encode()
     sig     = _b64url(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{sig}"
-# --- end helpers ---
-
+# ----------------------------------
 
 REGION = os.environ.get("REGION", "us-east-2")
 OTP_TABLE = os.environ["OTP_TABLE"]
@@ -31,8 +37,15 @@ ssm = boto3.client("ssm", region_name=REGION)
 ec2 = boto3.client("ec2", region_name=REGION)
 table = ddb.Table(OTP_TABLE)
 
-def ok(b):  return {"statusCode":200,"headers":{"content-type":"application/json"},"body":json.dumps(b)}
-def bad(c,m): return {"statusCode":c,"headers":{"content-type":"application/json"},"body":json.dumps({"error":m})}
+# ---------- Response helpers (uniform CORS everywhere) ----------
+_CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization,content-type",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Content-Type": "application/json",
+}
+def ok(b):   return {"statusCode": 200, "headers": _CORS, "body": json.dumps(b)}
+def bad(c,m): return {"statusCode": c, "headers": _CORS, "body": json.dumps({"error": m})}
 
 # ---------- OTP ----------
 def request_otp(data):
@@ -68,7 +81,6 @@ def _read_user(username: str):
     role = (parts[1] if len(parts) > 1 else "read").strip().lower()
     return {"password": pwd, "role": role or "read"}
 
-
 def login(data):
     """
     Body JSON: { "username": "...", "password": "..." }
@@ -80,7 +92,7 @@ def login(data):
         return bad(400, "missing_credentials")
 
     try:
-        user = _read_user(u)  # expects {"password": "...", "role": "..."}
+        user = _read_user(u)
     except Exception:
         return bad(401, "invalid_user")
 
@@ -90,25 +102,15 @@ def login(data):
     role = user.get("role") or "read"
     token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
 
-    body = {
+    return ok({
         "token": token,
         "role": role,
         "user": {"username": u, "role": role, "name": u}
-    }
-    return {
-        "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "authorization,content-type",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        },
-        "body": json.dumps(body),
-    }
-
+    })
 
 # ---------- Auth helper for protected endpoints ----------
 def _auth(event):
+    # If you use a Lambda Authorizer in API Gateway, this just checks presence.
     auth = event.get("headers",{}).get("authorization") or event.get("headers",{}).get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         raise Exception("no_token")
@@ -135,7 +137,28 @@ def instances(event, _):
             summary["stopped"]+= (state=="stopped")
     return ok({"summary":summary,"envs":envs})
 
-# ---------- SSM helpers ----------
+# ---------- Start/Stop EC2 ----------
+def instance_action(event, _):
+    body=json.loads(event.get("body") or "{}")
+    iid=body.get("id")
+    action=(body.get("action") or "").lower()
+    if not iid or action not in ("start","stop"):
+        return ok({"error":"bad_request"})
+    try:
+        if action == "start":
+            ec2.start_instances(InstanceIds=[iid])
+        else:
+            ec2.stop_instances(InstanceIds=[iid])
+        return ok({"ok":True})
+    except ClientError as e:
+        code = e.response.get("Error",{}).get("Code","error")
+        return ok({"error":"ec2_error","reason":code})
+
+# Back-compat alias (some frontends used /instance-action hitting 'instances_action')
+def instances_action(event, ctx):
+    return instance_action(event, ctx)
+
+# ---------- SSM helpers / services ----------
 def ssm_online(instance_id):
     try:
         r = ssm.describe_instance_information(Filters=[{"Key":"InstanceIds","Values":[instance_id]}])
@@ -222,20 +245,27 @@ def services(event,_):
         return ok({"ok":True})
     return ok({"error":"bad_request"})
 
+# ---------- Router ----------
 def lambda_handler(event, ctx):
     path = (event.get("rawPath") or event.get("path") or "").lower()
     method = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
 
+    # CORS preflight (if API GW isn't handling)
+    if method == "OPTIONS":
+        return ok({})
+
+    # Public endpoints
     if path.endswith("/request-otp") and method=="POST":  return request_otp(json.loads(event.get("body") or "{}"))
     if path.endswith("/verify-otp") and method=="POST":   return verify_otp(json.loads(event.get("body") or "{}"))
     if path.endswith("/login") and method=="POST":        return login(json.loads(event.get("body") or "{}"))
 
+    # Protected endpoints (assumes Lambda Authorizer validates JWT; we only check presence)
     try: _auth(event)
     except Exception: return bad(401,"unauthorized")
 
-    if path.endswith("/instances") and method=="GET":     return instances(event, ctx)
-    if path.endswith("/instance-action") and method=="POST": return instances_action(event, ctx)  # compatibility alias
-    if path.endswith("/services") and method=="POST":     return services(event, ctx)
+    if path.endswith("/instances") and method=="GET":           return instances(event, ctx)
+    if path.endswith("/instance-action") and method=="POST":    return instance_action(event, ctx)
+    if path.endswith("/instances-action") and method=="POST":   return instances_action(event, ctx)  # back-compat
+    if path.endswith("/services") and method=="POST":           return services(event, ctx)
 
-    if path.endswith("/instance-action") and method=="POST": return instance_action(event, ctx)
     return bad(404,"not_found")
