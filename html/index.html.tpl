@@ -228,7 +228,7 @@ async function instAction(id, action){
   try{
     const r=await fetch(API+"/instance-action",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id,action})});
     const j=await r.json(); if(!r.ok) throw new Error(j.error||"internal");
-    toast(`${action} requested`);
+    toast(`$${action} requested`);
     await loadInstances();
   }catch(e){ toast(e.message); }
 }
@@ -242,7 +242,7 @@ async function bulkAction(env, blk, action){
       await fetch(API+"/instance-action",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:it.id,action})});
     }catch(_){}
   }
-  toast(`${action} requested for ${blk} in ${env}`);
+  toast(`$${action} requested for ${blk} in ${env}`);
   setTimeout(loadInstances, 1500);
 }
 
