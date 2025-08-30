@@ -473,7 +473,7 @@ CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
 [ "$CUR_ID"  = "None" ] && CUR_ID=""
 [ "$CUR_ARN" = "None" ] && CUR_ARN=""
 
-# derive profile name (last path segment) without ${...}
+
 CUR_PROFILE=$(printf "%s" "$CUR_ARN" | awk -F/ '{print $NF}')
 
 if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
