@@ -154,6 +154,8 @@ resource "aws_lambda_function" "api" {
   runtime       = "python3.12"
   timeout       = 30
 
+  source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
+
   environment {
     variables = {
       REGION            = var.aws_region
@@ -174,6 +176,8 @@ resource "aws_lambda_function" "authorizer" {
   handler       = "authorizer.lambda_handler"
   runtime       = "python3.12"
   timeout       = 10
+
+  source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
 
   environment {
     variables = {
