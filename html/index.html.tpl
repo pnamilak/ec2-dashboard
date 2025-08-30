@@ -7,10 +7,10 @@
   <style>
     :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a;--chip:#19243a;--brand:#7b8cff}
     body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
-    .wrap{max-width:1200px;margin:28px auto;padding:0 16px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .tile{background:var(--chip);padding:18px 22px;border-radius:16px;font-weight:800;box-shadow:0 0 0 1px #1c2840 inset}
-    .tile.big{font-size:28px}
+    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .tile{background:var(--chip);padding:14px 18px;border-radius:14px;font-weight:700;box-shadow:0 0 0 1px #1c2840 inset}
+    .tile.big{font-size:24px}
     .tabs .tab{background:var(--chip);padding:8px 14px;border-radius:12px;cursor:pointer}
     .tabs .tab.active{outline:2px solid var(--brand)}
     .box{background:var(--panel);border-radius:14px;padding:14px 16px;margin:12px 0}
@@ -24,10 +24,11 @@
     .chip{padding:6px 10px;background:#1a2742;border-radius:12px;font-size:12px}
     .mut{color:var(--mut);font-size:12px}
     .right{margin-left:auto}
+    .link{cursor:pointer;color:#bcd2ff}
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
     .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
-    .grid{display:grid;grid-template-columns:1fr 1fr 64px 64px;gap:10px}
-    input{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
+    .grid{display:grid;grid-template-columns:1fr 1fr 50px 50px;gap:10px}
+    input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
     .error{background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:10px;padding:8px 10px}
   </style>
 </head>
@@ -45,6 +46,7 @@
   </div>
 
   <div class="tabs row" id="envTabs"></div>
+
   <div id="envMount"></div>
 </div>
 
@@ -52,9 +54,9 @@
 <div class="modal" id="svcModal">
   <div class="card">
     <div class="row" style="margin-bottom:10px">
-      <div id="svcTitle" style="font-weight:800;font-size:18px">Services</div>
+      <div id="svcTitle" style="font-weight:700">Services</div>
       <div class="right"></div>
-      <input id="svcFilter" placeholder="Type to filter (name/display)" style="width:260px;display:none">
+      <input id="svcFilter" placeholder="Type to filter (Name or DisplayName)" style="width:260px;display:none">
       <button class="btn small" id="btnRefresh" onclick="svcRefresh()" style="display:none">Refresh</button>
       <button class="btn small" id="btnIIS" onclick="svcIISReset()" style="display:none">IIS Reset</button>
       <button class="btn small" onclick="closeSvc()">Back</button>
@@ -64,7 +66,7 @@
   </div>
 </div>
 
-<!-- Auth modal -->
+<!-- Auth modal(s) -->
 <div class="modal" id="authModal" style="display:flex">
   <div class="card" style="max-width:760px">
     <div class="row" style="gap:12px;margin-bottom:12px">
@@ -76,14 +78,14 @@
 
     <div id="paneOtp">
       <div class="row" style="gap:10px">
-        <input id="otpEmail" placeholder="name@{{allowed_email_domain}}" style="width:320px">
+        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="width:320px">
         <button class="btn" onclick="requestOtp()">Request OTP</button>
       </div>
       <div class="row" style="gap:10px;margin-top:10px">
         <input id="otpCode" placeholder="6-digit code" style="width:160px">
         <button class="btn" onclick="verifyOtp()">Verify OTP</button>
       </div>
-      <div class="mut" style="margin-top:8px">Allowed domain: {{allowed_email_domain}}</div>
+      <div class="mut" style="margin-top:8px">Allowed domain: ${allowed_email_domain}</div>
     </div>
 
     <div id="panePwd" style="display:none">
@@ -99,9 +101,9 @@
 </div>
 
 <script>
-  // ---------- config ----------
-  var API = "{{api_base_url}}";
-  var ENV_NAMES = "{{env_names}}".split(",");
+  // ---------- config (rendered by Terraform) ----------
+  var API = "${api_base_url}";
+  var ENV_NAMES = "${env_names}".split(",");
 
   // ---------- tiny helpers ----------
   function http(path, method, obj, bearer){
@@ -115,6 +117,7 @@
 
   // ---------- auth ----------
   function openLoginTab(){
+    // Open a clean login-only page
     var u = window.location.origin + window.location.pathname + "#/login";
     window.open(u, "_blank");
   }
@@ -122,19 +125,18 @@
     localStorage.removeItem("jwt");
     localStorage.removeItem("role");
     localStorage.removeItem("user");
-    localStorage.removeItem("otp_verified");
     refresh();
   }
   function closeAuth(){ $("authModal").style.display = "none"; }
   function showOtp(){ $("paneOtp").style.display="block"; $("panePwd").style.display="none"; }
-  function showPwd(){ $("paneOtp").style.display="none"; $("panePwd").style.display="block"; $("btnLogin").disabled = (localStorage.getItem("otp_verified")!=="1"); }
+  function showPwd(){ $("paneOtp").style.display="none"; $("panePwd").style.display="block"; }
 
   function requestOtp(){
     var em = $("otpEmail").value.trim();
     if(!em){ toast("enter email"); return; }
     http("/request-otp","POST",{email:em}).then(function(){
       toast("OTP sent");
-    }).catch(function(e){ toast(e.message); });
+    }).catch(function(e){ toast(e.message || "request failed"); });
   }
   function verifyOtp(){
     var em = $("otpEmail").value.trim();
@@ -159,7 +161,7 @@
       $("authModal").style.display="none";
       renderUser();
       refresh();
-    }).catch(function(){ toast("login failed"); });
+    }).catch(function(e){ toast(e.message || "login failed"); });
   }
   $("uPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ doLogin(); } });
 
@@ -177,11 +179,7 @@
 
   function refresh(){
     var jwt = localStorage.getItem("jwt");
-    if(!jwt){
-      $("authModal").style.display="flex";
-      if(window.location.hash.indexOf("/login")>=0) showPwd(); else showOtp();
-      return;
-    }
+    if(!jwt){ $("authModal").style.display="flex"; showOtp(); return; }
     http("/instances","GET",null,jwt).then(function(data){
       $("tTotal").textContent = "Total: " + data.summary.total;
       $("tRun").textContent   = "Running: " + data.summary.running;
@@ -203,7 +201,6 @@
     });
     setActive(0);
     drawEnv(envs[ENV_NAMES[0]]||{DM:[],EA:[]});
-
     function setActive(idx){
       var nodes = tabs.querySelectorAll(".tab");
       for(var k=0;k<nodes.length;k++){ nodes[k].classList.remove("active"); }
@@ -215,7 +212,7 @@
     var mount = $("envMount"); mount.innerHTML = "";
     ["Dream Mapper","Encore Anywhere"].forEach(function(section, si){
       var box = document.createElement("div"); box.className="box";
-      var head = document.createElement("div"); head.textContent = section; head.style.fontWeight="800"; head.style.marginBottom="8px";
+      var head = document.createElement("div"); head.textContent = section; head.style.fontWeight="700"; head.style.marginBottom="8px";
       box.appendChild(head);
 
       var list = si===0 ? (env.DM||[]) : (env.EA||[]);
@@ -254,16 +251,17 @@
     svcCtx.type = nm.indexOf("sql")>=0 ? "sql" : "svcweb";
     $("svcTitle").textContent = "Services on " + svcCtx.name;
 
+    // show/hide filter & IIS
     if(svcCtx.type==="sql"){
       $("svcFilter").style.display="none";
       $("btnRefresh").style.display="none";
       $("btnIIS").style.display="none";
-      $("svcHint").textContent = "Showing SQL Server & SQL Agent services (default + named instances).";
+      $("svcHint").textContent = "Showing SQL Server & SQL Agent services.";
     }else{
       $("svcFilter").style.display="inline-block";
       $("btnRefresh").style.display="inline-block";
       $("btnIIS").style.display="inline-block";
-      $("svcHint").textContent = "Type a fragment (e.g. 'w3svc', 'app', 'redis') and click Refresh.";
+      $("svcHint").textContent = "Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh.";
     }
 
     $("svcBody").innerHTML = "";
@@ -274,14 +272,16 @@
 
   function svcRefresh(){
     var body = { id: svcCtx.id, mode: "list", instanceName: svcCtx.name };
-    if(svcCtx.type!=="sql"){ body.pattern = $("svcFilter").value.trim(); }
+    if(svcCtx.type!=="sql"){
+      body.pattern = $("svcFilter").value.trim();
+    }
     http("/services","POST", body, localStorage.getItem("jwt"))
       .then(function(res){
         var mount = $("svcBody"); mount.innerHTML="";
         if(res.error){
           var tip = "";
-          if(res.error==="not_connected") tip = "SSM target not connected. Ensure SSM Agent is running, the instance has internet/VPC endpoints, and an instance profile with AmazonSSMManagedInstanceCore is attached.";
-          else if(res.error==="denied") tip = "SSM access denied. Ensure the Lambda role allows ssm:SendCommand and the instance profile trusts SSM.";
+          if(res.error==="not_connected") tip = "SSM target not connected. Check SSM Agent is running, instance has internet/VPC endpoints, and the instance profile is attached.";
+          else if(res.error==="denied") tip = "SSM access denied. Ensure the Lambda role has ssm:SendCommand & the instance profile trusts SSM.";
           var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + res.error + ". " + tip;
           mount.appendChild(d);
           return;
@@ -292,8 +292,9 @@
           mount.appendChild(d2);
           return;
         }
-        var role = (localStorage.getItem("role")||"read").toLowerCase();
+        // grid
         var g = document.createElement("div"); g.className="grid";
+        var role = (localStorage.getItem("role")||"read").toLowerCase();
         for(var i=0;i<svcs.length;i++){
           var s = svcs[i];
           var n = document.createElement("div"); n.textContent = s.Name || "";
@@ -323,8 +324,16 @@
   // ---------- first paint ----------
   (function init(){
     renderUser();
-    if(window.location.hash.indexOf("/login")>=0){ $("authModal").style.display="flex"; showPwd(); }
-    else { $("authModal").style.display="flex"; showOtp(); }
+
+    // Decide which auth pane to show based on hash
+    if(window.location.hash.indexOf("/login")>=0){
+      $("authModal").style.display="flex"; showPwd();
+      // gating on OTP flag
+      $("btnLogin").disabled = (localStorage.getItem("otp_verified")!=="1");
+    }else{
+      $("authModal").style.display="flex"; showOtp();
+    }
+
     refresh();
   })();
 </script>
