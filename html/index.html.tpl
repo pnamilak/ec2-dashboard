@@ -5,47 +5,50 @@
 <title>EC2 Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body { background:#0f1522; color:#e6eefc; font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,"Noto Sans"; margin:0; }
+  :root { --bg:#0f1522; --card:#0e1526; --ink:#e6eefc; --muted:#98a7c6; --edge:#1c2742; --chip:#121b2d;
+          --btn:#2a3b63; --btn-ok:#1f8b4c; --btn-bad:#c14646; --btn-info:#4164cc; }
+  body { background:var(--bg); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,"Noto Sans"; margin:0;}
   .wrap { max-width:1100px; margin:24px auto 80px; padding:0 16px; }
   h1 { font-size:22px; margin:0 0 14px 0; }
-  .pill { display:inline-block; padding:8px 12px; border-radius:12px; background:#121b2d; margin-right:8px; font-size:14px; }
+  .pill { display:inline-block; padding:8px 12px; border-radius:12px; background:var(--chip); margin-right:8px; font-size:14px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .btn { border:0; border-radius:10px; padding:8px 14px; cursor:pointer; background:#2a3b63; color:#cfe1ff; }
+  .btn { border:0; border-radius:10px; padding:8px 14px; cursor:pointer; background:var(--btn); color:#cfe1ff; }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
-  .btn-green { background:#1f8b4c; color:#fff;}
-  .btn-red   { background:#c14646; color:#fff;}
-  .btn-blue  { background:#4164cc; color:#fff;}
-  .muted { color:#98a7c6; }
-  .card { background:#0e1526; border:1px solid #1c2742; border-radius:14px; padding:14px; box-shadow:0 8px 20px rgb(0 0 0 / .25); }
+  .btn-green { background:var(--btn-ok); color:#fff;}
+  .btn-red   { background:var(--btn-bad); color:#fff;}
+  .btn-blue  { background:var(--btn-info); color:#fff;}
+  .muted { color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--edge); border-radius:14px; padding:14px; box-shadow:0 8px 20px rgb(0 0 0 / .25); }
   .grid { display:grid; gap:10px; }
   .inst { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#0c1322; border:1px solid #1b2746; border-radius:10px; }
   .right { display:flex; gap:8px; align-items:center; }
-  .tabs { display:flex; gap:10px; margin:12px 0; }
-  .tab { background:#121b2c; border:1px solid #1c2742; color:#cfe1ff; padding:8px 12px; border-radius:10px; cursor:pointer; }
+  .tabs { display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; }
+  .tab { background:#121b2c; border:1px solid var(--edge); color:#cfe1ff; padding:8px 12px; border-radius:10px; cursor:pointer; }
   .status { color:#98f5b0; margin-right:6px; }
-  dialog { border:0; border-radius:14px; padding:0; background:#0d1526; color:#e6eefc; }
+  dialog { border:0; border-radius:14px; padding:0; background:var(--card); color:var(--ink); }
   dialog .pad { padding:16px 18px; min-width:720px; }
   input[type=text]{ background:#0c1322; border:1px solid #1b2746; color:#d7e6ff; padding:10px 12px; border-radius:10px; width:280px; }
   .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
+  .topright { display:flex; align-items:center; gap:10px; }
   .toast { position:fixed; top:16px; right:16px; padding:10px 12px; border-radius:8px; background:#223155; color:#d8e6ff; z-index:9999; }
-  .badge { padding:5px 8px; font-size:12px; border-radius:7px; background:#162348; border:1px solid #20325c; }
+  .hint { font-size:12px; color:var(--muted); margin-top:4px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="topbar">
     <h1>EC2 Dashboard</h1>
-    <div class="right">
-      <span id="userPill" class="pill muted">guest</span>
-      <button class="btn" onclick="logout()">Sign out</button>
+    <div class="topright">
+      <span id="userPill" class="pill muted">guest · user</span>
+      <button id="btnSignout" class="btn" onclick="logout()">Sign out</button>
     </div>
   </div>
 
-  <div class="row" style="gap:10px; margin-bottom:10px;">
+  <div class="row" style="gap:10px; margin-bottom:10px; flex-wrap:wrap;">
     <span class="pill">Total: <b id="tTotal">0</b></span>
     <span class="pill">Running: <b id="tRun">0</b></span>
     <span class="pill">Stopped: <b id="tStop">0</b></span>
-    <div style="flex:1"></div>
+    <div style="flex:1 1 auto;"></div>
     <button class="btn" onclick="load()">Refresh</button>
   </div>
 
@@ -60,7 +63,6 @@
       <div class="right"></div>
     </div>
 
-    <!-- filter for svc/web only -->
     <div class="row" style="margin-bottom:10px; gap:8px;">
       <input id="svcFilter" type="text" placeholder="Type to filter (for SVC/WEB)" style="display:none;">
       <div class="right">
@@ -74,45 +76,37 @@
     <div id="svcList" class="grid" style="margin-bottom:8px;"></div>
     <div id="sqlInfo" class="muted" style="display:none; margin-top:6px;"></div>
     <div id="svcDiag" class="muted" style="white-space:pre-wrap;"></div>
+    <div class="hint">If a request fails, the dialog will auto-run <b>SSM Ping</b> and show the reason here.</div>
   </div>
 </dialog>
 
 <div id="toaster"></div>
 
 <script>
-  // --- config from Terraform ---
+  // --- config injected by Terraform ---
   const API = "${api_base_url}";
   const ALLOWED_DOMAIN = "${allowed_email_domain}";
   const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 
-  // --- auth helpers ---
+  // --- helpers ---
   function auth(){ return {"Authorization": localStorage.getItem("token") || ""}; }
-  function setUserPill(){
-    try{
-      const u = JSON.parse(localStorage.getItem("user") || "{}");
-      const pill = document.getElementById("userPill");
-      const role = (u.role || "user").toLowerCase();
-      pill.textContent = (u.name || u.username || "user") + " · " + role;
-    }catch{}
-  }
-  function logout(){ localStorage.clear(); location.reload(); }
-
-  // --- small UI helpers ---
   function el(id){ return document.getElementById(id); }
   function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), 3500); }
 
+  function setUserPill(){
+    let name = "guest", role = "user";
+    try { const u = JSON.parse(localStorage.getItem("user") || "{}"); name = u.name || u.username || "user"; role = (u.role || "user").toLowerCase(); } catch {}
+    el("userPill").textContent = `${name} · ${role}`;
+    // Signout always visible; if no token, show "guest · user" but button still there
+  }
+  function logout(){ localStorage.clear(); location.reload(); }
+  function currentRole(){ try{ return (JSON.parse(localStorage.getItem("user")||"{}").role||"user").toLowerCase(); }catch{return "user";} }
+
   // --- state ---
-  let DATA = null;
-  let TAB  = null; // current env
-  let ROLE = "user";
+  let DATA = null, TAB = null, ROLE = "user";
   const SVC_CTX = { id:"", name:"" };
 
-  function currentUserRole(){
-    try{ return (JSON.parse(localStorage.getItem("user")||"{}").role || "user").toLowerCase(); }
-    catch{return "user";}
-  }
-
-  // --- load instances ---
+  // --- list instances ---
   function load(){
     fetch(API + "/instances", {headers:auth()})
       .then(r => r.json().then(j => ({ok:r.ok,j})))
@@ -140,13 +134,8 @@
   function instRow(inst){
     const r = document.createElement("div"); r.className="inst";
     const left = document.createElement("div");
-    left.innerHTML = `<b>${inst.name}</b> <span class="muted">(${inst.id})</span>`;
+    left.innerHTML = `<span class="status">${inst.state||""}</span><b>${inst.name}</b> <span class="muted">(${inst.id})</span>`;
     const right = document.createElement("div"); right.className="right";
-
-    const status = document.createElement("span");
-    status.className="status";
-    status.textContent = inst.state || "";
-    left.prepend(status);
 
     const btnStart = document.createElement("button"); btnStart.className="btn btn-green"; btnStart.textContent="Start All";
     btnStart.onclick=()=>bulk(inst.id,"start");
@@ -155,9 +144,7 @@
     const btnSvc   = document.createElement("button"); btnSvc.className="btn btn-blue"; btnSvc.textContent="Services";
     btnSvc.onclick=()=>openServices(inst.id, inst.name);
 
-    // read-only users cannot start/stop instances
-    const ro = (ROLE!=="admin");
-    btnStart.disabled = ro; btnStop.disabled = ro;
+    const ro = (ROLE!=="admin"); btnStart.disabled=ro; btnStop.disabled=ro;
 
     right.append(btnStart, btnStop, btnSvc);
     r.append(left, right);
@@ -165,8 +152,7 @@
   }
 
   function renderEnv(env){
-    const wrap = el("container"); wrap.innerHTML="";
-    ROLE = currentUserRole();
+    const wrap = el("container"); wrap.innerHTML=""; ROLE = currentRole();
 
     ["DM","EA"].forEach(block=>{
       const card = document.createElement("div"); card.className="card";
@@ -189,7 +175,7 @@
   }
 
   // -------------------- Services modal --------------------
-  function rowForService(name, status){
+  function rowForService(name){
     const d = document.createElement("div"); d.className="inst";
     const left = document.createElement("div"); left.textContent = name;
     const right = document.createElement("div"); right.className="right";
@@ -207,17 +193,15 @@
     SVC_CTX.id = id; SVC_CTX.name = name;
     el("svcInstName").textContent = name;
     el("svcDiag").textContent = "";
-    el("sqlInfo").style.display="none";
-    el("sqlInfo").textContent="";
+    el("sqlInfo").style.display="none"; el("sqlInfo").textContent="";
     const n = name.toLowerCase();
 
     // default controls
     el("svcFilter").style.display = "none";
     const iisBtn = el("btnIIS"); iisBtn.style.display = "none";
-    // read-only lock
     const ro = (ROLE!=="admin"); iisBtn.disabled = ro; el("btnRefresh").disabled=false; el("btnPing").disabled=false;
 
-    // show textbox + IIS Reset only for svc/web
+    // show filter + IIS for svc/web
     if(n.includes("svc") || n.includes("web")){
       el("svcFilter").style.display = "inline-block";
       iisBtn.style.display = "inline-block";
@@ -225,9 +209,8 @@
 
     el("svcDlg").showModal();
 
-    // fixed lists for sql/redis; else generic
     if(n.includes("sql")){
-      loadSQLPack();     // includes service status + OS + SQL versions
+      loadSQLPack();   // preferred path
     } else if (n.includes("redis")){
       loadServicesFixed(["Redis"]);
     } else {
@@ -237,10 +220,8 @@
 
   function loadServicesFixed(list){
     const svcList = el("svcList"); svcList.innerHTML="";
-    list.forEach(function(name){
-      svcList.appendChild(rowForService(name, ""));
-    });
-    // also try to fetch current status
+    list.forEach(n => svcList.appendChild(rowForService(n)));
+    // fetch current status for visibility
     list.forEach(n => fetchServiceStatus(n));
   }
 
@@ -251,11 +232,10 @@
       body: JSON.stringify({id:SVC_CTX.id, mode:"list", pattern: svcName})
     }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
       if(!res.ok) return;
-      // repopulate list to reflect the status for these names
       const arr = Array.isArray(res.j.services) ? res.j.services : (res.j.services ? [res.j.services] : []);
       if(arr.length){
         const svcList = el("svcList"); svcList.innerHTML="";
-        arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
+        arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"")));
       }
     });
   }
@@ -270,28 +250,40 @@
     })
     .then(r=>r.json().then(j=>({ok:r.ok,j})))
     .then(res=>{
-      if(!res.ok){ el("svcDiag").textContent = res.j.error || "internal"; toast(res.j.error||"internal"); return; }
+      if(!res.ok){ failAndPing(res.j); return; }
       let arr = res.j.services || [];
       if(!Array.isArray(arr)) arr = [arr];
       if(arr.length===0) svcList.innerHTML = '<div class="muted">No matching services.</div>';
-      arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
-    });
+      arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"")));
+    })
+    .catch(e => failAndPing({error:String(e)}));
   }
 
   function loadSQLPack(){
     const svcList = el("svcList"); svcList.innerHTML=""; el("svcDiag").textContent="";
+    // 1) Try full sqlinfo (status + OS + versions)
     fetch(API + "/services", {
       method:"POST",
       headers: Object.assign({"Content-Type":"application/json"}, auth()),
       body: JSON.stringify({id:SVC_CTX.id, mode:"sqlinfo"})
-    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
-      if(!res.ok){ el("svcDiag").textContent = res.j.error || "internal"; toast(res.j.error||"internal"); return; }
+    })
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(res=>{
+      if(!res.ok){
+        // 2) Fallback: show core SQL service names so user still sees/start/stops them
+        svcList.appendChild(rowForService("MSSQLSERVER"));
+        svcList.appendChild(rowForService("SQLSERVERAGENT"));
+        // also try to fetch their current status quickly:
+        fetchServiceStatus("MSSQLSERVER");
+        fetchServiceStatus("SQLSERVERAGENT");
+        failAndPing(res.j);
+        return;
+      }
       let svcs = res.j.services || [];
       if(!Array.isArray(svcs)) svcs = [svcs];
       if(svcs.length===0) svcList.innerHTML = '<div class="muted">No SQL services found.</div>';
-      svcs.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
+      svcs.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"")));
 
-      // OS + SQL versions
       const os = res.j.os || {};
       const list = res.j.sql || [];
       const lines = [];
@@ -304,6 +296,14 @@
         el("sqlInfo").style.display="block";
         el("sqlInfo").textContent = lines.join("\n");
       }
+    })
+    .catch(e=>{
+      // same fallback on network/parse error
+      svcList.appendChild(rowForService("MSSQLSERVER"));
+      svcList.appendChild(rowForService("SQLSERVERAGENT"));
+      fetchServiceStatus("MSSQLSERVER");
+      fetchServiceStatus("SQLSERVERAGENT");
+      failAndPing({error:String(e)});
     });
   }
 
@@ -313,9 +313,11 @@
       headers: Object.assign({"Content-Type":"application/json"}, auth()),
       body: JSON.stringify({id:SVC_CTX.id, mode, service})
     }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
-      if(!res.ok){ toast(res.j.error||"error"); return; }
-      loadServices(); // refresh list
-    });
+      if(!res.ok){ failAndPing(res.j); return; }
+      // refresh list
+      const n = (SVC_CTX.name||"").toLowerCase();
+      if(n.includes("sql")) loadSQLPack(); else loadServices();
+    }).catch(e=> failAndPing({error:String(e)}));
   }
 
   function iisReset(){
@@ -326,13 +328,18 @@
       body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})
     }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
       if(res.ok){ toast("IIS Reset completed"); loadServices(); }
-      else { toast(res.j.error||"IIS Reset failed"); el("svcDiag").textContent = res.j.error || ""; }
-    });
+      else { failAndPing(res.j); }
+    }).catch(e=> failAndPing({error:String(e)}));
   }
 
-  // Diagnostics
+  // Diagnostics + unified failure handler
+  function failAndPing(msg){
+    toast(msg && msg.error ? msg.error : "internal");
+    el("svcDiag").textContent = (msg && msg.error) ? ("Error: " + msg.error) : "Error: internal";
+    ssmPing(); // auto run
+  }
+
   function ssmPing(){
-    el("svcDiag").textContent = "Pinging SSM…";
     fetch(API + "/ssm-ping", {
       method:"POST",
       headers: Object.assign({"Content-Type":"application/json"}, auth()),
@@ -343,8 +350,10 @@
           "\nmanaged: " + res.j.managed + "\n\nstdout:\n" + (res.j.stdout||"") +
           (res.j.stderr ? ("\n\nstderr:\n"+res.j.stderr) : "");
       } else {
-        el("svcDiag").textContent = res.j.error || "internal";
+        el("svcDiag").textContent = "SSM ping failed: " + (res.j.error || "internal");
       }
+    }).catch(e=>{
+      el("svcDiag").textContent = "SSM ping failed: " + String(e);
     });
   }
 
