@@ -24,7 +24,6 @@
     .chip{padding:6px 10px;background:#1a2742;border-radius:12px;font-size:12px}
     .mut{color:var(--mut);font-size:12px}
     .right{margin-left:auto}
-    .link{cursor:pointer;color:#bcd2ff}
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
     .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
     .grid{display:grid;grid-template-columns:1fr 1fr 50px 50px;gap:10px}
@@ -40,7 +39,7 @@
     <div class="tile big" id="tStop">Stopped: 0</div>
     <div class="right"></div>
     <div class="chip" id="userBadge" style="display:none"></div>
-    <button class="btn small" onclick="openLoginTab()">Login</button>
+    <button class="btn small" onclick="openLogin()">Login</button>
     <button class="btn small" onclick="logout()">Sign out</button>
     <button class="btn small" onclick="refresh()">Refresh</button>
   </div>
@@ -66,8 +65,8 @@
   </div>
 </div>
 
-<!-- Auth modal(s) -->
-<div class="modal" id="authModal" style="display:flex">
+<!-- Auth modal -->
+<div class="modal" id="authModal">
   <div class="card" style="max-width:760px">
     <div class="row" style="gap:12px;margin-bottom:12px">
       <button id="tabOtp" class="btn small" onclick="showOtp()">Email OTP</button>
@@ -105,7 +104,7 @@
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
 
-  // ---------- tiny helpers ----------
+  // ---------- helpers ----------
   function http(path, method, obj, bearer){
     var h = {"content-type":"application/json"};
     if(bearer){ h["authorization"] = "Bearer " + bearer; }
@@ -116,15 +115,12 @@
   function toast(msg){ alert(msg); }
 
   // ---------- auth ----------
-  function openLoginTab(){
-    // Open a clean login-only page
-    var u = window.location.origin + window.location.pathname + "#/login";
-    window.open(u, "_blank");
-  }
+  function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
   function logout(){
     localStorage.removeItem("jwt");
     localStorage.removeItem("role");
     localStorage.removeItem("user");
+    localStorage.removeItem("otp_verified");
     refresh();
   }
   function closeAuth(){ $("authModal").style.display = "none"; }
@@ -145,8 +141,10 @@
     http("/verify-otp","POST",{email:em, code:cd})
       .then(function(){
         localStorage.setItem("otp_verified","1");
-        toast("OTP verified. Opening login…");
-        openLoginTab();
+        // Switch to password login on the SAME tab
+        showPwd();
+        $("btnLogin").disabled = false;
+        $("uName").focus();
       })
       .catch(function(){ toast("invalid OTP"); });
   }
@@ -170,7 +168,8 @@
     var u = localStorage.getItem("user");
     if(u){
       var o = JSON.parse(u);
-      $("userBadge").textContent = (o.name||o.username) + " • " + (o.role||"");
+      var role = (o.role||localStorage.getItem("role")||"").toString();
+      $("userBadge").textContent = (o.name||o.username||"") + (role ? " • " + role : "");
       $("userBadge").style.display="inline-block";
     }else{
       $("userBadge").style.display="none";
@@ -251,7 +250,6 @@
     svcCtx.type = nm.indexOf("sql")>=0 ? "sql" : "svcweb";
     $("svcTitle").textContent = "Services on " + svcCtx.name;
 
-    // show/hide filter & IIS
     if(svcCtx.type==="sql"){
       $("svcFilter").style.display="none";
       $("btnRefresh").style.display="none";
@@ -272,17 +270,15 @@
 
   function svcRefresh(){
     var body = { id: svcCtx.id, mode: "list", instanceName: svcCtx.name };
-    if(svcCtx.type!=="sql"){
-      body.pattern = $("svcFilter").value.trim();
-    }
+    if(svcCtx.type!=="sql") body.pattern = $("svcFilter").value.trim();
     http("/services","POST", body, localStorage.getItem("jwt"))
       .then(function(res){
         var mount = $("svcBody"); mount.innerHTML="";
         if(res.error){
           var tip = "";
           if(res.error==="not_connected") tip = "SSM target not connected. Check SSM Agent is running, instance has internet/VPC endpoints, and the instance profile is attached.";
-          else if(res.error==="denied") tip = "SSM access denied. Ensure the Lambda role has ssm:SendCommand & the instance profile trusts SSM.";
-          var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + res.error + ". " + tip;
+          else if(res.error==="denied") tip = "SSM access denied. Ensure Lambda role and instance profile permissions are correct.";
+          var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + res.error + (res.reason? " ("+res.reason+")":"") + ". " + tip;
           mount.appendChild(d);
           return;
         }
@@ -292,7 +288,6 @@
           mount.appendChild(d2);
           return;
         }
-        // grid
         var g = document.createElement("div"); g.className="grid";
         var role = (localStorage.getItem("role")||"read").toLowerCase();
         for(var i=0;i<svcs.length;i++){
@@ -324,16 +319,8 @@
   // ---------- first paint ----------
   (function init(){
     renderUser();
-
-    // Decide which auth pane to show based on hash
-    if(window.location.hash.indexOf("/login")>=0){
-      $("authModal").style.display="flex"; showPwd();
-      // gating on OTP flag
-      $("btnLogin").disabled = (localStorage.getItem("otp_verified")!=="1");
-    }else{
-      $("authModal").style.display="flex"; showOtp();
-    }
-
+    $("authModal").style.display="flex";
+    showOtp(); // default landing is OTP
     refresh();
   })();
 </script>

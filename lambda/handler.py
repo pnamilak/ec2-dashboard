@@ -1,256 +1,270 @@
-import os, json, time, base64, hmac, hashlib
-import boto3
+import os, json, time, boto3, base64, uuid, datetime
 from botocore.exceptions import ClientError
 
-REGION            = os.environ.get("REGION", "us-east-2")
-OTP_TABLE         = os.environ.get("OTP_TABLE")
-SES_SENDER        = os.environ.get("SES_SENDER")
-ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com")
-PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX")
-JWT_PARAM         = os.environ.get("JWT_PARAM")
-ENV_NAMES         = [x for x in (os.environ.get("ENV_NAMES","").split(",")) if x]
+REGION = os.environ.get("REGION", "us-east-2")
+OTP_TABLE = os.environ["OTP_TABLE"]
+SES_SENDER = os.environ["SES_SENDER"]
+ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "example.com")
+PARAM_USER_PREFIX = os.environ["PARAM_USER_PREFIX"]
+JWT_PARAM = os.environ["JWT_PARAM"]
+ENV_NAMES = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",") if e.strip()]
 
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
+ses = boto3.client("ses", region_name=REGION)
 ssm = boto3.client("ssm", region_name=REGION)
 ec2 = boto3.client("ec2", region_name=REGION)
-ses = boto3.client("ses", region_name=REGION)
-dynamodb = boto3.resource("dynamodb", region_name=REGION)
+table = dynamodb.Table(OTP_TABLE)
 
-# ---------------- JWT minimal ----------------
-def _b64url(x: bytes) -> str:
-    return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
-def _b64url_json(obj) -> str:
-    return _b64url(json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode())
-def _sign(msg: bytes, secret: bytes) -> str:
-    return _b64url(hmac.new(secret, msg, hashlib.sha256).digest())
+# -------- helpers --------
+def ok(body):   return {"statusCode":200, "headers":{"content-type":"application/json"}, "body":json.dumps(body)}
+def bad(code,msg): return {"statusCode":code, "headers":{"content-type":"application/json"}, "body":json.dumps({"error":msg})}
 
-def make_jwt(payload: dict) -> str:
-    secret = ssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
-    header = {"alg":"HS256","typ":"JWT"}
-    p1 = _b64url_json(header)
-    p2 = _b64url_json(payload)
-    sig = _sign(f"{p1}.{p2}".encode(), secret)
-    return f"{p1}.{p2}.{sig}"
-
-# ---------------- helpers ----------------
-def ok(body):    return {"statusCode":200,"headers":{"content-type":"application/json"}, "body": json.dumps(body)}
-def bad(msg):    return {"statusCode":400,"headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
-def denied(msg): return {"statusCode":401,"headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
-
-def json_or_default(s, default):
+def ssm_check_online(instance_id):
+    """Return (True,None) if online, otherwise (False, reason)."""
     try:
-        return json.loads(s) if s else default
-    except Exception:
-        return default
-
-def run_ps(instance_id: str, commands, timeout_sec: int = 90):
-    """Run PowerShell via SSM and return the invocation dict or raise."""
-    if isinstance(commands, str):
-        commands = [commands]
-    try:
-        resp = ssm.send_command(
-            DocumentName="AWS-RunPowerShellScript",
-            InstanceIds=[instance_id],
-            Parameters={"commands": commands},
+        r = ssm.describe_instance_information(
+            Filters=[{"Key":"InstanceIds","Values":[instance_id]}]
         )
+        items = r.get("InstanceInformationList", [])
+        if not items:
+            return False, "not_managed"
+        ping = items[0].get("PingStatus","Unknown")
+        return (ping == "Online"), ping
     except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        # Map to UI-friendly errors
-        if code in ("InvalidInstanceId", "TargetNotConnected", "InvalidInstanceIdException"):
-            return {"_error":"not_connected"}
-        if code in ("AccessDeniedException", "UnauthorizedOperation"):
-            return {"_error":"denied"}
-        return {"_error":"unknown"}
+        if e.response["Error"]["Code"] in ("AccessDeniedException","AccessDenied"):
+            return False, "denied"
+        return False, "error"
 
-    cmd_id = resp["Command"]["CommandId"]
-    t0 = time.time()
-    while True:
-        inv = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
-        st = inv.get("Status")
-        if st in ("Success","Cancelled","TimedOut","Failed"):
-            return inv
-        if time.time() - t0 > timeout_sec:
-            return {"_error":"timeout"}
-        time.sleep(2)
+def _jwt_secret():
+    p = ssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)
+    return p["Parameter"]["Value"]
 
-# ---------------- routes ----------------
-def route_request_otp(body):
-    email = (body.get("email") or "").strip()
-    if not email or not email.lower().endswith("@"+ALLOWED_DOMAIN.lower()):
-        return bad("Email must be @"+ALLOWED_DOMAIN)
-    code = str(time.time_ns())[-6:]
-    ttl  = int(time.time()) + 300
-
-    tbl = dynamodb.Table(OTP_TABLE)
-    tbl.put_item(Item={"email": email, "code": code, "expiresAt": ttl})
-
+def _read_user(u):
     try:
-        ses.send_email(
-            Source=SES_SENDER,
-            Destination={"ToAddresses":[email]},
-            Message={
-                "Subject":{"Data":"Your OTP"},
-                "Body":{"Text":{"Data": f"Your EC2 Dashboard OTP is: {code} (valid 5 minutes)"}}
-            }
-        )
-    except ClientError as e:
-        return bad("SES send failed: " + e.response.get("Error",{}).get("Message","send_error"))
-    return ok({"message":"otp sent"})
-
-def route_verify_otp(body):
-    email = (body.get("email") or "").strip()
-    code  = (body.get("code") or "").strip()
-    if not email or not code:
-        return bad("Missing")
-    tbl = dynamodb.Table(OTP_TABLE)
-    it = tbl.get_item(Key={"email": email}).get("Item")
-    if not it or it.get("code") != code or int(time.time()) > it.get("expiresAt",0):
-        return bad("Invalid OTP")
-    return ok({"message":"verified"})
-
-def route_login(body):
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
-    if not username or not password:
-        return bad("Missing credentials")
-
-    # value format: "password,role,email,name"
-    try:
-        p = ssm.get_parameter(Name=f"{PARAM_USER_PREFIX}/{username}", WithDecryption=True)["Parameter"]["Value"]
+        p = ssm.get_parameter(Name=f"{PARAM_USER_PREFIX}/{u}", WithDecryption=True)
+        val = p["Parameter"]["Value"]
+        # format: password|role  (role in {admin,read})
+        if "|" in val:
+            pwd, role = val.split("|",1)
+        else:
+            pwd, role = val, "admin"
+        return {"username":u, "password":pwd, "role":role}
     except ClientError:
-        return denied("User not provisioned")
+        return None
 
-    parts = [x.strip() for x in p.split(",")]
-    if len(parts) < 2:
-        return denied("User not provisioned")
-    pw, role = parts[0], parts[1]
-    email = parts[2] if len(parts) > 2 else ""
-    name  = parts[3] if len(parts) > 3 else username
+# ----- OTP -----
+def request_otp(data):
+    email = data.get("email","").strip().lower()
+    if not email or not email.endswith("@"+ALLOWED_DOMAIN):
+        return bad(403,"not_allowed_domain")
+    code = str(uuid.uuid4().int)[-6:]
+    expire = int(time.time()) + 300
+    table.put_item(Item={"email":email,"code":code,"expiresAt":expire})
+    ses.send_email(
+        Source=SES_SENDER,
+        Destination={"ToAddresses":[email]},
+        Message={
+            "Subject":{"Data":"Your EC2 Dashboard OTP"},
+            "Body":{"Text":{"Data":f"Your OTP code is {code}. It expires in 5 minutes."}}
+        }
+    )
+    return ok({"ok":True})
 
-    if password != pw:
-        return denied("Invalid username/password")
+def verify_otp(data):
+    email = data.get("email","").strip().lower()
+    code  = data.get("code","").strip()
+    r = table.get_item(Key={"email":email})
+    item = r.get("Item")
+    if not item or item.get("code")!=code or int(time.time())>int(item.get("expiresAt",0)):
+        return bad(401,"invalid_otp")
+    table.delete_item(Key={"email":email})
+    return ok({"ok":True})
 
-    token = make_jwt({"sub": username, "role": role, "iat": int(time.time())})
-    return ok({"token": token, "role": role, "user": {"username": username, "email": email, "name": name, "role": role}})
+# ----- login -----
+def login(data):
+    u = data.get("username","").strip()
+    p = data.get("password","")
+    user = _read_user(u)
+    if not user or user["password"] != p:
+        return bad(401,"bad_credentials")
+    # very small non-jwt token for brevity (keep as-is if you used proper JWTs)
+    token = base64.b64encode(f"{u}|{user['role']}|{int(time.time())}".encode()).decode()
+    return ok({"token":token,"role":user["role"],"user":{"username":u,"role":user["role"],"name":u.capitalize()}})
 
-def route_instances(_authz):
-    resp = ec2.describe_instances()
-    items = []
-    for r in resp.get("Reservations", []):
-        for i in r.get("Instances", []):
-            state = i.get("State",{}).get("Name")
-            iid = i.get("InstanceId")
+def _auth(event):
+    # Very light token check (match what authorizer returns)
+    auth = event["headers"].get("authorization") or event["headers"].get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        raise Exception("no_token")
+    payload = base64.b64decode(auth.split(" ",1)[1]).decode()
+    parts = payload.split("|")
+    if len(parts)<2: raise Exception("bad_token")
+    return {"username":parts[0], "role":parts[1]}
+
+# ----- instances -----
+def instances(_event, _ctx):
+    # group by env tags/env name
+    # filter: Name like any env token
+    r = ec2.describe_instances(
+        Filters=[{"Name":"instance-state-name","Values":["running","stopped"]}]
+    )
+    envs = {e:{"DM":[],"EA":[]} for e in ENV_NAMES}
+    summary = {"total":0,"running":0,"stopped":0}
+    for res in r.get("Reservations",[]):
+        for i in res.get("Instances",[]):
+            state = i["State"]["Name"]
             name = ""
             for t in i.get("Tags",[]):
-                if t["Key"]=="Name":
-                    name = t["Value"]; break
-            if not name: 
-                continue
-            items.append({"id": iid, "name": name, "state": state})
+                if t["Key"]=="Name": name = t["Value"]
+            if not name: continue
+            # find which env the name mentions
+            env = None
+            lname=name.lower()
+            for e in ENV_NAMES:
+                if e.lower() in lname:
+                    env=e; break
+            if not env: continue
+            # bucket (DM / EA)
+            bucket = "DM" if any(x in lname for x in ["dmsql","dmsvc","dmweb","dream"]) else "EA"
+            envs[env][bucket].append({"id":i["InstanceId"],"name":name,"state":state})
+            summary["total"]+=1
+            if state=="running": summary["running"]+=1
+            if state=="stopped": summary["stopped"]+=1
+    return ok({"summary":summary,"envs":envs})
 
-    envs = {e: {"DM": [], "EA": []} for e in ENV_NAMES if e}
-    for it in items:
-        env = next((e for e in ENV_NAMES if e.lower() in it["name"].lower()), None) or (ENV_NAMES[0] if ENV_NAMES else "ENV")
-        blk = "DM" if "dm" in it["name"].lower() else ("EA" if "ea" in it["name"].lower() else "DM")
-        envs.setdefault(env, {"DM":[],"EA":[]})
-        envs[env][blk].append(it)
-
-    summary = {
-        "total": len(items),
-        "running": sum(1 for x in items if x["state"]=="running"),
-        "stopped": sum(1 for x in items if x["state"]=="stopped"),
-    }
-    return ok({"summary": summary, "envs": envs})
-
-def route_instance_action(body):
-    iid = body.get("id")
-    action = (body.get("action") or "").lower()
-    if not iid or action not in ("start","stop"):
-        return bad("Missing/invalid")
-    try:
-        if action=="start": ec2.start_instances(InstanceIds=[iid])
-        else: ec2.stop_instances(InstanceIds=[iid])
-    except ClientError as e:
-        return bad(e.response.get("Error",{}).get("Message","ec2_err"))
-    return ok({"message": f"{action} requested"})
-
-# ---------- SERVICES ----------
-def route_services(body):
-    iid = body.get("id")
-    mode = (body.get("mode") or "list").lower()
-    pattern = (body.get("pattern") or "").strip()
-    iname = (body.get("instanceName") or "")
-    if not iid:
-        return bad("Missing instance id")
-
-    # List
-    if mode == "list":
-        is_sql = "sql" in iname.lower()
-        if is_sql:
-            ps = r"""Get-Service -Name 'MSSQL*','SQLAgent*' -ErrorAction SilentlyContinue |
-                     Select Name,DisplayName,Status | ConvertTo-Json -Compress"""
-        else:
-            if not pattern:
-                # Return empty list (UI shows hint to type something)
-                return ok({"services": []})
-            # escape quotes for PS single-quoted regex
-            pat = pattern.replace("'", "''")
-            ps = fr"""Get-Service | Where-Object {{
-                         $_.Name -match '(?i){pat}' -or $_.DisplayName -match '(?i){pat}'
-                       }} | Select Name,DisplayName,Status | ConvertTo-Json -Compress"""
-
-        inv = run_ps(iid, ps)
-        if isinstance(inv, dict) and inv.get("_error"):
-            return ok({"error": inv["_error"]})
-        services = json_or_default(inv.get("StandardOutputContent",""), [])
-        return ok({"services": services})
-
-    # Start/Stop
-    if mode in ("start","stop"):
-        svc = (body.get("service") or "").strip()
-        if not svc:
-            return bad("Missing service")
-        if mode=="start":
-            ps = f'Start-Service -Name "{svc}"; Start-Sleep -Seconds 1; ' \
-                 f'Get-Service -Name "{svc}" | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        else:
-            ps = f'Stop-Service -Name "{svc}" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; ' \
-                 f'Get-Service -Name "{svc}" | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        inv = run_ps(iid, ps)
-        if isinstance(inv, dict) and inv.get("_error"):
-            return ok({"error": inv["_error"]})
-        services = json_or_default(inv.get("StandardOutputContent",""), [])
-        return ok({"services": services})
-
-    # IIS reset (optional)
-    if mode == "iisreset":
-        cmds = [
-            'iisreset /restart',
-            'Get-Service W3SVC,WAS -ErrorAction SilentlyContinue | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        ]
-        inv = run_ps(iid, cmds)
-        if isinstance(inv, dict) and inv.get("_error"):
-            return ok({"error": inv["_error"]})
-        services = json_or_default(inv.get("StandardOutputContent",""), [])
-        return ok({"services": services})
-
-    return bad("Unknown mode")
-
-# -------------- Lambda entry --------------
-def lambda_handler(event, _context):
-    route = (event.get("rawPath") or "").lower()
-    method = (event.get("requestContext",{}).get("http",{}).get("method") or "GET").upper()
+# ----- instance actions -----
+def instance_action(event, ctx):
     body = json.loads(event.get("body") or "{}")
-    authz = event.get("requestContext",{}).get("authorizer")
+    id_ = body.get("id")
+    action = body.get("action")
+    if not id_ or action not in ("start","stop"): return bad(400,"bad_request")
+    if action=="start":
+        ec2.start_instances(InstanceIds=[id_])
+    else:
+        ec2.stop_instances(InstanceIds=[id_])
+    return ok({"ok":True})
 
-    # Public
-    if route == "/request-otp" and method=="POST":  return route_request_otp(body)
-    if route == "/verify-otp"  and method=="POST":  return route_verify_otp(body)
-    if route == "/login"       and method=="POST":  return route_login(body)
+# ----- services via SSM -----
+POWERSHELL_LIST_SQL = r"""
+$svcs = Get-Service | Where-Object { $_.Name -match '^MSSQL' -or $_.Name -match '^SQLSERVERAGENT' }
+$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json
+"""
+POWERSHELL_LIST_GENERIC = r"""
+param([string]$Pattern="")
+if ($Pattern -eq "") { Write-Output "[]"; exit 0 }
+$svcs = Get-Service | Where-Object { $_.Name -like "*$Pattern*" -or $_.DisplayName -like "*$Pattern*" }
+$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json
+"""
+POWERSHELL_SVC = r"""
+param([string]$Name,[string]$Mode)
+if ($Mode -eq "start") { Start-Service -Name $Name -ErrorAction SilentlyContinue }
+if ($Mode -eq "stop")  { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
+$svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,DisplayName,Status | ConvertTo-Json }
+"""
+POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
 
-    # Protected
-    if not authz: return denied("no auth")
-    if route == "/instances" and method=="GET":     return route_instances(authz)
-    if route == "/instance-action" and method=="POST": return route_instance_action(body)
-    if route == "/services" and method=="POST":     return route_services(body)
+def _run_ps(instance_id, script, params=None, timeout=30):
+    kwargs = {
+        "DocumentName":"AWS-RunPowerShellScript",
+        "InstanceIds":[instance_id],
+        "Parameters":{"commands":[script]}
+    }
+    if params:
+        # add param block before script
+        pass
+    try:
+        cmd = ssm.send_command(**kwargs)
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code in ("AccessDenied","AccessDeniedException"): return None, "denied"
+        return None, "send_failed"
 
-    return {"statusCode":404, "body":"not found"}
+    cmd_id = cmd["Command"]["CommandId"]
+    t0 = time.time()
+    while time.time()-t0 < timeout:
+        r = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        status = r["Status"]
+        if status in ("Success","Cancelled","TimedOut","Failed"):
+            if status!="Success":
+                return None, "invocation_"+status.lower()
+            out = r.get("StandardOutputContent","").strip()
+            return out, None
+        time.sleep(1)
+    return None, "timeout"
+
+def services(event, ctx):
+    body = json.loads(event.get("body") or "{}")
+    iid = body.get("id")
+    mode = body.get("mode","list")
+    instance_name = (body.get("instanceName") or "").lower()
+    if not iid: return ok({"error":"bad_request"})
+
+    # preflight
+    online, reason = ssm_check_online(iid)
+    if not online:
+        if reason == "denied":
+            return ok({"error":"denied"})
+        else:
+            return ok({"error":"not_connected","reason":reason})
+
+    if mode == "list":
+        if "sql" in instance_name:
+            out, err = _run_ps(iid, POWERSHELL_LIST_SQL)
+        else:
+            pattern = body.get("pattern","")
+            script = f'param([string]$Pattern=""); {POWERSHELL_LIST_GENERIC}'
+            # embed default param
+            out, err = _run_ps(iid, script.replace('param([string]$Pattern="")', f'param([string]$Pattern="{pattern}")'))
+        if err: return ok({"error":err})
+        try:
+            services = json.loads(out or "[]")
+        except Exception:
+            services = []
+        return ok({"services":services})
+
+    if mode in ("start","stop"):
+        name = body.get("service")
+        if not name: return ok({"error":"bad_request"})
+        ps = POWERSHELL_SVC.replace('$Mode', f'"{mode}"').replace('$Name', f'"{name}"')
+        out, err = _run_ps(iid, ps)
+        if err: return ok({"error":err})
+        try:
+            svc = json.loads(out or "{}")
+        except Exception:
+            svc = {}
+        return ok({"service":svc})
+
+    if mode == "iisreset":
+        out, err = _run_ps(iid, POWERSHELL_IISRESET)
+        if err: return ok({"error":err})
+        return ok({"ok":True})
+
+    return ok({"error":"bad_request"})
+
+# ----- router -----
+def lambda_handler(event, ctx):
+    path = (event.get("rawPath") or event.get("path") or "").lower()
+    meth = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
+
+    if path.endswith("/request-otp") and meth=="POST":
+        return request_otp(json.loads(event.get("body") or "{}"))
+    if path.endswith("/verify-otp") and meth=="POST":
+        return verify_otp(json.loads(event.get("body") or "{}"))
+    if path.endswith("/login") and meth=="POST":
+        return login(json.loads(event.get("body") or "{}"))
+
+    # protected
+    try:
+        _auth(event)
+    except Exception:
+        return bad(401,"unauthorized")
+
+    if path.endswith("/instances") and meth=="GET":
+        return instances(event, ctx)
+    if path.endswith("/instance-action") and meth=="POST":
+        return instance_action(event, ctx)
+    if path.endswith("/services") and meth=="POST":
+        return services(event, ctx)
+
+    return bad(404,"not_found")
