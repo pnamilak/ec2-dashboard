@@ -1,342 +1,358 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta charset="utf-8">
 <title>EC2 Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root{
-    --bg:#0b1220; --card:#111827; --ink:#e5e7eb; --muted:#9aa3b2; --line:#1f2937; --pill:#0f172a;
-    --green:#4ade80; --green-d:#22c55e; --red:#f87171; --red-d:#ef4444; --blue:#93c5fd; --blue-d:#3b82f6;
-  }
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink)}
-  .wrap{max-width:1100px;margin:0 auto;padding:28px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 20px 50px rgba(0,0,0,.25)}
-  input,button,select{border-radius:12px;border:1px solid var(--line);background:#0f172a;color:var(--ink);padding:10px 12px}
-  input{min-width:220px}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  .col{flex:1}
-  .tab{padding:10px 14px;border:1px solid var(--line);border-bottom:none;border-radius:12px 12px 0 0;background:#0f172a;margin-right:6px;cursor:pointer;color:#cbd5e1;font-weight:600}
-  .tab.active{background:#172033;border-color:#263244}
-  .inst{display:flex;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:12px;padding:10px;margin:8px 0;background:#0f172a}
-  .status.running{color:#86efac;font-weight:700} .status.stopped{color:#fda4af;font-weight:700} .status.terminated{color:#fbbf24;font-weight:700}
-  .muted{color:var(--muted)}
-  .pill{padding:3px 10px;border-radius:999px;background:var(--pill);border:1px solid var(--line);margin-right:6px;font-weight:600}
-  dialog{border:none;border-radius:16px;background:#0f172a;color:var(--ink);box-shadow:0 30px 90px rgba(0,0,0,.45);width:min(760px,92vw)}
-  .right{display:flex;gap:10px}
-  .btn{cursor:pointer;font-weight:700;box-shadow:0 2px 0 rgba(0,0,0,.25)} .btn:active{transform:translateY(1px)}
-  .btn-green{background:var(--green);border-color:var(--green-d);color:#0b1220} .btn-green:hover{background:var(--green-d);color:#fff}
-  .btn-red{background:var(--red);border-color:var(--red-d);color:#0b1220} .btn-red:hover{background:var(--red-d);color:#fff}
-  .btn-gray{background:var(--blue);border-color:var(--blue-d);color:#0b1220} .btn-gray:hover{background:var(--blue-d);color:#fff}
-  #toasts{position:fixed;top:14px;right:14px;display:flex;flex-direction:column;gap:8px;z-index:50}
-  .toast{background:#0f172a;border:1px solid var(--line);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
-  #userBar{position:fixed;top:12px;right:12px;display:flex;gap:8px;align-items:center}
+  body { background:#0f1522; color:#e6eefc; font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,"Noto Sans"; margin:0; }
+  .wrap { max-width:1100px; margin:24px auto 80px; padding:0 16px; }
+  h1 { font-size:22px; margin:0 0 14px 0; }
+  .pill { display:inline-block; padding:8px 12px; border-radius:12px; background:#121b2d; margin-right:8px; font-size:14px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .btn { border:0; border-radius:10px; padding:8px 14px; cursor:pointer; background:#2a3b63; color:#cfe1ff; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-green { background:#1f8b4c; color:#fff;}
+  .btn-red   { background:#c14646; color:#fff;}
+  .btn-blue  { background:#4164cc; color:#fff;}
+  .muted { color:#98a7c6; }
+  .card { background:#0e1526; border:1px solid #1c2742; border-radius:14px; padding:14px; box-shadow:0 8px 20px rgb(0 0 0 / .25); }
+  .grid { display:grid; gap:10px; }
+  .inst { display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#0c1322; border:1px solid #1b2746; border-radius:10px; }
+  .right { display:flex; gap:8px; align-items:center; }
+  .tabs { display:flex; gap:10px; margin:12px 0; }
+  .tab { background:#121b2c; border:1px solid #1c2742; color:#cfe1ff; padding:8px 12px; border-radius:10px; cursor:pointer; }
+  .status { color:#98f5b0; margin-right:6px; }
+  dialog { border:0; border-radius:14px; padding:0; background:#0d1526; color:#e6eefc; }
+  dialog .pad { padding:16px 18px; min-width:720px; }
+  input[type=text]{ background:#0c1322; border:1px solid #1b2746; color:#d7e6ff; padding:10px 12px; border-radius:10px; width:280px; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;}
+  .toast { position:fixed; top:16px; right:16px; padding:10px 12px; border-radius:8px; background:#223155; color:#d8e6ff; z-index:9999; }
+  .badge { padding:5px 8px; font-size:12px; border-radius:7px; background:#162348; border:1px solid #20325c; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h2>EC2 Dashboard</h2>
-
-  <!-- STEP 1: Email + OTP -->
-  <div id="step1" class="card">
-    <h3>Step 1: Email OTP (allowed domain: <span class="pill">@${allowed_email_domain}</span>)</h3>
-    <div class="row">
-      <div class="col"><input id="email" placeholder="you@${allowed_email_domain}" style="width:100%"/></div>
-      <div><button class="btn btn-gray" id="btnReqOtp">Request OTP</button></div>
+  <div class="topbar">
+    <h1>EC2 Dashboard</h1>
+    <div class="right">
+      <span id="userPill" class="pill muted">guest</span>
+      <button class="btn" onclick="logout()">Sign out</button>
     </div>
-    <div class="row">
-      <div class="col"><input id="otp" placeholder="Enter 6-digit OTP" style="width:100%"/></div>
-      <div><button class="btn btn-gray" id="btnVerifyOtp">Verify OTP</button></div>
-    </div>
-    <div id="msg1" class="muted"></div>
   </div>
 
-  <!-- STEP 2: Username/Password -->
-  <div id="step2" class="card" style="display:none">
-    <h3>Step 2: Login</h3>
-    <div class="row">
-      <input id="username" placeholder="Username"/>
-      <input id="password" type="password" placeholder="Password"/>
-      <button class="btn btn-gray" id="btnLogin">Login</button>
-    </div>
-    <div id="msg2" class="muted"></div>
+  <div class="row" style="gap:10px; margin-bottom:10px;">
+    <span class="pill">Total: <b id="tTotal">0</b></span>
+    <span class="pill">Running: <b id="tRun">0</b></span>
+    <span class="pill">Stopped: <b id="tStop">0</b></span>
+    <div style="flex:1"></div>
+    <button class="btn" onclick="load()">Refresh</button>
   </div>
 
-  <!-- STEP 3: Dashboard -->
-  <div id="dash" style="display:none">
-    <div class="card">
-      <div id="summary"></div>
-    </div>
-    <div class="row" id="env-tabs"></div>
-    <div id="env-panels"></div>
-  </div>
+  <div id="envTabs" class="tabs"></div>
+  <div id="container"></div>
 </div>
 
-<!-- Services dialog -->
 <dialog id="svcDlg">
-  <div style="padding:16px">
-    <h3>Services on <span id="svcInstName"></span></h3>
-    <div class="row">
-      <input id="svcFilter" placeholder="Type to filter (for SVC/WEB)"/>
-      <button class="btn btn-gray" id="btnSvcRefresh">Refresh</button>
-      <button class="btn btn-gray" id="btnIIS" data-iis>IIS Reset</button>
-      <button class="btn btn-gray" id="btnPing">SSM Ping</button>
-      <button class="btn btn-gray" id="btnSvcClose">Close</button>
+  <div class="pad">
+    <div class="row" style="margin-bottom:8px;">
+      <div><b>Services on <span id="svcInstName"></span></b></div>
+      <div class="right"></div>
     </div>
-    <div id="svcList" style="margin-top:12px"></div>
-    <div id="sqlInfo" class="muted" style="margin-top:8px"></div>
+
+    <!-- filter for svc/web only -->
+    <div class="row" style="margin-bottom:10px; gap:8px;">
+      <input id="svcFilter" type="text" placeholder="Type to filter (for SVC/WEB)" style="display:none;">
+      <div class="right">
+        <button id="btnRefresh" class="btn" onclick="loadServices()">Refresh</button>
+        <button id="btnIIS" class="btn" style="display:none;" onclick="iisReset()">IIS Reset</button>
+        <button id="btnPing" class="btn" onclick="ssmPing()">SSM Ping</button>
+        <button class="btn" onclick="el('svcDlg').close()">Close</button>
+      </div>
+    </div>
+
+    <div id="svcList" class="grid" style="margin-bottom:8px;"></div>
+    <div id="sqlInfo" class="muted" style="display:none; margin-top:6px;"></div>
+    <div id="svcDiag" class="muted" style="white-space:pre-wrap;"></div>
   </div>
 </dialog>
 
-<div id="userBar" style="display:none"></div>
-<div id="toasts"></div>
+<div id="toaster"></div>
 
 <script>
-(function(){
-  var API = "${api_base_url}";
-  var ENV_NAMES = "${env_names}".split(",").filter(Boolean);
+  // --- config from Terraform ---
+  const API = "${api_base_url}";
+  const ALLOWED_DOMAIN = "${allowed_email_domain}";
+  const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
 
-  var TOKEN = localStorage.getItem("token") || null;
-  var USER  = JSON.parse(localStorage.getItem("user") || "null");
-  var READONLY = USER ? (USER.role !== "admin") : true;
-  var CURRENT_ENV = localStorage.getItem("current_env") || null;
-  var SVC_CTX = { id:null, name:null };
+  // --- auth helpers ---
+  function auth(){ return {"Authorization": localStorage.getItem("token") || ""}; }
+  function setUserPill(){
+    try{
+      const u = JSON.parse(localStorage.getItem("user") || "{}");
+      const pill = document.getElementById("userPill");
+      const role = (u.role || "user").toLowerCase();
+      pill.textContent = (u.name || u.username || "user") + " · " + role;
+    }catch{}
+  }
+  function logout(){ localStorage.clear(); location.reload(); }
 
+  // --- small UI helpers ---
   function el(id){ return document.getElementById(id); }
-  function toast(t){ var d=document.createElement('div'); d.className='toast'; d.textContent=t; el('toasts').appendChild(d); setTimeout(function(){ d.remove(); }, 5000); }
-  function auth(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN} : {}; }
-  function merge(a,b){ var o={}; for(var k in a)o[k]=a[k]; for(var k2 in b)o[k2]=b[k2]; return o; }
+  function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(), 3500); }
 
-  function setUserBar(){
-    var bar = document.getElementById("userBar");
-    if(!USER){ bar.style.display="none"; return; }
-    bar.style.display="flex";
-    bar.innerHTML = '';
-    var chip = document.createElement("div"); chip.className="pill"; chip.textContent = (USER.name || USER.username) + " · " + USER.role;
-    var btn  = document.createElement("button"); btn.className="btn btn-gray"; btn.textContent="Sign out";
-    btn.onclick = function(){ localStorage.removeItem("token"); localStorage.removeItem("user"); TOKEN=null; USER=null; READONLY=true; location.reload(); };
-    bar.appendChild(chip); bar.appendChild(btn);
+  // --- state ---
+  let DATA = null;
+  let TAB  = null; // current env
+  let ROLE = "user";
+  const SVC_CTX = { id:"", name:"" };
+
+  function currentUserRole(){
+    try{ return (JSON.parse(localStorage.getItem("user")||"{}").role || "user").toLowerCase(); }
+    catch{return "user";}
   }
 
-  // --- auth/otp/login ---
-  function requestOtp(){
-    fetch(API + "/request-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:el("email").value.trim()})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => { el("msg1").textContent = res.ok ? "OTP sent." : (res.j.error || "Failed"); });
-  }
-  function verifyOtp(){
-    fetch(API + "/verify-otp", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({email:el("email").value.trim(), code:el("otp").value.trim()})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => { if(res.ok){ el("step2").style.display="block"; toast("OTP verified. Login to continue."); } else { toast(res.j.error||"Failed"); }});
-  }
-  function login(){
-    fetch(API + "/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({username:el("username").value.trim(),password:el("password").value.trim()})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => {
-        if(res.ok){
-          TOKEN = res.j.token; USER = res.j.user; READONLY = USER ? (USER.role !== "admin") : true;
-          localStorage.setItem("token", TOKEN); localStorage.setItem("user", JSON.stringify(USER||{}));
-          showDash(); setUserBar(); loadDashboard();
-        } else { el("msg2").textContent = res.j.error || "Login failed"; }
+  // --- load instances ---
+  function load(){
+    fetch(API + "/instances", {headers:auth()})
+      .then(r => r.json().then(j => ({ok:r.ok,j})))
+      .then(res => {
+        if(!res.ok){ toast(res.j.error||"Error"); return; }
+        DATA = res.j;
+        el("tTotal").textContent = res.j.summary.total;
+        el("tRun").textContent   = res.j.summary.running;
+        el("tStop").textContent  = res.j.summary.stopped;
+        buildTabs();
+        renderEnv(TAB || ENV_NAMES[0] || Object.keys(res.j.envs)[0]);
       });
   }
-  function showDash(){ el("step1").style.display="none"; el("step2").style.display="none"; el("dash").style.display="block"; }
 
-  // --- dashboard ---
-  function loadDashboard(){
-    fetch(API + "/instances", {headers: auth()})
-    .then(r => r.json().then(j => ({ok:r.ok, j})))
-    .then(res => {
-      if(!res.ok){ toast(res.j.error || "Auth failed"); return; }
-      el("summary").innerHTML =
-        '<span class="pill">Total: ' + res.j.summary.total + '</span>' +
-        '<span class="pill">Running: ' + res.j.summary.running + '</span>' +
-        '<span class="pill">Stopped: ' + res.j.summary.stopped + '</span>' +
-        '<button class="btn btn-gray" style="float:right" id="btnRefresh">Refresh</button>';
-      el("btnRefresh").onclick = loadDashboard;
-      renderEnvTabs(res.j.envs);
+  function buildTabs(){
+    const tabs = el("envTabs"); tabs.innerHTML = "";
+    const names = ENV_NAMES.length ? ENV_NAMES : Object.keys(DATA.envs);
+    names.forEach(n=>{
+      const b=document.createElement("button"); b.className="tab"; b.textContent=n;
+      b.onclick=()=>{TAB=n; renderEnv(n);}
+      tabs.appendChild(b);
     });
   }
 
-  function renderEnvTabs(envs){
-    var tabs = el("env-tabs"); tabs.innerHTML = "";
-    ENV_NAMES.forEach(function(e){
-      var t = document.createElement("div");
-      var active = (!CURRENT_ENV && ENV_NAMES[0]===e) || (CURRENT_ENV===e);
-      t.className = "tab" + (active ? " active" : "");
-      t.textContent = e;
-      t.addEventListener("click", function(){
-        Array.prototype.forEach.call(tabs.children, c => c.classList.remove("active"));
-        t.classList.add("active"); CURRENT_ENV = e; localStorage.setItem("current_env", e);
-        renderEnvPanel(envs, e);
-      });
-      tabs.appendChild(t);
-    });
-    if(!CURRENT_ENV) CURRENT_ENV = ENV_NAMES[0];
-    renderEnvPanel(envs, CURRENT_ENV);
+  function instRow(inst){
+    const r = document.createElement("div"); r.className="inst";
+    const left = document.createElement("div");
+    left.innerHTML = `<b>${inst.name}</b> <span class="muted">(${inst.id})</span>`;
+    const right = document.createElement("div"); right.className="right";
+
+    const status = document.createElement("span");
+    status.className="status";
+    status.textContent = inst.state || "";
+    left.prepend(status);
+
+    const btnStart = document.createElement("button"); btnStart.className="btn btn-green"; btnStart.textContent="Start All";
+    btnStart.onclick=()=>bulk(inst.id,"start");
+    const btnStop  = document.createElement("button"); btnStop.className="btn btn-red"; btnStop.textContent="Stop All";
+    btnStop.onclick=()=>bulk(inst.id,"stop");
+    const btnSvc   = document.createElement("button"); btnSvc.className="btn btn-blue"; btnSvc.textContent="Services";
+    btnSvc.onclick=()=>openServices(inst.id, inst.name);
+
+    // read-only users cannot start/stop instances
+    const ro = (ROLE!=="admin");
+    btnStart.disabled = ro; btnStop.disabled = ro;
+
+    right.append(btnStart, btnStop, btnSvc);
+    r.append(left, right);
+    return r;
   }
 
-  function renderEnvPanel(envs, env){
-    var p = el("env-panels"); p.innerHTML = ""; var data = envs[env] || {DM:[], EA:[]};
-    ["DM","EA"].forEach(function(blk){
-      var blockName = blk==="DM" ? "Dream Mapper" : "Encore Anywhere";
-      var card = document.createElement("div"); card.className="card";
-      var head = document.createElement("div"); head.style.display="flex"; head.style.justifyContent="space-between"; head.style.alignItems="center";
-      var h3 = document.createElement("h3"); h3.textContent = blockName; head.appendChild(h3);
-      var actions = document.createElement("div"); actions.className="right";
-      var bStartAll = document.createElement("button"); bStartAll.className="btn btn-green"; bStartAll.textContent="Start All";
-      var bStopAll  = document.createElement("button");  bStopAll.className="btn btn-red";   bStopAll.textContent="Stop All";
-      bStartAll.onclick = function(){ if(READONLY) return toast("View-only user"); groupAction(env, blk, "start"); };
-      bStopAll.onclick  = function(){ if(READONLY) return toast("View-only user"); groupAction(env, blk, "stop"); };
-      if(READONLY){ bStartAll.disabled=true; bStopAll.disabled=true; bStartAll.title=bStopAll.title="View-only user"; }
-      actions.appendChild(bStartAll); actions.appendChild(bStopAll); head.appendChild(actions);
-      var list = document.createElement("div");
-      card.appendChild(head); card.appendChild(list); p.appendChild(card);
+  function renderEnv(env){
+    const wrap = el("container"); wrap.innerHTML="";
+    ROLE = currentUserRole();
 
-      (data[blk] || []).forEach(function(inst){
-        var row = document.createElement("div"); row.className="inst";
-        var left = document.createElement("div");
-        var strong = document.createElement("strong"); strong.textContent = inst.name;
-        var spanId = document.createElement("span"); spanId.className="muted"; spanId.textContent = " (" + inst.id + ")";
-        left.appendChild(strong); left.appendChild(document.createTextNode(" ")); left.appendChild(spanId);
+    ["DM","EA"].forEach(block=>{
+      const card = document.createElement("div"); card.className="card";
+      const title = document.createElement("div"); title.innerHTML = `<b>${block==="DM" ? "Dream Mapper" : "Encore Anywhere"}</b>`;
+      card.append(title);
 
-        var right = document.createElement("div"); right.className="right";
-        var status = document.createElement("span"); status.className="status " + inst.state; status.textContent = inst.state;
-
-        var bToggle = document.createElement("button");
-        if(inst.state === "running"){ bToggle.className="btn btn-red"; bToggle.textContent="Stop"; bToggle.onclick = function(){ if(READONLY) return toast("View-only user"); act(inst.id,"stop",inst.name); }; }
-        else { bToggle.className="btn btn-green"; bToggle.textContent="Start"; bToggle.onclick = function(){ if(READONLY) return toast("View-only user"); act(inst.id,"start",inst.name); }; }
-        if(READONLY){ bToggle.disabled=true; bToggle.title="View-only user"; }
-
-        var bSvc = document.createElement("button"); bSvc.className="btn btn-gray"; bSvc.textContent="Services";
-        bSvc.onclick = function(){ openServices(inst.id, inst.name); };
-
-        right.appendChild(status); right.appendChild(bToggle); right.appendChild(bSvc);
-        row.appendChild(left); row.appendChild(right); list.appendChild(row);
-      });
+      (DATA.envs[env] && DATA.envs[env][block] || []).forEach(i=> card.appendChild(instRow(i)));
+      wrap.appendChild(card);
     });
   }
 
-  function act(id, action, name){
-    toast((action==="start"?"Starting":"Stopping") + ": " + name);
-    fetch(API + "/instance-action", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:id, action:action})})
-      .then(r => r.json().then(j => ({ok:r.ok, j})))
-      .then(res => { if(!res.ok) toast(res.j.error||"Failed"); pollUntilStable(); });
+  function bulk(id, action){
+    fetch(API + "/instance-action", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id, action})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      toast(res.ok ? (res.j.message||"ok") : (res.j.error||"error"));
+    });
   }
-  function groupAction(env, block, action){
-    toast((action==="start"?"Starting":"Stopping") + " ALL in " + env + " / " + block);
-    // Optional: back-end can implement; for now just refresh loop
-    pollUntilStable(60);
-  }
-  var pollTimer=null;
-  function pollUntilStable(maxSecs){ if(typeof maxSecs!=="number") maxSecs = 45; if(pollTimer) clearInterval(pollTimer);
-    var start=Date.now(); pollTimer=setInterval(function(){ loadDashboard(); if((Date.now()-start)/1000 > maxSecs){ clearInterval(pollTimer); } }, 3000); }
 
-  // --- services modal ---
-  function isWebOrSvc(n){ n=n.toLowerCase(); return n.includes("svc") || n.includes("web"); }
-
-  function openServices(id, name){
-    SVC_CTX.id = id; SVC_CTX.name=name;
-    el("svcInstName").textContent = name;
-    el("svcFilter").value="";
-    var n = name.toLowerCase();
-
-    // Toggle controls
-    var iisBtn = el("btnIIS");
-    var pingBtn = el("btnPing");
-    if(iisBtn){ iisBtn.style.display = isWebOrSvc(n) ? "inline-block" : "none"; iisBtn.disabled = READONLY; iisBtn.title = READONLY ? "View-only user" : ""; }
-    if(pingBtn){ pingBtn.onclick = ssmPing; }
-    el("svcFilter").style.display = isWebOrSvc(n) ? "inline-block" : "none";
-    el("sqlInfo").innerHTML = ""; el("svcList").innerHTML="";
-
-    el("svcDlg").showModal();
-
-    if(n.includes("sql")){
-      loadSqlInfo();
-    } else if(n.includes("redis")){
-      el("svcFilter").style.display="none";
-      loadServices("redis");
-    } else {
-      loadServices(); // default list with filter box
-    }
-  }
-  function closeSvc(){ el("svcDlg").close(); }
-
+  // -------------------- Services modal --------------------
   function rowForService(name, status){
-    var d = document.createElement("div"); d.className="inst";
-    var left = document.createElement("div"); left.innerHTML = name + ' <span class="pill">' + (status||"") + '</span>';
-    var right = document.createElement("div"); right.className="right";
-    var bStart = document.createElement("button"); bStart.className="btn btn-green"; bStart.textContent="Start";
-    bStart.onclick = function(){ if(READONLY) return toast("View-only user"); svc(name, "start"); };
-    var bStop  = document.createElement("button");  bStop.className="btn btn-red";   bStop.textContent="Stop";
-    bStop.onclick = function(){ if(READONLY) return toast("View-only user"); svc(name, "stop"); };
-    if(READONLY){ bStart.disabled=true; bStop.disabled=true; bStart.title=bStop.title="View-only user"; }
-    right.appendChild(bStart); right.appendChild(bStop);
-    d.appendChild(left); d.appendChild(right);
+    const d = document.createElement("div"); d.className="inst";
+    const left = document.createElement("div"); left.textContent = name;
+    const right = document.createElement("div"); right.className="right";
+    const bStart = document.createElement("button"); bStart.className="btn btn-green"; bStart.textContent="Start";
+    const bStop  = document.createElement("button"); bStop.className="btn btn-red";   bStop.textContent="Stop";
+    const ro = (ROLE!=="admin"); bStart.disabled = ro; bStop.disabled = ro;
+    bStart.onclick = ()=>svc(name,"start");
+    bStop.onclick  = ()=>svc(name,"stop");
+    right.append(bStart,bStop);
+    d.append(left,right);
     return d;
   }
 
-  function loadServices(pat){
-    var list = el("svcList"); list.innerHTML = "";
-    var pattern = (typeof pat === "string") ? pat : el("svcFilter").value.trim();
-    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"list", pattern:pattern})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => {
-        if(!res.ok){ toast(res.j.error || "Internal"); return; }
-        var arr = res.j.services || [];
-        if(!Array.isArray(arr)) arr = [arr];
-        if(arr.length===0) list.innerHTML='<div class="muted">No matching services.</div>';
-        arr.forEach(function(s){
-          var name = s.Name || s.name || "";
-          var status = s.Status || s.status || "";
-          list.appendChild(rowForService(name, status));
-        });
-      });
+  function openServices(id, name){
+    SVC_CTX.id = id; SVC_CTX.name = name;
+    el("svcInstName").textContent = name;
+    el("svcDiag").textContent = "";
+    el("sqlInfo").style.display="none";
+    el("sqlInfo").textContent="";
+    const n = name.toLowerCase();
+
+    // default controls
+    el("svcFilter").style.display = "none";
+    const iisBtn = el("btnIIS"); iisBtn.style.display = "none";
+    // read-only lock
+    const ro = (ROLE!=="admin"); iisBtn.disabled = ro; el("btnRefresh").disabled=false; el("btnPing").disabled=false;
+
+    // show textbox + IIS Reset only for svc/web
+    if(n.includes("svc") || n.includes("web")){
+      el("svcFilter").style.display = "inline-block";
+      iisBtn.style.display = "inline-block";
+    }
+
+    el("svcDlg").showModal();
+
+    // fixed lists for sql/redis; else generic
+    if(n.includes("sql")){
+      loadSQLPack();     // includes service status + OS + SQL versions
+    } else if (n.includes("redis")){
+      loadServicesFixed(["Redis"]);
+    } else {
+      loadServices();
+    }
   }
 
-  function loadSqlInfo(){
-    var list = el("svcList"); list.innerHTML = "";
-    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"sqlinfo"})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => {
-        if(!res.ok){ toast(res.j.error || "Internal"); return; }
-        var svcs = res.j.services || []; if(!Array.isArray(svcs)) svcs = [svcs];
-        svcs.forEach(function(s){ list.appendChild(rowForService(s.Name || s.name || "", s.Status || s.status || "")); });
-        var os = res.j.os || {};
-        var sql = res.j.sql || [];
-        var html = "";
-        if(os.Caption){ html += '<div class="pill">OS: '+os.Caption+' '+(os.Version||'')+' (Build '+(os.BuildNumber||'')+')</div>'; }
-        if(sql && sql.length){
-          html += '<div style="margin-top:6px">';
-          sql.forEach(function(i){ html += '<div class="pill">SQL '+(i.Instance||'')+': '+(i.Version||'')+' ('+(i.PatchLevel||'')+')</div>'; });
-          html += '</div>';
-        }
-        el("sqlInfo").innerHTML = html;
-      });
+  function loadServicesFixed(list){
+    const svcList = el("svcList"); svcList.innerHTML="";
+    list.forEach(function(name){
+      svcList.appendChild(rowForService(name, ""));
+    });
+    // also try to fetch current status
+    list.forEach(n => fetchServiceStatus(n));
   }
 
-  function svc(name, action){
-    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => { if(!res.ok){ toast(res.j.error || "Failed"); } setTimeout(function(){ if(SVC_CTX.name.toLowerCase().includes("sql")) loadSqlInfo(); else loadServices(); }, 1200); });
+  function fetchServiceStatus(svcName){
+    fetch(API + "/services", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode:"list", pattern: svcName})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      if(!res.ok) return;
+      // repopulate list to reflect the status for these names
+      const arr = Array.isArray(res.j.services) ? res.j.services : (res.j.services ? [res.j.services] : []);
+      if(arr.length){
+        const svcList = el("svcList"); svcList.innerHTML="";
+        arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
+      }
+    });
   }
+
+  function loadServices(){
+    const svcList = el("svcList"); svcList.innerHTML=""; el("svcDiag").textContent="";
+    const pattern = el("svcFilter").value.trim();
+    fetch(API + "/services", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode:"list", pattern})
+    })
+    .then(r=>r.json().then(j=>({ok:r.ok,j})))
+    .then(res=>{
+      if(!res.ok){ el("svcDiag").textContent = res.j.error || "internal"; toast(res.j.error||"internal"); return; }
+      let arr = res.j.services || [];
+      if(!Array.isArray(arr)) arr = [arr];
+      if(arr.length===0) svcList.innerHTML = '<div class="muted">No matching services.</div>';
+      arr.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
+    });
+  }
+
+  function loadSQLPack(){
+    const svcList = el("svcList"); svcList.innerHTML=""; el("svcDiag").textContent="";
+    fetch(API + "/services", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode:"sqlinfo"})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      if(!res.ok){ el("svcDiag").textContent = res.j.error || "internal"; toast(res.j.error||"internal"); return; }
+      let svcs = res.j.services || [];
+      if(!Array.isArray(svcs)) svcs = [svcs];
+      if(svcs.length===0) svcList.innerHTML = '<div class="muted">No SQL services found.</div>';
+      svcs.forEach(s => svcList.appendChild(rowForService(s.Name||s.name||"", s.Status||s.status||"")));
+
+      // OS + SQL versions
+      const os = res.j.os || {};
+      const list = res.j.sql || [];
+      const lines = [];
+      if(os && (os.Caption||os.Version)) lines.push("OS: " + (os.Caption||"") + " (" + (os.Version||"") + ")");
+      if(Array.isArray(list) && list.length){
+        lines.push("SQL Instances:");
+        list.forEach(x => lines.push(" - " + (x.Instance||"") + "  " + (x.Version||"") + (x.PatchLevel ? "  ("+x.PatchLevel+")" : "")));
+      }
+      if(lines.length){
+        el("sqlInfo").style.display="block";
+        el("sqlInfo").textContent = lines.join("\n");
+      }
+    });
+  }
+
+  function svc(service, mode){
+    fetch(API + "/services", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode, service})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      if(!res.ok){ toast(res.j.error||"error"); return; }
+      loadServices(); // refresh list
+    });
+  }
+
   function iisReset(){
-    if(READONLY){ return toast("View-only user"); }
-    toast("Performing IIS Reset...");
-    fetch(API + "/services", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => { if(res.ok){ toast("IIS Reset completed"); } else { toast(res.j.error || "IIS Reset failed"); }});
+    toast("Performing IIS Reset…");
+    fetch(API + "/services", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id, mode:"iisreset"})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      if(res.ok){ toast("IIS Reset completed"); loadServices(); }
+      else { toast(res.j.error||"IIS Reset failed"); el("svcDiag").textContent = res.j.error || ""; }
+    });
   }
+
+  // Diagnostics
   function ssmPing(){
-    fetch(API + "/ssm-ping", {method:"POST", headers:merge({"Content-Type":"application/json"}, auth()), body: JSON.stringify({id:SVC_CTX.id})})
-      .then(r => r.json().then(j => ({ok:r.ok, j}))).then(res => {
-        if(res.ok){ toast("Ping: "+res.j.status+" — check console for output"); console.log("SSM PING OUT:", res.j); }
-        else { toast(res.j.error || "Ping failed"); }
-      });
+    el("svcDiag").textContent = "Pinging SSM…";
+    fetch(API + "/ssm-ping", {
+      method:"POST",
+      headers: Object.assign({"Content-Type":"application/json"}, auth()),
+      body: JSON.stringify({id:SVC_CTX.id})
+    }).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(res=>{
+      if(res.ok){
+        el("svcDiag").textContent = "SSM status: " + (res.j.status||"") +
+          "\nmanaged: " + res.j.managed + "\n\nstdout:\n" + (res.j.stdout||"") +
+          (res.j.stderr ? ("\n\nstderr:\n"+res.j.stderr) : "");
+      } else {
+        el("svcDiag").textContent = res.j.error || "internal";
+      }
+    });
   }
 
-  // wire buttons
-  el("btnReqOtp").onclick = requestOtp; el("btnVerifyOtp").onclick = verifyOtp; el("btnLogin").onclick = login;
-  el("btnSvcRefresh").onclick = function(){ if(SVC_CTX.name && SVC_CTX.name.toLowerCase().includes("sql")) loadSqlInfo(); else loadServices(); };
-  el("btnSvcClose").onclick = closeSvc; el("btnIIS").onclick = iisReset;
-
-  window.addEventListener("load", function(){
-    if(TOKEN){ showDash(); setUserBar(); loadDashboard(); }
-  });
-})();
+  // --- boot ---
+  (function init(){
+    setUserPill();
+    load();
+  })();
 </script>
 </body>
 </html>

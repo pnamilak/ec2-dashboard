@@ -123,7 +123,11 @@ resource "aws_iam_role_policy" "lambda_permissions" {
       {
         Sid    = "SSMRun"
         Effect = "Allow"
-        Action = ["ssm:SendCommand", "ssm:GetCommandInvocation"]
+        Action = [
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:DescribeInstanceInformation" # <-- added so /ssm-ping works
+        ]
         Resource = "*"
       },
       {
@@ -255,6 +259,14 @@ resource "aws_apigatewayv2_route" "services" {
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
+# diagnostic endpoint exposed by handler.py
+resource "aws_apigatewayv2_route" "ssm_ping" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /ssm-ping"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.api.id
@@ -344,7 +356,7 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Upload rendered index.html (Terraform template => escape JS `${}` in the file)
+# Upload rendered index.html (Terraform template => avoid JS template-string ${})
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.website.id
   key          = "index.html"
@@ -422,7 +434,7 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI (works with all provider versions)
+# Idempotent attach via AWS CLI (no jq required)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
@@ -440,17 +452,20 @@ resource "null_resource" "attach_profile" {
       PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
       REGION="${var.aws_region}"
 
-      # Describe current association (if any)
-      CUR_JSON=$(aws ec2 describe-iam-instance-profile-associations \
+      CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
         --filters Name=instance-id,Values="$IID" \
-        --region "$REGION" --output json)
+        --region "$REGION" \
+        --query 'IamInstanceProfileAssociations[0].AssociationId' \
+        --output text 2>/dev/null || true)
+      CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values="$IID" \
+        --region "$REGION" \
+        --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
+        --output text 2>/dev/null || true)
 
-      # Safe parsing (empty string if field missing)
-      CUR_ID=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].AssociationId // ""')
-      CUR_PROFILE=$(echo "$CUR_JSON" | jq -r '
-        (.IamInstanceProfileAssociations[0].IamInstanceProfile.Arn // "") as $arn
-        | if $arn == "" then "" else ($arn | tostring | (split("/")[-1])) end
-      ')
+      [ "$CUR_ID"  = "None" ] && CUR_ID=""
+      [ "$CUR_ARN" = "None" ] && CUR_ARN=""
+      CUR_PROFILE="${CUR_ARN##*/}"
 
       if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
         echo "Instance $IID already associated with profile $PROFILE"
@@ -464,10 +479,7 @@ resource "null_resource" "attach_profile" {
       fi
 
       echo "Associating profile $PROFILE to $IID ..."
-      aws ec2 associate-iam-instance-profile \
-        --iam-instance-profile Name="$PROFILE" \
-        --instance-id "$IID" \
-        --region "$REGION" >/dev/null
+      aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
       echo "Done."
     EOT
   }
