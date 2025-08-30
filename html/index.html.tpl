@@ -99,7 +99,7 @@
 <script>
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
-  // Let login.js pick this up without templating
+  // Seed API for the separate login page
   try { localStorage.setItem("api_base_url", API); } catch(e) {}
 
   function http(path, method, obj, bearer){
@@ -130,7 +130,7 @@
     http("/request-otp","POST",{email:em}).then(()=>toast("OTP sent")).catch(e=>toast(e.message));
   }
 
-  // ✅ Redirect to a SEPARATE page after OTP success
+  // After OTP success → redirect to separate login page
   function verifyOtp(){
     var em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
     if(!em || !cd){ toast("enter email and code"); return; }
@@ -144,7 +144,7 @@
       .catch(e=>toast(e.message));
   }
 
-  // (kept for backwards-compat if someone opens modal)
+  // (kept for backward-compat if someone opens the modal login)
   function doLogin(){
     var u = $("uName").value.trim(), p = $("uPass").value;
     if(!u || !p){ toast("missing credentials"); return; }
