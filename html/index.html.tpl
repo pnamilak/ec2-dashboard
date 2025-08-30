@@ -100,7 +100,7 @@
           <input id="password" class="w250" type="password" placeholder="password">
           <button id="btnDoLogin" class="btn pri">Login</button>
         </div>
-        <div class="hint">Tip: give a user the role <code>read</code> for demo-only; it disables Start/Stop.</div>
+        <div class="hint">Tip: give a user the role <code>read</code> for demo-only (start/stop disabled).</div>
       </div>
 
       <div class="row" style="margin-top:12px">
@@ -129,24 +129,24 @@
 <script>
 const API_BASE = "${api_base_url}";
 const ALLOWED_DOMAIN = "${allowed_email_domain}";
-const ENV_NAMES = "${env_names}".split(",").filter(x=>x);
+const ENV_NAMES = "${env_names}".split(",").filter(function(x){return x;});
 let TOKEN=null, ROLE=null, USER=null;
 let ENV_DATA=null; // from /instances
 let currentServices = { id:null, name:null, kind:null };
-const q = sel => document.querySelector(sel);
+var q = function(sel){ return document.querySelector(sel); };
 
 // ---------- small helpers ----------
 function toast(msg){ alert(msg); }
 function hdr(){ return TOKEN ? { "Authorization":"Bearer "+TOKEN, "content-type":"application/json"} : {"content-type":"application/json"} }
-async function api(path, method="GET", body=null){
-  const res = await fetch(API_BASE+path, { method, headers: hdr(), body: body ? JSON.stringify(body):undefined });
+async function api(path, method, body){
+  method = method || "GET";
+  const res = await fetch(API_BASE+path, { method: method, headers: hdr(), body: body ? JSON.stringify(body):undefined });
   const txt = await res.text();
-  let data = {};
-  try{ data = JSON.parse(txt); }catch{ data = {raw:txt}; }
+  var data = {};
+  try{ data = JSON.parse(txt); }catch(e){ data = {raw:txt}; }
   if(!res.ok){ throw new Error(data.error || res.statusText || "request failed"); }
   return data;
 }
-function disableStarts(buttons, yes){ buttons.forEach(b=>b.disabled = yes); }
 
 // ---------- login modal ----------
 const loginModal = q("#loginModal");
@@ -159,45 +159,45 @@ function switchPane(which){
   paneOtp.style.display = isOtp ? "" : "none";
   paneCred.style.display = isOtp ? "none" : "";
 }
-tabOtp.onclick = ()=>switchPane("otp");
-tabCred.onclick = ()=>switchPane("cred");
-q("#btnCloseLogin").onclick = ()=> loginModal.classList.remove("show");
-q("#btnLogin").onclick = ()=> loginModal.classList.add("show");
+tabOtp.onclick = function(){ switchPane("otp"); };
+tabCred.onclick = function(){ switchPane("cred"); };
+q("#btnCloseLogin").onclick = function(){ loginModal.classList.remove("show"); };
+q("#btnLogin").onclick = function(){ loginModal.classList.add("show"); };
 
-q("#btnReqOtp").onclick = async ()=>{
-  const email = q("#otpEmail").value.trim();
-  if(!email || !email.toLowerCase().endsWith("@"+ALLOWED_DOMAIN)) return toast("Use "+ALLOWED_DOMAIN+" email");
+q("#btnReqOtp").onclick = async function(){
+  const email = q("#otpEmail").value.trim().toLowerCase();
+  if(!email || email.slice(-1*ALLOWED_DOMAIN.length-1)!=="@"+ALLOWED_DOMAIN) { toast("Use "+ALLOWED_DOMAIN+" email"); return; }
   try{
-    await api("/request-otp","POST",{email});
+    await api("/request-otp","POST",{email:email});
     toast("OTP sent. Check your inbox.");
   }catch(e){ toast(e.message); }
 };
-q("#btnVerifyOtp").onclick = async ()=>{
+q("#btnVerifyOtp").onclick = async function(){
   const email = q("#otpEmail").value.trim();
   const code  = q("#otpCode").value.trim();
-  if(!email || !code) return toast("Enter email + code");
+  if(!email || !code) { toast("Enter email + code"); return; }
   try{
-    await api("/verify-otp","POST",{email, code});
+    await api("/verify-otp","POST",{email:email, code:code});
     toast("Email verified. Now sign in with username/password.");
     switchPane("cred");
   }catch(e){ toast(e.message); }
 };
-q("#btnDoLogin").onclick = async ()=>{
+q("#btnDoLogin").onclick = async function(){
   const username = q("#username").value.trim();
   const password = q("#password").value.trim();
-  if(!username || !password) return toast("Enter username/password");
+  if(!username || !password) { toast("Enter username/password"); return; }
   try{
-    const r = await api("/login","POST",{username, password});
+    const r = await api("/login","POST",{username:username, password:password});
     TOKEN=r.token; ROLE=r.role; USER=r.user;
     loginModal.classList.remove("show");
     q("#btnLogin").style.display="none";
     q("#btnLogout").style.display="";
     q("#who").style.display="inline-flex";
-    q("#who").innerText = `${USER.name || USER.username} • ${ROLE}`;
+    q("#who").innerText = (USER.name || USER.username) + " • " + ROLE;
     await refreshAll();
   }catch(e){ toast(e.message); }
 };
-q("#btnLogout").onclick = ()=>{
+q("#btnLogout").onclick = function(){
   TOKEN=null; ROLE=null; USER=null;
   q("#btnLogin").style.display="";
   q("#btnLogout").style.display="none";
@@ -220,11 +220,16 @@ async function refreshAll(){
 }
 function buildTabs(){
   const tabs = q("#tabs"); tabs.innerHTML="";
-  (ENV_NAMES.length?ENV_NAMES:Object.keys(ENV_DATA)).forEach((env, idx)=>{
+  const envs = ENV_NAMES.length?ENV_NAMES:Object.keys(ENV_DATA);
+  envs.forEach(function(env, idx){
     const t = document.createElement("div");
     t.className = "tab"+(idx===0?" active":"");
     t.innerText = env;
-    t.onclick = ()=>{ [...tabs.children].forEach(x=>x.classList.remove("active")); t.classList.add("active"); renderEnv(env); };
+    t.onclick = function(){ 
+      Array.prototype.forEach.call(tabs.children,function(x){x.classList.remove("active");});
+      t.classList.add("active"); 
+      renderEnv(env); 
+    };
     tabs.appendChild(t);
     if(idx===0) renderEnv(env);
   });
@@ -232,39 +237,40 @@ function buildTabs(){
 function renderEnv(env){
   const root = q("#envContainer"); root.innerHTML="";
   const blocks = ENV_DATA[env] || {"DM":[],"EA":[]};
-  for(const [group, arr] of Object.entries(blocks)){
+  Object.keys(blocks).forEach(function(group){
+    const arr = blocks[group];
     const card = document.createElement("div"); card.className="card";
-    card.innerHTML = `<div style="font-weight:700;margin:6px 0">${group==="DM"?"Dream Mapper":"Encore Anywhere"}</div>`;
+    card.innerHTML = '<div style="font-weight:700;margin:6px 0">'+ (group==="DM"?"Dream Mapper":"Encore Anywhere") +'</div>';
     const grid = document.createElement("div"); grid.className="grid";
-    arr.forEach(x=>{
+    arr.forEach(function(x){
       const row = document.createElement("div"); row.className="inst";
-      row.innerHTML = `
-        <div class="name">${x.name}</div>
-        <div class="iid">(${x.id})</div>
-        <span class="state ${x.state}">${x.state}</span>
-        <div class="actions">
-          <button class="btn good btnStart">Start</button>
-          <button class="btn bad btnStop">Stop</button>
-          <button class="btn ghost btnSvc">Services</button>
-        </div>`;
+      row.innerHTML =
+        '<div class="name">'+x.name+'</div>'+
+        '<div class="iid">('+x.id+')</div>'+
+        '<span class="state '+x.state+'">'+x.state+'</span>'+
+        '<div class="actions">'+
+          '<button class="btn good btnStart">Start</button>'+
+          '<button class="btn bad btnStop">Stop</button>'+
+          '<button class="btn ghost btnSvc">Services</button>'+
+        '</div>';
       const btnStart = row.querySelector(".btnStart");
       const btnStop  = row.querySelector(".btnStop");
       const btnSvc   = row.querySelector(".btnSvc");
       btnStart.disabled = (ROLE==="read") || x.state!=="stopped";
       btnStop.disabled  = (ROLE==="read") || x.state!=="running";
-      btnStart.onclick  = ()=> doInstance(x.id,"start");
-      btnStop.onclick   = ()=> doInstance(x.id,"stop");
-      btnSvc.onclick    = ()=> openServices(x);
+      btnStart.onclick  = function(){ doInstance(x.id,"start"); };
+      btnStop.onclick   = function(){ doInstance(x.id,"stop"); };
+      btnSvc.onclick    = function(){ openServices(x); };
       grid.appendChild(row);
     });
     card.appendChild(grid);
     root.appendChild(card);
-  }
+  });
 }
 async function doInstance(id, action){
   if(ROLE==="read") return;
   try{
-    await api("/instance-action","POST",{id, action});
+    await api("/instance-action","POST",{id:id, action:action});
     await refreshAll();
   }catch(e){ toast(e.message); }
 }
@@ -276,19 +282,19 @@ const svcTitle = q("#svcTitle");
 const svcList  = q("#svcList");
 const svcFilter= q("#svcFilter");
 const btnIis   = q("#btnIisReset");
-q("#btnSvcClose").onclick = ()=> svcModal.classList.remove("show");
-q("#btnSvcRefresh").onclick = ()=> loadServices();
+q("#btnSvcClose").onclick = function(){ svcModal.classList.remove("show"); };
+q("#btnSvcRefresh").onclick = function(){ loadServices(); };
 
 function inferKindByName(name){
   const n = name.toLowerCase();
-  if(n.includes("sql")) return "sql";
-  if(n.includes("redis")) return "redis";
-  if(n.includes("web") || n.includes("svc")) return "web";
+  if(n.indexOf("sql")   !== -1) return "sql";
+  if(n.indexOf("redis") !== -1) return "redis";
+  if(n.indexOf("web")   !== -1 || n.indexOf("svc") !== -1) return "web";
   return "generic";
 }
 function openServices(inst){
   currentServices = { id:inst.id, name:inst.name, kind:inferKindByName(inst.name) };
-  svcTitle.innerText = `Services on ${inst.name}`;
+  svcTitle.innerText = "Services on " + inst.name;
   const k = currentServices.kind;
   const showFilter = (k==="web" || k==="generic");
   svcFilter.parentElement.style.display = showFilter ? "" : "none";
@@ -314,26 +320,27 @@ async function loadServices(){
 }
 function renderSvcList(items){
   svcList.innerHTML = "";
-  if(!items || (Array.isArray(items) && items.length===0)){ svcList.innerHTML="<div class='muted' style='padding:8px'>No services</div>"; return; }
-  (Array.isArray(items) ? items : [items]).forEach(s=>{
-    const row = document.createElement("div"); row.className="svc-row";
+  const a = Array.isArray(items) ? items : (items ? [items] : []);
+  if(a.length===0){ svcList.innerHTML="<div class='muted' style='padding:8px'>No services</div>"; return; }
+  a.forEach(function(s){
     const nm = s.Name || s.name || "";
     const dn = s.DisplayName || s.displayName || nm;
-    const st = (s.Status || s.status || "").toLowerCase();
-    row.innerHTML = `
-      <div class="svc-name">${nm}</div>
-      <div class="muted" style="flex:1">${dn}</div>
-      <div class="svc-status ${st}">${st || "-"}</div>
-      <div class="actions">
-        <button class="btn good actStart">Start</button>
-        <button class="btn bad actStop">Stop</button>
-      </div>`;
+    const st = String(s.Status || s.status || "").toLowerCase();
+    const row = document.createElement("div"); row.className="svc-row";
+    row.innerHTML =
+      '<div class="svc-name">'+nm+'</div>'+
+      '<div class="muted" style="flex:1">'+dn+'</div>'+
+      '<div class="svc-status '+st+'">'+(st||"-")+'</div>'+
+      '<div class="actions">'+
+        '<button class="btn good actStart">Start</button>'+
+        '<button class="btn bad actStop">Stop</button>'+
+      '</div>';
     const bStart = row.querySelector(".actStart");
     const bStop  = row.querySelector(".actStop");
     bStart.disabled = ROLE==="read" || st==="running";
     bStop.disabled  = ROLE==="read" || st!=="running";
-    bStart.onclick  = ()=> doSvc(nm,"start");
-    bStop.onclick   = ()=> doSvc(nm,"stop");
+    bStart.onclick  = function(){ doSvc(nm,"start"); };
+    bStop.onclick   = function(){ doSvc(nm,"stop"); };
     svcList.appendChild(row);
   });
 }
@@ -344,14 +351,14 @@ async function doSvc(name, action){
     renderSvcList(r.services || []);
   }catch(e){ toast(e.message); }
 }
-btnIis.onclick = async ()=>{
+btnIis.onclick = async function(){
   if(ROLE==="read") return;
   try{
     await api("/services","POST",{ id: currentServices.id, name: currentServices.name, mode:"iisreset" });
     await loadServices();
   }catch(e){ toast(e.message); }
 };
-svcFilter.oninput = ()=> {
+svcFilter.oninput = function(){
   if(currentServices.kind==="web" || currentServices.kind==="generic") loadServices();
 };
 
