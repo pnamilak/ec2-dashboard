@@ -1,462 +1,362 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8"/>
+  <meta http-equiv="cache-control" content="no-cache"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>EC2 Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root { --bg:#0f172a; --card:#111827; --ink:#e5e7eb; --muted:#9ca3af; --good:#10b981; --bad:#ef4444; --btn:#60a5fa; --chip:#1f2937; }
-    html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial}
-    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
-    h1{font-size:24px;margin:0 0 10px 0}
-    .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
-    .kpis{display:flex;gap:8px;flex-wrap:wrap}
-    .chip{background:#0b1220;border:1px solid #1e293b;color:#cbd5e1;border-radius:9999px;padding:6px 10px;font-size:12px}
-    .pill{background:var(--chip);padding:5px 10px;border-radius:8px;border:1px solid #1f2937}
-    button{background:#1e293b;border:1px solid #374151;color:#dbeafe;padding:8px 12px;border-radius:8px;cursor:pointer}
-    button:hover{background:#253142}
-    button.small{padding:6px 10px;font-size:12px}
-    button.ok{background:#064e3b;border-color:#065f46}
-    button.danger{background:#3f1d1d;border-color:#7f1d1d}
-    button.primary{background:#0c4a6e;border-color:#075985}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    .section{background:var(--card);border:1px solid #1f2937;border-radius:14px;padding:14px 14px;margin:14px 0}
-    .envtabs{display:flex;gap:10px;margin:8px 0 14px 0;flex-wrap:wrap}
-    .srv{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin:8px 0;background:#0b1220;border:1px solid #1e293b;border-radius:10px}
-    .name{font-weight:600}
-    .state{font-size:12px;color:#a7f3d0}
-    .state.bad{color:#fecaca}
-    .group-title{font-weight:700;margin:8px 0 4px 0}
-    .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5)}
-    .panel{background:#0b1220;border:1px solid #1f2937;border-radius:16px;max-width:820px;width:92%;padding:16px}
-    .grid{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px}
-    .svcrow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px;border-bottom:1px solid #172036}
-    .svcname{font-family:ui-monospace,Menlo,Consolas; font-size:13px}
-    .svcok{color:#34d399}
-    .svcbad{color:#f87171}
+    :root { --bg:#0f172a; --panel:#131c33; --muted:#8ea0c2; --text:#dce6ff; --chip:#1e293b;
+            --ok:#18a058; --warn:#eab308; --bad:#ef4444; --btn:#23314e; --btn2:#3b82f6; }
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1080px;margin:32px auto;padding:0 12px}
+    h1{margin:0 0 16px 0}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .chip{background:var(--chip);border-radius:999px;padding:6px 12px;color:#cde;display:inline-flex;gap:8px}
+    .btn{background:var(--btn);border:0;color:#cde;border-radius:9px;padding:7px 12px;cursor:pointer}
+    .btn:hover{filter:brightness(1.15)}
+    .btn.pri{background:var(--btn2);color:white}
+    .btn.good{background:var(--ok);color:white}
+    .btn.bad{background:var(--bad);color:white}
+    .btn.ghost{background:#1f2937}
+    .btn[disabled]{opacity:.4;cursor:not-allowed}
+    .right{margin-left:auto}
+    .tabs{display:flex;gap:8px;margin:10px 0 16px}
+    .tab{padding:6px 10px;border-radius:8px;background:#0b1224;color:#a9b8d9;cursor:pointer}
+    .tab.active{background:#1a2544;color:#e9f1ff}
+    .card{background:var(--panel);border-radius:12px;padding:12px;margin:12px 0}
+    .box{border-radius:12px;background:#0b1429;padding:10px 12px;display:flex;align-items:center;gap:10px}
     .muted{color:var(--muted)}
-    input,select{background:#0b1220;border:1px solid #1f2937;color:#e5e7eb;border-radius:8px;padding:8px}
-    .right{display:flex;gap:10px;align-items:center}
-    .badge{background:#111827;border:1px solid #374151;padding:6px 10px;border-radius:999px;font-size:12px}
-    .hidden{display:none}
-    .note{font-size:12px;color:#cbd5e1}
+    .pill{border-radius:999px;padding:4px 8px}
+    .state{font-weight:600}
+    .state.running{color:#8af0b0}
+    .state.stopped{color:#f6b2b2}
+    .grid{display:grid;gap:8px}
+    .inst{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:#0c1326}
+    .inst .name{font-weight:600}
+    .inst .iid{color:#6f86a9;font-size:12px}
+    .inst .actions{margin-left:auto;display:flex;gap:8px}
+    /* modal */
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
+    .modal.show{display:flex}
+    .dialog{width:min(900px,96vw);max-height:80vh;overflow:auto;background:var(--panel);border-radius:14px;padding:16px}
+    .list{background:#0b1429;border-radius:10px;padding:8px;max-height:52vh;overflow:auto}
+    .svc-row{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px}
+    .svc-row:hover{background:#0e1933}
+    .svc-name{min-width:220px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+    .svc-status{font-weight:600}
+    .svc-status.running{color:#7ff0aa}
+    .svc-status.stopped{color:#ffb5b5}
+    .hint{font-size:12px;color:#9fb2d6;margin-top:8px}
+    input,select{background:#0b1327;border:1px solid #1f2c48;color:#dfe7ff;border-radius:8px;padding:8px 10px}
+    .w250{width:250px}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="row">
-    <h1>EC2 Dashboard</h1>
-    <div class="right">
-      <span id="userBadge" class="badge hidden"></span>
-      <button id="loginBtn" class="small">Login</button>
-      <button id="logoutBtn" class="small hidden">Sign out</button>
-      <button id="refreshBtn" class="small">Refresh</button>
+  <div class="wrap">
+    <div class="row">
+      <h1>EC2 Dashboard</h1>
+      <div class="chip right"><b>Total:</b> <span id="tot">0</span></div>
+      <div class="chip"><b>Running:</b> <span id="run">0</span></div>
+      <div class="chip"><b>Stopped:</b> <span id="stop">0</span></div>
+      <button id="btnLogin" class="btn right">Login</button>
+      <div id="who" class="chip" style="display:none"></div>
+      <button id="btnLogout" class="btn" style="display:none">Sign out</button>
+      <button id="btnRefresh" class="btn">Refresh</button>
     </div>
+
+    <div id="tabs" class="tabs"></div>
+    <div id="envContainer"></div>
   </div>
 
-  <div class="kpis">
-    <span id="kTotal" class="chip">Total: 0</span>
-    <span id="kRun"   class="chip">Running: 0</span>
-    <span id="kStop"  class="chip">Stopped: 0</span>
-  </div>
+  <!-- Login modal (OTP first, then user/pw) -->
+  <div id="loginModal" class="modal show">
+    <div class="dialog" style="max-width:560px">
+      <h3 style="margin:0 0 8px">Sign in</h3>
 
-  <div class="envtabs" id="envTabs"></div>
+      <div class="tabs">
+        <div id="tabOtp" class="tab active">Email OTP</div>
+        <div id="tabCred" class="tab">User / Password</div>
+      </div>
 
-  <div id="envContainer"></div>
-</div>
+      <div id="paneOtp">
+        <div class="row" style="gap:6px;margin:8px 0">
+          <input id="otpEmail" class="w250" placeholder="name@${allowed_email_domain}">
+          <button id="btnReqOtp" class="btn pri">Request OTP</button>
+        </div>
+        <div class="row" style="gap:6px;margin:6px 0">
+          <input id="otpCode" class="w250" placeholder="6-digit code">
+          <button id="btnVerifyOtp" class="btn pri">Verify OTP</button>
+        </div>
+        <div class="hint">Allowed domain: <b>${allowed_email_domain}</b></div>
+      </div>
 
-<!-- Services Modal -->
-<div id="svcModal" class="modal">
-  <div class="panel">
-    <div class="row" style="margin-bottom:10px">
-      <div id="svcTitle" class="group-title">Services</div>
-      <div class="right">
-        <input id="svcFilter" placeholder="Type to filter (svc/web/sql/agent/ssm/winrm)" style="width:260px" />
-        <button id="svcRefresh" class="small">Refresh</button>
-        <button id="btnIisReset" class="small">IIS Reset</button>
-        <button id="btnSqlInfo" class="small">SQL Info</button>
-        <button id="btnSsmPing" class="small">SSM Ping</button>
-        <button id="svcClose" class="small">Close</button>
+      <div id="paneCred" style="display:none">
+        <div class="row" style="gap:6px;margin:8px 0">
+          <input id="username" class="w250" placeholder="username">
+        </div>
+        <div class="row" style="gap:6px;margin:6px 0">
+          <input id="password" class="w250" type="password" placeholder="password">
+          <button id="btnDoLogin" class="btn pri">Login</button>
+        </div>
+        <div class="hint">Tip: give a user the role <code>read</code> for demo-only; it disables Start/Stop.</div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="btnCloseLogin" class="btn right">Close</button>
       </div>
     </div>
-    <div id="svcBody"></div>
-    <div id="svcFooter" class="note"></div>
   </div>
-</div>
 
-<!-- Login Modal (username/password + OTP) -->
-<div id="loginModal" class="modal">
-  <div class="panel" style="max-width:520px">
-    <div class="group-title">Sign in</div>
-    <div style="display:flex;gap:12px;margin:10px 0 6px 0">
-      <button class="small" id="tabPwd">User / Password</button>
-      <button class="small" id="tabOtp">Email OTP</button>
-      <span class="note">Allowed domain: <b>${allowed_email_domain}</b></span>
-    </div>
-
-    <div id="formPwd">
-      <div style="margin:6px 0"><input id="inUser" placeholder="username" style="width:100%"></div>
-      <div style="margin:6px 0"><input id="inPass" type="password" placeholder="password" style="width:100%"></div>
+  <!-- Services modal -->
+  <div id="svcModal" class="modal">
+    <div class="dialog">
       <div class="row">
-        <span class="note">Tip: give a user the role <code>read</code> for demo-only (start/stop disabled).</span>
-        <button id="btnLogin" class="small primary">Login</button>
-      </div>
-    </div>
+        <h3 id="svcTitle" style="margin:0">Services</h3>
+        <div class="right"></div>
 
-    <div id="formOtp" class="hidden">
-      <div style="margin:6px 0"><input id="inEmail" placeholder="name@${allowed_email_domain}" style="width:100%"></div>
-      <div class="row">
-        <button id="btnReqOtp" class="small">Request OTP</button>
-        <span id="otpMsg" class="note"></span>
+        <input id="svcFilter" class="w250" placeholder="Type to filter (svc/web)">
+        <button id="btnSvcRefresh" class="btn">Refresh</button>
+        <button id="btnIisReset" class="btn">IIS Reset</button>
+        <button id="btnSvcClose" class="btn">Close</button>
       </div>
-      <div style="margin:6px 0"><input id="inCode" placeholder="Enter OTP code" style="width:100%"></div>
-      <div class="row">
-        <span></span>
-        <button id="btnVerifyOtp" class="small primary">Verify</button>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:10px">
-      <span id="loginMsg" class="note"></span>
-      <button id="loginClose" class="small">Close</button>
+      <div id="svcList" class="list" style="margin-top:10px"></div>
+      <div id="svcHint" class="hint"></div>
     </div>
   </div>
-</div>
 
 <script>
-(function(){
-  var API = "${api_base_url}";
-  var ENV_NAMES = "${env_names}".split(",").filter(function(x){return x.length>0;});
-  var token = localStorage.getItem("token") || "";
-  var role  = localStorage.getItem("role")  || "";
-  var user  = localStorage.getItem("user")  || "";
+const API_BASE = "${api_base_url}";
+const ALLOWED_DOMAIN = "${allowed_email_domain}";
+const ENV_NAMES = "${env_names}".split(",").filter(x=>x);
+let TOKEN=null, ROLE=null, USER=null;
+let ENV_DATA=null; // from /instances
+let currentServices = { id:null, name:null, kind:null };
+const q = sel => document.querySelector(sel);
 
-  function setBadge(){
-    var b = document.getElementById("userBadge");
-    var lo = document.getElementById("loginBtn");
-    var so = document.getElementById("logoutBtn");
-    if(token){
-      b.textContent = (user?user:"user") + " • " + (role?role:"");
-      b.classList.remove("hidden");
-      so.classList.remove("hidden");
-      lo.classList.add("hidden");
-    }else{
-      b.classList.add("hidden");
-      so.classList.add("hidden");
-      lo.classList.remove("hidden");
-    }
-  }
+// ---------- small helpers ----------
+function toast(msg){ alert(msg); }
+function hdr(){ return TOKEN ? { "Authorization":"Bearer "+TOKEN, "content-type":"application/json"} : {"content-type":"application/json"} }
+async function api(path, method="GET", body=null){
+  const res = await fetch(API_BASE+path, { method, headers: hdr(), body: body ? JSON.stringify(body):undefined });
+  const txt = await res.text();
+  let data = {};
+  try{ data = JSON.parse(txt); }catch{ data = {raw:txt}; }
+  if(!res.ok){ throw new Error(data.error || res.statusText || "request failed"); }
+  return data;
+}
+function disableStarts(buttons, yes){ buttons.forEach(b=>b.disabled = yes); }
 
-  function headers(jwt){
-    var h = {"content-type":"application/json"};
-    if(jwt){ h["Authorization"] = "Bearer " + jwt; }
-    return h;
-  }
+// ---------- login modal ----------
+const loginModal = q("#loginModal");
+const tabOtp = q("#tabOtp"), tabCred = q("#tabCred");
+const paneOtp = q("#paneOtp"), paneCred = q("#paneCred");
+function switchPane(which){
+  const isOtp = which==="otp";
+  tabOtp.classList.toggle("active", isOtp);
+  tabCred.classList.toggle("active", !isOtp);
+  paneOtp.style.display = isOtp ? "" : "none";
+  paneCred.style.display = isOtp ? "none" : "";
+}
+tabOtp.onclick = ()=>switchPane("otp");
+tabCred.onclick = ()=>switchPane("cred");
+q("#btnCloseLogin").onclick = ()=> loginModal.classList.remove("show");
+q("#btnLogin").onclick = ()=> loginModal.classList.add("show");
 
-  function getJSON(url, opt, cb){
-    fetch(url, opt).then(function(r){ return r.json().catch(function(){ return {}; }) })
-      .then(function(j){ cb(null,j); })
-      .catch(function(e){ cb(e); });
-  }
+q("#btnReqOtp").onclick = async ()=>{
+  const email = q("#otpEmail").value.trim();
+  if(!email || !email.toLowerCase().endsWith("@"+ALLOWED_DOMAIN)) return toast("Use "+ALLOWED_DOMAIN+" email");
+  try{
+    await api("/request-otp","POST",{email});
+    toast("OTP sent. Check your inbox.");
+  }catch(e){ toast(e.message); }
+};
+q("#btnVerifyOtp").onclick = async ()=>{
+  const email = q("#otpEmail").value.trim();
+  const code  = q("#otpCode").value.trim();
+  if(!email || !code) return toast("Enter email + code");
+  try{
+    await api("/verify-otp","POST",{email, code});
+    toast("Email verified. Now sign in with username/password.");
+    switchPane("cred");
+  }catch(e){ toast(e.message); }
+};
+q("#btnDoLogin").onclick = async ()=>{
+  const username = q("#username").value.trim();
+  const password = q("#password").value.trim();
+  if(!username || !password) return toast("Enter username/password");
+  try{
+    const r = await api("/login","POST",{username, password});
+    TOKEN=r.token; ROLE=r.role; USER=r.user;
+    loginModal.classList.remove("show");
+    q("#btnLogin").style.display="none";
+    q("#btnLogout").style.display="";
+    q("#who").style.display="inline-flex";
+    q("#who").innerText = `${USER.name || USER.username} • ${ROLE}`;
+    await refreshAll();
+  }catch(e){ toast(e.message); }
+};
+q("#btnLogout").onclick = ()=>{
+  TOKEN=null; ROLE=null; USER=null;
+  q("#btnLogin").style.display="";
+  q("#btnLogout").style.display="none";
+  q("#who").style.display="none";
+  ENV_DATA=null; q("#envContainer").innerHTML=""; q("#tabs").innerHTML="";
+  q("#tot").innerText="0"; q("#run").innerText="0"; q("#stop").innerText="0";
+  loginModal.classList.add("show"); switchPane("otp");
+};
 
-  function loadInstances(){
-    if(!token){ return; }
-    getJSON(API + "/instances", {method:"GET", headers:headers(token)}, function(err, res){
-      if(err){ return; }
-      if(!res || !res.envs){ return; }
-      document.getElementById("kTotal").textContent  = "Total: "   + (res.summary && res.summary.total   || 0);
-      document.getElementById("kRun").textContent    = "Running: " + (res.summary && res.summary.running || 0);
-      document.getElementById("kStop").textContent   = "Stopped: " + (res.summary && res.summary.stopped || 0);
-
-      var envTabs = document.getElementById("envTabs");
-      envTabs.innerHTML = "";
-      var envContainer = document.getElementById("envContainer");
-      envContainer.innerHTML = "";
-
-      var keys = Object.keys(res.envs);
-      keys.forEach(function(k){
-        var btn = document.createElement("button");
-        btn.className = "small";
-        btn.textContent = k;
-        btn.onclick = function(){
-          var blocks = document.querySelectorAll("[data-env]");
-          blocks.forEach(function(el){ el.style.display = el.getAttribute("data-env")==k ? "block" : "none"; });
-        };
-        envTabs.appendChild(btn);
-
-        var envBlock = document.createElement("div");
-        envBlock.setAttribute("data-env", k);
-        envBlock.className = "section";
-        envBlock.innerHTML = "<div class='group-title'>"+k+"</div>";
-        envContainer.appendChild(envBlock);
-
-        ["DM","EA"].forEach(function(blk){
-          var list = res.envs[k][blk] || [];
-          if(list.length===0){ return; }
-          var head = document.createElement("div");
-          head.className = "group-title";
-          head.textContent = (blk=="DM"?"Dream Mapper":"Encore Anywhere");
-          envBlock.appendChild(head);
-          list.forEach(function(it){
-            var row = document.createElement("div");
-            row.className = "srv";
-            var left = document.createElement("div");
-            left.innerHTML = "<span class='name'>"+it.name+"</span> <span class='muted'>("+it.id+")</span>";
-            var st = document.createElement("span");
-            st.className = "state" + (it.state=="running"?"":" bad");
-            st.textContent = it.state;
-            var right = document.createElement("div");
-            right.style.display = "flex"; right.style.gap="8px";
-
-            var btnStart = document.createElement("button");
-            btnStart.className = "small ok"; btnStart.textContent = "Start";
-            btnStart.onclick = function(){ instAction(it.id,"start"); };
-            var btnStop  = document.createElement("button");
-            btnStop.className = "small danger"; btnStop.textContent = "Stop";
-            btnStop.onclick = function(){ instAction(it.id,"stop"); };
-            if(role==="read" || role==="readonly"){ btnStart.disabled = true; btnStop.disabled = true; }
-
-            var btnSvc   = document.createElement("button");
-            btnSvc.className = "small"; btnSvc.textContent = "Services";
-            btnSvc.onclick = function(){ openSvc(it); };
-
-            right.appendChild(st);
-            right.appendChild(btnStart);
-            right.appendChild(btnStop);
-            right.appendChild(btnSvc);
-            row.appendChild(left);
-            row.appendChild(right);
-            envBlock.appendChild(row);
-          });
-        });
-      });
-
-      // show first env
-      var first = document.querySelector("[data-env]");
-      if(first){ first.style.display = "block"; }
+// ---------- instances & tabs ----------
+async function refreshAll(){
+  try{
+    const data = await api("/instances","GET");
+    ENV_DATA = data.envs || {};
+    q("#tot").innerText  = data.summary.total;
+    q("#run").innerText  = data.summary.running;
+    q("#stop").innerText = data.summary.stopped;
+    buildTabs();
+  }catch(e){ toast(e.message); }
+}
+function buildTabs(){
+  const tabs = q("#tabs"); tabs.innerHTML="";
+  (ENV_NAMES.length?ENV_NAMES:Object.keys(ENV_DATA)).forEach((env, idx)=>{
+    const t = document.createElement("div");
+    t.className = "tab"+(idx===0?" active":"");
+    t.innerText = env;
+    t.onclick = ()=>{ [...tabs.children].forEach(x=>x.classList.remove("active")); t.classList.add("active"); renderEnv(env); };
+    tabs.appendChild(t);
+    if(idx===0) renderEnv(env);
+  });
+}
+function renderEnv(env){
+  const root = q("#envContainer"); root.innerHTML="";
+  const blocks = ENV_DATA[env] || {"DM":[],"EA":[]};
+  for(const [group, arr] of Object.entries(blocks)){
+    const card = document.createElement("div"); card.className="card";
+    card.innerHTML = `<div style="font-weight:700;margin:6px 0">${group==="DM"?"Dream Mapper":"Encore Anywhere"}</div>`;
+    const grid = document.createElement("div"); grid.className="grid";
+    arr.forEach(x=>{
+      const row = document.createElement("div"); row.className="inst";
+      row.innerHTML = `
+        <div class="name">${x.name}</div>
+        <div class="iid">(${x.id})</div>
+        <span class="state ${x.state}">${x.state}</span>
+        <div class="actions">
+          <button class="btn good btnStart">Start</button>
+          <button class="btn bad btnStop">Stop</button>
+          <button class="btn ghost btnSvc">Services</button>
+        </div>`;
+      const btnStart = row.querySelector(".btnStart");
+      const btnStop  = row.querySelector(".btnStop");
+      const btnSvc   = row.querySelector(".btnSvc");
+      btnStart.disabled = (ROLE==="read") || x.state!=="stopped";
+      btnStop.disabled  = (ROLE==="read") || x.state!=="running";
+      btnStart.onclick  = ()=> doInstance(x.id,"start");
+      btnStop.onclick   = ()=> doInstance(x.id,"stop");
+      btnSvc.onclick    = ()=> openServices(x);
+      grid.appendChild(row);
     });
+    card.appendChild(grid);
+    root.appendChild(card);
   }
+}
+async function doInstance(id, action){
+  if(ROLE==="read") return;
+  try{
+    await api("/instance-action","POST",{id, action});
+    await refreshAll();
+  }catch(e){ toast(e.message); }
+}
+q("#btnRefresh").onclick = refreshAll;
 
-  function instAction(id, action){
-    if(!token){ return; }
-    if(role==="read" || role==="readonly"){ return; }
-    getJSON(API + "/instance-action", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id:id, action:action})
-    }, function(){ setTimeout(loadInstances, 1500); });
+// ---------- services ----------
+const svcModal = q("#svcModal");
+const svcTitle = q("#svcTitle");
+const svcList  = q("#svcList");
+const svcFilter= q("#svcFilter");
+const btnIis   = q("#btnIisReset");
+q("#btnSvcClose").onclick = ()=> svcModal.classList.remove("show");
+q("#btnSvcRefresh").onclick = ()=> loadServices();
+
+function inferKindByName(name){
+  const n = name.toLowerCase();
+  if(n.includes("sql")) return "sql";
+  if(n.includes("redis")) return "redis";
+  if(n.includes("web") || n.includes("svc")) return "web";
+  return "generic";
+}
+function openServices(inst){
+  currentServices = { id:inst.id, name:inst.name, kind:inferKindByName(inst.name) };
+  svcTitle.innerText = `Services on ${inst.name}`;
+  const k = currentServices.kind;
+  const showFilter = (k==="web" || k==="generic");
+  svcFilter.parentElement.style.display = showFilter ? "" : "none";
+  btnIis.style.display = (k==="web") ? "" : "none";
+  svcFilter.value = "";
+  svcModal.classList.add("show");
+  loadServices();
+}
+async function loadServices(){
+  const body = { id: currentServices.id, name: currentServices.name, mode:"list", pattern: svcFilter.value.trim() };
+  try{
+    const r = await api("/services","POST", body);
+    currentServices.kind = r.kind || currentServices.kind;
+    renderSvcList(r.services || []);
+    q("#svcHint").innerText = currentServices.kind==="sql"
+      ? "Showing SQL Server & SQL Agent services (default + named instances)."
+      : (currentServices.kind==="web" ? "Filter lists services whose Name or DisplayName contains the text. IIS Reset available."
+                                     : (currentServices.kind==="redis" ? "Showing redis* services." : ""));
+  }catch(e){
+    renderSvcList([]);
+    q("#svcHint").innerText = e.message || "Error";
   }
+}
+function renderSvcList(items){
+  svcList.innerHTML = "";
+  if(!items || (Array.isArray(items) && items.length===0)){ svcList.innerHTML="<div class='muted' style='padding:8px'>No services</div>"; return; }
+  (Array.isArray(items) ? items : [items]).forEach(s=>{
+    const row = document.createElement("div"); row.className="svc-row";
+    const nm = s.Name || s.name || "";
+    const dn = s.DisplayName || s.displayName || nm;
+    const st = (s.Status || s.status || "").toLowerCase();
+    row.innerHTML = `
+      <div class="svc-name">${nm}</div>
+      <div class="muted" style="flex:1">${dn}</div>
+      <div class="svc-status ${st}">${st || "-"}</div>
+      <div class="actions">
+        <button class="btn good actStart">Start</button>
+        <button class="btn bad actStop">Stop</button>
+      </div>`;
+    const bStart = row.querySelector(".actStart");
+    const bStop  = row.querySelector(".actStop");
+    bStart.disabled = ROLE==="read" || st==="running";
+    bStop.disabled  = ROLE==="read" || st!=="running";
+    bStart.onclick  = ()=> doSvc(nm,"start");
+    bStop.onclick   = ()=> doSvc(nm,"stop");
+    svcList.appendChild(row);
+  });
+}
+async function doSvc(name, action){
+  if(ROLE==="read") return;
+  try{
+    const r = await api("/services","POST",{ id: currentServices.id, name: currentServices.name, mode:action, service:name });
+    renderSvcList(r.services || []);
+  }catch(e){ toast(e.message); }
+}
+btnIis.onclick = async ()=>{
+  if(ROLE==="read") return;
+  try{
+    await api("/services","POST",{ id: currentServices.id, name: currentServices.name, mode:"iisreset" });
+    await loadServices();
+  }catch(e){ toast(e.message); }
+};
+svcFilter.oninput = ()=> {
+  if(currentServices.kind==="web" || currentServices.kind==="generic") loadServices();
+};
 
-  // --- Services modal
-  var currentInst = null;
-  function openSvc(inst){
-    currentInst = inst;
-    document.getElementById("svcTitle").textContent = "Services on "+inst.name;
-    document.getElementById("svcBody").innerHTML = "";
-    document.getElementById("svcFooter").textContent = "";
-    if(role==="read" || role==="readonly"){
-      document.getElementById("btnIisReset").disabled = true;
-    }else{
-      document.getElementById("btnIisReset").disabled = false;
-    }
-    document.getElementById("svcModal").style.display = "flex";
-    refreshSvc();
-  }
-
-  function closeSvc(){ document.getElementById("svcModal").style.display = "none"; currentInst=null; }
-  function refreshSvc(){
-    if(!currentInst){ return; }
-    var patt = document.getElementById("svcFilter").value.trim();
-    getJSON(API + "/services", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id: currentInst.id, mode: "list", pattern: patt})
-    }, function(err, res){
-      var box = document.getElementById("svcBody");
-      box.innerHTML = "";
-      if(res && res.error){ box.innerHTML = "<div class='note'>"+res.error+"</div>"; return; }
-      var arr = res && res.services ? res.services : [];
-      if(!arr || (arr.length===0)){
-        box.innerHTML = "<div class='note'>No matching services</div>";
-        return;
-      }
-      arr.forEach(function(s){
-        var line = document.createElement("div");
-        line.className = "svcrow";
-        var nm = document.createElement("div");
-        nm.className = "svcname"; nm.textContent = s.Name;
-        var st = document.createElement("div");
-        st.className = (s.Status=="Running" ? "svcok" : "svcbad");
-        st.textContent = s.Status;
-        var controls = document.createElement("div");
-        if(role==="read" || role==="readonly"){
-          controls.innerHTML = "<span class='note'>read-only</span>";
-        }else{
-          var b1 = document.createElement("button");
-          b1.className = "small ok"; b1.textContent = "Start";
-          b1.onclick = function(){ svcAction(s.Name, "start"); };
-          var b2 = document.createElement("button");
-          b2.className = "small danger"; b2.textContent = "Stop";
-          b2.onclick = function(){ svcAction(s.Name, "stop"); };
-          controls.appendChild(b1); controls.appendChild(b2);
-        }
-        line.appendChild(nm); line.appendChild(st); line.appendChild(controls);
-        box.appendChild(line);
-      });
-    });
-  }
-
-  function svcAction(name, action){
-    if(!currentInst){ return; }
-    if(role==="read" || role==="readonly"){ return; }
-    getJSON(API + "/services", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id: currentInst.id, mode: action, service: name})
-    }, function(){ setTimeout(refreshSvc, 1200); });
-  }
-
-  function iisReset(){
-    if(!currentInst){ return; }
-    if(role==="read" || role==="readonly"){ return; }
-    getJSON(API + "/services", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id: currentInst.id, mode: "iisreset"})
-    }, function(err,res){
-      document.getElementById("svcFooter").textContent = "IIS reset requested";
-      setTimeout(refreshSvc, 1800);
-    });
-  }
-
-  function sqlInfo(){
-    if(!currentInst){ return; }
-    getJSON(API + "/services", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id: currentInst.id, mode: "sqlinfo"})
-    }, function(err,res){
-      var box = document.getElementById("svcBody");
-      box.innerHTML = "";
-      if(res && res.error){ box.innerHTML = "<div class='note'>"+res.error+"</div>"; return; }
-      var os = res && res.os ? res.os : {};
-      var sql = res && res.sql ? res.sql : [];
-      var sv = res && res.services ? res.services : [];
-      var h = "<div class='note'>OS: "+(os.Caption||"")+" "+(os.Version||"")+" ("+(os.BuildNumber||"")+")</div>";
-      if(sql && sql.length>0){
-        h += "<div class='group-title' style='margin-top:10px'>SQL Instances</div>";
-        sql.forEach(function(x){
-          h += "<div class='note'>"+x.Instance+" — v"+x.Version+" ("+x.PatchLevel+")</div>";
-        });
-      }else{
-        h += "<div class='note'>No SQL instance info found</div>";
-      }
-      h += "<div class='group-title' style='margin-top:10px'>SQL Services</div>";
-      box.innerHTML = h;
-      (sv||[]).forEach(function(s){
-        var line = document.createElement("div");
-        line.className = "svcrow";
-        var nm = document.createElement("div"); nm.className="svcname"; nm.textContent = s.Name;
-        var st = document.createElement("div"); st.className = (s.Status=="Running"?"svcok":"svcbad"); st.textContent = s.Status;
-        var controls = document.createElement("div");
-        if(role==="read" || role==="readonly"){ controls.innerHTML = "<span class='note'>read-only</span>"; }
-        else{
-          var b1 = document.createElement("button"); b1.className="small ok"; b1.textContent="Start"; b1.onclick=function(){ svcAction(s.Name,"start"); };
-          var b2 = document.createElement("button"); b2.className="small danger"; b2.textContent="Stop"; b2.onclick=function(){ svcAction(s.Name,"stop"); };
-          controls.appendChild(b1); controls.appendChild(b2);
-        }
-        line.appendChild(nm); line.appendChild(st); line.appendChild(controls);
-        box.appendChild(line);
-      });
-    });
-  }
-
-  function ssmPing(){
-    if(!currentInst){ return; }
-    getJSON(API + "/ssm-ping", {
-      method:"POST", headers:headers(token),
-      body:JSON.stringify({id: currentInst.id})
-    }, function(err,res){
-      var t = document.getElementById("svcFooter");
-      if(res && res.ping){ t.textContent = "Host: " + (res.ping.Host||"") + " • Time: " + (res.ping.Time||""); }
-      else if(res && res.error){ t.textContent = res.error; }
-      else { t.textContent = "No response"; }
-    });
-  }
-
-  // --- Auth UI
-  function openLogin(){ document.getElementById("loginModal").style.display = "flex"; }
-  function closeLogin(){ document.getElementById("loginModal").style.display = "none"; document.getElementById("loginMsg").textContent=""; }
-
-  function switchTab(which){
-    var a = document.getElementById("formPwd");
-    var b = document.getElementById("formOtp");
-    if(which==="pwd"){ a.classList.remove("hidden"); b.classList.add("hidden"); }
-    else { b.classList.remove("hidden"); a.classList.add("hidden"); }
-  }
-
-  function doLogin(){
-    var u = document.getElementById("inUser").value.trim();
-    var p = document.getElementById("inPass").value;
-    document.getElementById("loginMsg").textContent = "";
-    getJSON(API + "/login", {
-      method:"POST", headers:headers(), body:JSON.stringify({username:u,password:p})
-    }, function(err,res){
-      if(res && res.token){
-        token = res.token; role = res.role || ""; user = (res.user && res.user.name) || u;
-        localStorage.setItem("token", token);
-        localStorage.setItem("role", role);
-        localStorage.setItem("user", user);
-        setBadge(); closeLogin(); loadInstances();
-      }else{
-        document.getElementById("loginMsg").textContent = (res && res.error) ? res.error : "Login failed";
-      }
-    });
-  }
-
-  function reqOtp(){
-    var em = document.getElementById("inEmail").value.trim();
-    document.getElementById("otpMsg").textContent = "";
-    getJSON(API + "/request-otp", {method:"POST", headers:headers(), body:JSON.stringify({email:em})}, function(err,res){
-      document.getElementById("otpMsg").textContent = res && res.error ? res.error : "OTP sent (check email)";
-    });
-  }
-  function verifyOtp(){
-    var em = document.getElementById("inEmail").value.trim();
-    var cd = document.getElementById("inCode").value.trim();
-    getJSON(API + "/verify-otp", {method:"POST", headers:headers(), body:JSON.stringify({email:em, code:cd})}, function(err,res){
-      document.getElementById("loginMsg").textContent = res && res.error ? res.error : "Verified. (Now sign in with your user/password if required.)";
-    });
-  }
-
-  function logout(){
-    token=""; role=""; user="";
-    localStorage.removeItem("token"); localStorage.removeItem("role"); localStorage.removeItem("user");
-    setBadge();
-    document.getElementById("envTabs").innerHTML="";
-    document.getElementById("envContainer").innerHTML="";
-    document.getElementById("kTotal").textContent="Total: 0";
-    document.getElementById("kRun").textContent="Running: 0";
-    document.getElementById("kStop").textContent="Stopped: 0";
-  }
-
-  // wire up
-  document.getElementById("refreshBtn").onclick = loadInstances;
-  document.getElementById("loginBtn").onclick   = openLogin;
-  document.getElementById("logoutBtn").onclick  = logout;
-
-  document.getElementById("svcClose").onclick   = closeSvc;
-  document.getElementById("svcRefresh").onclick = refreshSvc;
-  document.getElementById("btnIisReset").onclick= iisReset;
-  document.getElementById("btnSqlInfo").onclick = sqlInfo;
-  document.getElementById("btnSsmPing").onclick = ssmPing;
-
-  document.getElementById("tabPwd").onclick     = function(){ switchTab("pwd"); };
-  document.getElementById("tabOtp").onclick     = function(){ switchTab("otp"); };
-  document.getElementById("btnLogin").onclick   = doLogin;
-  document.getElementById("btnReqOtp").onclick  = reqOtp;
-  document.getElementById("btnVerifyOtp").onclick = verifyOtp;
-  document.getElementById("loginClose").onclick = closeLogin;
-
-  // init
-  setBadge();
-  if(token){ loadInstances(); }
-})();
+// ---------- boot ----------
+switchPane("otp"); // OTP first
 </script>
 </body>
 </html>
