@@ -434,7 +434,7 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI (works with all provider versions)
+# Idempotent attach via AWS CLI (no jq; fixes heredoc + ${} escaping)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
@@ -446,45 +446,45 @@ resource "null_resource" "attach_profile" {
 
   provisioner "local-exec" {
     interpreter = ["bash", "-lc"]
-    command = <<-EOT
-      set -euo pipefail
-      IID="${each.value}"
-      PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
-      REGION="${var.aws_region}"
+    command = <<EOT
+set -euo pipefail
+IID="${each.value}"
+PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+REGION="${var.aws_region}"
 
-      # Current association (if any)
-      CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --region "$REGION" \
-        --query 'IamInstanceProfileAssociations[0].AssociationId' \
-        --output text 2>/dev/null || true)
+# Current association (if any)
+CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
+  --filters Name=instance-id,Values="$IID" \
+  --region "$REGION" \
+  --query 'IamInstanceProfileAssociations[0].AssociationId' \
+  --output text 2>/dev/null || true)
 
-      CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --region "$REGION" \
-        --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
-        --output text 2>/dev/null || true)
+CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
+  --filters Name=instance-id,Values="$IID" \
+  --region "$REGION" \
+  --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
+  --output text 2>/dev/null || true)
 
-      [ "$CUR_ID"  = "None" ] && CUR_ID=""
-      [ "$CUR_ARN" = "None" ] && CUR_ARN=""
+[ "$CUR_ID"  = "None" ] && CUR_ID=""
+[ "$CUR_ARN" = "None" ] && CUR_ARN=""
 
-      # IMPORTANT: escape Terraform interpolation in bash ${...} using $${...}
-      CUR_PROFILE="$${CUR_ARN##*/}"
+# IMPORTANT: escape Terraform interpolation in bash ${...} using $${...}
+CUR_PROFILE="$${CUR_ARN##*/}"
 
-      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
-        echo "Instance $IID already associated with profile $PROFILE"
-        exit 0
-      fi
+if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
+  echo "Instance $IID already associated with profile $PROFILE"
+  exit 0
+fi
 
-      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
-        echo "Disassociating old profile $CUR_PROFILE from $IID ..."
-        aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
-        sleep 3
-      fi
+if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
+  echo "Disassociating old profile $CUR_PROFILE from $IID ..."
+  aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
+  sleep 3
+fi
 
-      echo "Associating profile $PROFILE to $IID ..."
-      aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
-      echo "Done."
-    EOT
+echo "Associating profile $PROFILE to $IID ..."
+aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
+echo "Done."
+EOT
   }
 }
