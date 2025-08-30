@@ -434,7 +434,7 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI (no jq; fixes heredoc + ${} escaping)
+# Idempotent attach via AWS CLI (no jq; fixes ${} escaping)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
@@ -446,13 +446,12 @@ resource "null_resource" "attach_profile" {
 
   provisioner "local-exec" {
     interpreter = ["bash", "-lc"]
-    command = <<EOT
+    command = <<EOF
 set -euo pipefail
 IID="${each.value}"
 PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
 REGION="${var.aws_region}"
 
-# Current association (if any)
 CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
   --filters Name=instance-id,Values="$IID" \
   --region "$REGION" \
@@ -468,7 +467,7 @@ CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
 [ "$CUR_ID"  = "None" ] && CUR_ID=""
 [ "$CUR_ARN" = "None" ] && CUR_ARN=""
 
-# IMPORTANT: escape Terraform interpolation in bash ${...} using $${...}
+# escape bash ${..} so Terraform doesn't try to interpolate it
 CUR_PROFILE="$${CUR_ARN##*/}"
 
 if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
@@ -485,6 +484,6 @@ fi
 echo "Associating profile $PROFILE to $IID ..."
 aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
 echo "Done."
-EOT
+EOF
   }
 }
