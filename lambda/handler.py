@@ -15,7 +15,7 @@ ec2 = boto3.client("ec2", region_name=REGION)
 ses = boto3.client("ses", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 
-# ---------------- JWT minimal (no external libs) ----------------
+# ---------------- JWT minimal ----------------
 def _b64url(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
 
@@ -38,26 +38,13 @@ def ok(body):    return {"statusCode": 200, "headers":{"content-type":"applicati
 def bad(msg):    return {"statusCode": 400, "headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
 def denied(msg): return {"statusCode": 401, "headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
 
-def json_or_default(s, default):
-    try:
-        return json.loads(s) if s else default
-    except Exception:
-        return default
+class SsmMappedError(RuntimeError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code  # "not_connected" / "denied" / "internal"
 
-def _map_client_error(e: ClientError):
-    code = (e.response or {}).get("Error", {}).get("Code", "")
-    if "TargetNotConnected" in code:
-        return "not_connected"
-    if code in ("AccessDeniedException", "AccessDenied"):
-        return "denied"
-    return "internal"
-
-def run_ps(instance_id: str, commands: list[str], timeout_sec: int = 90):
-    """
-    Run PowerShell via SSM. Returns dict:
-    - on success: {"status":"Success","stdout":"...","stderr":""}
-    - on SSM error: {"status":"Error","error":"not_connected|denied|internal"}
-    """
+def run_ps(instance_id: str, commands: list[str], timeout_sec: int = 120):
+    """Run PowerShell via SSM and return the invocation dict, mapping common errors."""
     try:
         resp = ssm.send_command(
             DocumentName="AWS-RunPowerShellScript",
@@ -65,67 +52,99 @@ def run_ps(instance_id: str, commands: list[str], timeout_sec: int = 90):
             Parameters={"commands": commands},
         )
     except ClientError as e:
-        return {"status":"Error","error":_map_client_error(e)}
+        err = e.response.get("Error", {}).get("Code", "")
+        if err in ("TargetNotConnected", "UnsupportedPlatformType"):
+            raise SsmMappedError("not_connected")
+        if err in ("AccessDeniedException","AccessDenied"):
+            raise SsmMappedError("denied")
+        raise SsmMappedError("internal")
 
     cmd_id = resp["Command"]["CommandId"]
+
     t0 = time.time()
     while True:
         try:
             inv = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
         except ClientError as e:
-            return {"status":"Error","error":_map_client_error(e)}
+            err = e.response.get("Error", {}).get("Code","")
+            if err in ("TargetNotConnected","InvocationDoesNotExist"):
+                raise SsmMappedError("not_connected")
+            if err in ("AccessDeniedException","AccessDenied"):
+                raise SsmMappedError("denied")
+            raise SsmMappedError("internal")
 
         st = inv.get("Status")
         if st in ("Success","Cancelled","TimedOut","Failed"):
-            return {
-                "status": st,
-                "stdout": inv.get("StandardOutputContent",""),
-                "stderr": inv.get("StandardErrorContent","")
-            }
+            return inv
         if time.time() - t0 > timeout_sec:
-            return {"status":"Error","error":"timeout"}
+            raise SsmMappedError("internal")
         time.sleep(2)
+
+def json_or_default(s, default):
+    try:
+        return json.loads(s) if s else default
+    except Exception:
+        return default
 
 # ---------------- routes ----------------
 def route_request_otp(body):
     email = body.get("email","").strip()
     if not email or not email.lower().endswith("@"+ALLOWED_DOMAIN.lower()):
         return bad("Email must be @"+ALLOWED_DOMAIN)
-    code = str(time.time_ns())[-6:]  # demo code
-    tbl = dynamodb.Table(OTP_TABLE)
-    ttl = int(time.time()) + 300
-    tbl.put_item(Item={"email": email, "code": code, "expiresAt": ttl})
-    # send email
-    ses.send_email(
-        Source=SES_SENDER,
-        Destination={"ToAddresses":[email]},
-        Message={"Subject":{"Data":"Your OTP"},
-                 "Body":{"Text":{"Data": f"Your EC2 Dashboard OTP is: {code} (valid 5 minutes)"}}}
-    )
+
+    code = str(time.time_ns())[-6:]
+    ttl  = int(time.time()) + 300
+
+    dynamodb.Table(OTP_TABLE).put_item(Item={"email": email, "code": code, "expiresAt": ttl})
+
+    try:
+        ses.send_email(
+            Source=SES_SENDER,  # must be verified in REGION
+            Destination={"ToAddresses":[email]},
+            Message={
+                "Subject":{"Data":"Your OTP"},
+                "Body":{"Text":{"Data": f"Your EC2 Dashboard OTP is: {code} (valid 5 minutes)"}}
+            }
+        )
+    except ClientError as e:
+        msg = e.response.get("Error", {}).get("Message", "SES send failed")
+        return bad("SES: " + msg)
+
     return ok({"message":"otp sent"})
 
 def route_verify_otp(body):
     email = body.get("email","").strip()
     code  = body.get("code","").strip()
-    tbl = dynamodb.Table(OTP_TABLE)
-    it = tbl.get_item(Key={"email": email}).get("Item")
-    if not it or it.get("code") != code: return bad("Invalid OTP")
+    if not email or not code:
+        return bad("Missing email/code")
+
+    it = dynamodb.Table(OTP_TABLE).get_item(Key={"email": email}).get("Item")
+    if not it or it.get("code") != code:
+        return bad("Invalid OTP")
+
     return ok({"message":"verified"})
 
 def route_login(body):
     username = body.get("username","").strip()
     password = body.get("password","").strip()
-    if not username or not password: return bad("Missing credentials")
+    if not username or not password:
+        return bad("Missing credentials")
 
-    # VERY simple demo auth from SSM param: value format "password,role,email,name"
-    p = ssm.get_parameter(Name=f"{PARAM_USER_PREFIX}/{username}", WithDecryption=True)["Parameter"]["Value"]
+    try:
+        p = ssm.get_parameter(Name=f"{PARAM_USER_PREFIX}/{username}", WithDecryption=True)["Parameter"]["Value"]
+    except ssm.exceptions.ParameterNotFound:
+        return denied("User not provisioned")
+
     parts = [x.strip() for x in p.split(",")]
-    if len(parts) < 2: return denied("User not provisioned")
+    if len(parts) < 2:
+        return denied("User not provisioned")
+
     pw, role = parts[0], parts[1]
     email = parts[2] if len(parts) > 2 else ""
     name  = parts[3] if len(parts) > 3 else username
 
-    if password != pw: return denied("Invalid username/password")
+    if password != pw:
+        return denied("Invalid username/password")
 
     token = make_jwt({"sub": username, "role": role, "iat": int(time.time())})
     return ok({"token": token, "role": role, "user": {"username": username, "email": email, "name": name, "role": role}})
@@ -139,14 +158,16 @@ def route_instances(authz):
             iid = i.get("InstanceId")
             name = ""
             for t in i.get("Tags",[]):
-                if t["Key"]=="Name": name = t["Value"]; break
-            if not name: continue
+                if t["Key"]=="Name":
+                    name = t["Value"]; break
+            if not name:
+                continue
             items.append({"id": iid, "name": name, "state": state})
 
     envs = {e: {"DM": [], "EA": []} for e in ENV_NAMES if e}
     for it in items:
         env = next((e for e in ENV_NAMES if e.lower() in it["name"].lower()), None) or (ENV_NAMES[0] if ENV_NAMES else "ENV")
-        blk = "DM" if "dm" in it["name"].lower() else ("EA" if "ea" in it["name"].lower() else "DM")
+        blk = "DM" if ("dm" in it["name"].lower() or "sql" in it["name"].lower()) else ("EA" if "ea" in it["name"].lower() else "DM")
         envs.setdefault(env, {"DM":[],"EA":[]})
         envs[env][blk].append(it)
 
@@ -160,9 +181,12 @@ def route_instances(authz):
 def route_instance_action(body):
     iid = body.get("id")
     action = body.get("action")
-    if not iid or action not in ("start","stop"): return bad("Missing/invalid")
-    if action=="start": ec2.start_instances(InstanceIds=[iid])
-    else: ec2.stop_instances(InstanceIds=[iid])
+    if not iid or action not in ("start","stop"):
+        return bad("Missing/invalid")
+    if action=="start":
+        ec2.start_instances(InstanceIds=[iid])
+    else:
+        ec2.stop_instances(InstanceIds=[iid])
     return ok({"message": f"{action} requested"})
 
 # ---------- SERVICES ----------
@@ -170,56 +194,81 @@ def route_services(body):
     iid = body.get("id")
     mode = body.get("mode","list")
     pattern = (body.get("pattern") or "").strip()
-    svc = (body.get("service") or "").strip()
-    name_hint = (body.get("instanceName") or "").lower()
-    if not iid: return bad("Missing instance id")
+    if not iid:
+        return bad("Missing instance id")
 
-    # infer type from instance name
-    inst_type = "svcweb"
-    if "sql" in name_hint:
-        inst_type = "sql"
+    try:
+        if mode == "list":
+            # general list: optional pattern; otherwise common svc/web/iis/redis
+            if pattern:
+                ps = 'Get-Service -Name "*' + pattern + '*" -ErrorAction SilentlyContinue | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+            else:
+                ps = (
+                    r"Get-Service | Where-Object { $_.Name -match '(?i)svc|web|w3svc|was|iis|redis' -or "
+                    r"$_.DisplayName -match '(?i)IIS|WWW|Web|Redis' } | "
+                    r"Select Name,DisplayName,Status | ConvertTo-Json -Compress"
+                )
+            inv = run_ps(iid, [ps])
+            services = json_or_default(inv.get("StandardOutputContent",""), [])
+            return ok({"services": services})
 
-    if mode == "list":
-        if inst_type == "sql":
-            # strictly SQL Server + Agent
-            ps = r'''Get-Service -Name 'MSSQL*','SQLAgent*' -ErrorAction SilentlyContinue | Select Name,DisplayName,Status | ConvertTo-Json -Compress'''
-        else:
-            if not pattern:
-                # ask UI to show a hint; empty list is OK
-                return ok({"services": []})
-            # free text filter on Name or DisplayName
-            ps = "Get-Service | Where-Object { $_.Name -like '*" + pattern + "*' -or $_.DisplayName -like '*" + pattern + "*' } | Select Name,DisplayName,Status | ConvertTo-Json -Compress"
+        if mode in ("start","stop"):
+            svc = (body.get("service") or "").strip()
+            if not svc:
+                return bad("Missing service")
+            if mode=="start":
+                ps = 'Start-Service -Name "' + svc + '"; Start-Sleep -Seconds 1; Get-Service -Name "' + svc + '" | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+            else:
+                ps = 'Stop-Service -Name "' + svc + '" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Get-Service -Name "' + svc + '" | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+            inv = run_ps(iid, [ps])
+            services = json_or_default(inv.get("StandardOutputContent",""), [])
+            return ok({"services": services})
 
-        inv = run_ps(iid, [ps])
-        if inv.get("status") == "Error":
-            return ok({"error": inv.get("error","internal")})
-        services = json_or_default(inv.get("stdout",""), [])
-        return ok({"services": services})
+        if mode == "iisreset":
+            cmds = [
+                'iisreset /restart',
+                'Get-Service W3SVC,WAS -ErrorAction SilentlyContinue | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
+            ]
+            inv = run_ps(iid, cmds)
+            services = json_or_default(inv.get("StandardOutputContent",""), [])
+            return ok({"services": services})
 
-    if mode in ("start","stop"):
-        if not svc: return bad("Missing service")
-        if mode=="start":
-            ps = 'Start-Service -Name "' + svc + '"; Start-Sleep -Seconds 1; (Get-Service -Name "' + svc + '") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        else:
-            ps = 'Stop-Service -Name "' + svc + '" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; (Get-Service -Name "' + svc + '") | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        inv = run_ps(iid, [ps])
-        if inv.get("status") == "Error":
-            return ok({"error": inv.get("error","internal")})
-        services = json_or_default(inv.get("stdout",""), [])
-        return ok({"services": services})
+        if mode == "sqlinfo":
+            ps = r'''
+$svcs = Get-Service -Name 'MSSQL*','SQLAgent*' -ErrorAction SilentlyContinue | Select Name,DisplayName,Status
+$os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber
+$items = @()
+try{
+  $instKey = 'HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\Instance Names\SQL'
+  if(Test-Path $instKey){
+    $map = Get-ItemProperty -Path $instKey
+    $map.PSObject.Properties | ForEach-Object {
+      $iname = $_.Name
+      $code = $_.Value
+      $cvKey = "HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\$code\MSSQLServer\CurrentVersion"
+      $cv = Get-ItemProperty -Path $cvKey -ErrorAction SilentlyContinue
+      if($cv){
+        $items += [pscustomobject]@{ Instance=$iname; Version=$cv.CurrentVersion; PatchLevel=$cv.PatchLevel }
+      }
+    }
+  }
+}catch{}
+[pscustomobject]@{ Services=$svcs; OS=$os; SQL=$items } | ConvertTo-Json -Compress -Depth 6
+'''
+            inv = run_ps(iid, [ps])
+            data = json_or_default(inv.get("StandardOutputContent",""), {})
+            return ok({
+                "services": data.get("Services",[]),
+                "os": data.get("OS", {}),
+                "sql": data.get("SQL", []),
+            })
 
-    if mode == "iisreset":
-        cmds = [
-            'iisreset /restart',
-            'Get-Service W3SVC,WAS -ErrorAction SilentlyContinue | Select Name,DisplayName,Status | ConvertTo-Json -Compress'
-        ]
-        inv = run_ps(iid, cmds)
-        if inv.get("status") == "Error":
-            return ok({"error": inv.get("error","internal")})
-        services = json_or_default(inv.get("stdout",""), [])
-        return ok({"services": services})
+        return bad("Unknown mode")
 
-    return bad("Unknown mode")
+    except SsmMappedError as e:
+        return ok({"error": e.code})
+    except Exception:
+        return ok({"error": "internal"})
 
 # -------------- Lambda entry --------------
 def lambda_handler(event, context):
