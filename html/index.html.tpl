@@ -24,10 +24,9 @@
     .chip{padding:6px 10px;background:#1a2742;border-radius:12px;font-size:12px}
     .mut{color:var(--mut);font-size:12px}
     .right{margin-left:auto}
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
-    .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
-    .grid{display:grid;grid-template-columns:1fr 1fr 50px 50px;gap:10px}
-    input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
+    .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:760px;width:100%}
+    input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px}
     .error{background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:10px;padding:8px 10px}
   </style>
 </head>
@@ -48,6 +47,7 @@
   <div id="envMount"></div>
 </div>
 
+<!-- Services modal (unchanged) -->
 <div class="modal" id="svcModal">
   <div class="card">
     <div class="row" style="margin-bottom:10px">
@@ -63,35 +63,26 @@
   </div>
 </div>
 
+<!-- AUTH modal: OTP ONLY -->
 <div class="modal" id="authModal">
-  <div class="card" style="max-width:760px">
+  <div class="card" style="max-width:520px">
     <div class="row" style="gap:12px;margin-bottom:12px">
-      <button id="tabOtp" class="btn small" onclick="showOtp()">Email OTP</button>
-      <button id="tabPwd" class="btn small" onclick="showPwd()">User / Password</button>
+      <div style="font-weight:700">Email verification</div>
       <div class="right"></div>
       <button class="btn small" onclick="closeAuth()">Close</button>
     </div>
 
     <div id="paneOtp">
       <div class="row" style="gap:10px">
-        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="width:320px">
+        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="flex:1;min-width:260px">
         <button class="btn" onclick="requestOtp()">Request OTP</button>
       </div>
       <div class="row" style="gap:10px;margin-top:10px">
-        <input id="otpCode" placeholder="6-digit code" style="width:160px">
+        <input id="otpCode" placeholder="6-digit code" style="width:180px">
         <button class="btn" onclick="verifyOtp()">Verify OTP</button>
       </div>
       <div class="mut" style="margin-top:8px">Allowed domain: ${allowed_email_domain}</div>
-    </div>
-
-    <div id="panePwd" style="display:none">
-      <div class="mut" style="margin-bottom:6px">Enter credentials (OTP required first).</div>
-      <div class="row" style="gap:10px">
-        <input id="uName" placeholder="username" style="width:220px">
-        <input id="uPass" placeholder="password" type="password" style="width:220px">
-        <button id="btnLogin" class="btn" onclick="doLogin()" disabled>Login</button>
-      </div>
-      <div class="mut" style="margin-top:8px">Tip: give a user the role <b>read</b> for demo-only (start/stop disabled).</div>
+      <div class="mut" style="margin-top:6px">After verification you’ll be taken to a separate sign-in page.</div>
     </div>
   </div>
 </div>
@@ -115,14 +106,12 @@
   function $(id){ return document.getElementById(id); }
   function toast(msg){ alert(msg); }
 
-  function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
+  function openLogin(){ $("authModal").style.display="flex"; }
   function logout(){
     ["jwt","role","user","otp_verified","otp_verified_until","allowed_domain"].forEach(k=>localStorage.removeItem(k));
     refresh();
   }
   function closeAuth(){ $("authModal").style.display = "none"; }
-  function showOtp(){ $("paneOtp").style.display="block"; $("panePwd").style.display="none"; }
-  function showPwd(){ $("paneOtp").style.display="none"; $("panePwd").style.display="block"; }
 
   function requestOtp(){
     var em = $("otpEmail").value.trim();
@@ -130,7 +119,7 @@
     http("/request-otp","POST",{email:em}).then(()=>toast("OTP sent")).catch(e=>toast(e.message));
   }
 
-  // After OTP success → redirect to separate login page
+  // OTP success → redirect to separate login page
   function verifyOtp(){
     var em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
     if(!em || !cd){ toast("enter email and code"); return; }
@@ -144,22 +133,6 @@
       .catch(e=>toast(e.message));
   }
 
-  // (kept for backward-compat if someone opens the modal login)
-  function doLogin(){
-    var u = $("uName").value.trim(), p = $("uPass").value;
-    if(!u || !p){ toast("missing credentials"); return; }
-    if(localStorage.getItem("otp_verified")!=="1"){ toast("Please verify OTP first"); return; }
-    http("/login","POST",{username:u,password:p})
-      .then(function(res){
-        localStorage.setItem("jwt", res.token);
-        localStorage.setItem("role", res.role);
-        localStorage.setItem("user", JSON.stringify(res.user));
-        $("authModal").style.display="none";
-        renderUser(); refresh();
-      }).catch(e=>toast(e.message));
-  }
-  $("uPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ doLogin(); } });
-
   function renderUser(){
     var u = localStorage.getItem("user");
     if(u){ var o=JSON.parse(u); $("userBadge").textContent=(o.name||o.username||"")+" • "+(o.role||""); $("userBadge").style.display="inline-block"; }
@@ -168,13 +141,13 @@
 
   function refresh(){
     var jwt = localStorage.getItem("jwt");
-    if(!jwt){ $("authModal").style.display="flex"; showOtp(); return; }
+    if(!jwt){ $("authModal").style.display="flex"; return; }
     http("/instances","GET",null,jwt).then(function(data){
       $("tTotal").textContent="Total: "+data.summary.total;
       $("tRun").textContent="Running: "+data.summary.running;
       $("tStop").textContent="Stopped: "+data.summary.stopped;
       renderTabs(data.envs);
-    }).catch(function(){ $("authModal").style.display="flex"; showOtp(); });
+    }).catch(function(){ $("authModal").style.display="flex"; });
   }
 
   function renderTabs(envs){
@@ -233,7 +206,8 @@
         var d=document.createElement("div"); d.className="error"; d.textContent="SSM error: "+res.error+(res.reason? " ("+res.reason+")":"")+". "+tip; mount.appendChild(d); return;
       }
       var svcs=res.services||[]; if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){ var d2=document.createElement("div"); d2.className="mut"; d2.textContent="Enter text to filter services."; mount.appendChild(d2); return; }
-      var g=document.createElement("div"); g.className="grid"; var role=(localStorage.getItem("role")||"read").toLowerCase();
+      var g=document.createElement("div"); g.className="grid";
+      var role=(localStorage.getItem("role")||"read").toLowerCase();
       for(var i=0;i<svcs.length;i++){ var s=svcs[i];
         var n=document.createElement("div"); n.textContent=s.Name||""; var d=document.createElement("div"); d.textContent=s.DisplayName||""; var st=(s.Status||"").toString().toLowerCase();
         var b1=btn("Start","ok",(function(name){return function(){svcAction("start",name);};})(s.Name));
@@ -246,7 +220,7 @@
   function svcAction(what,name){ http("/services","POST",{id:svcCtx.id,mode:what,service:name}, localStorage.getItem("jwt")).then(()=>svcRefresh()).catch(()=>toast("service action failed")); }
   function svcIISReset(){ http("/services","POST",{id:svcCtx.id,mode:"iisreset"}, localStorage.getItem("jwt")).then(()=>{toast("IIS reset sent"); svcRefresh();}).catch(()=>toast("failed")); }
 
-  (function init(){ renderUser(); $("authModal").style.display="flex"; showOtp(); refresh(); })();
+  (function init(){ renderUser(); $("authModal").style.display="flex"; refresh(); })();
 </script>
 </body>
 </html>
