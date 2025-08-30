@@ -73,19 +73,33 @@ def verify_otp(data):
 
 # ---------- Users from SSM ----------
 def _read_user(username: str):
-    """Reads /<prefix>/<username> -> 'password|role' from SSM and returns dict."""
+    """
+    Reads SSM value and supports either format:
+      - 'password|role'
+      - 'password,role[,email[,name]]'
+    Returns dict with password, role, email, name.
+    """
     p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
-    val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"]
-    parts = val.split("|", 1)
-    pwd = parts[0]
-    role = (parts[1] if len(parts) > 1 else "read").strip().lower()
-    return {"password": pwd, "role": role or "read"}
+    val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"].strip()
+
+    email = ""
+    name = username
+
+    if "|" in val:
+        pwd, role = val.split("|", 1)
+    else:
+        parts = [x.strip() for x in val.split(",")]
+        pwd  = parts[0] if len(parts) > 0 else ""
+        role = parts[1] if len(parts) > 1 else "read"
+        email = parts[2] if len(parts) > 2 else ""
+        name  = parts[3] if len(parts) > 3 else username
+
+    pwd  = (pwd or "").strip()
+    role = (role or "read").strip().lower() or "read"
+    return {"password": pwd, "role": role, "email": email, "name": name}
+
 
 def login(data):
-    """
-    Body JSON: { "username": "...", "password": "..." }
-    Returns: { token, role, user: { username, role } }
-    """
     u = (data.get("username") or "").strip()
     p = (data.get("password") or "")
     if not u or not p:
@@ -97,7 +111,7 @@ def login(data):
         return bad(401, "invalid_user")
 
     if user.get("password") != p:
-        return bad(401, "invalid_password")
+        return bad(401, "bad_credentials")
 
     role = user.get("role") or "read"
     token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
@@ -105,8 +119,14 @@ def login(data):
     return ok({
         "token": token,
         "role": role,
-        "user": {"username": u, "role": role, "name": u}
+        "user": {
+            "username": u,
+            "role": role,
+            "name": user.get("name") or u,
+            "email": user.get("email", "")
+        }
     })
+
 
 # ---------- Auth helper for protected endpoints ----------
 def _auth(event):
