@@ -1,369 +1,430 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <meta http-equiv="cache-control" content="no-cache"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8">
   <title>EC2 Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root { --bg:#0f172a; --panel:#131c33; --muted:#8ea0c2; --text:#dce6ff; --chip:#1e293b;
-            --ok:#18a058; --warn:#eab308; --bad:#ef4444; --btn:#23314e; --btn2:#3b82f6; }
-    html,body{height:100%}
-    body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Arial}
-    .wrap{max-width:1080px;margin:32px auto;padding:0 12px}
-    h1{margin:0 0 16px 0}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .chip{background:var(--chip);border-radius:999px;padding:6px 12px;color:#cde;display:inline-flex;gap:8px}
-    .btn{background:var(--btn);border:0;color:#cde;border-radius:9px;padding:7px 12px;cursor:pointer}
-    .btn:hover{filter:brightness(1.15)}
-    .btn.pri{background:var(--btn2);color:white}
-    .btn.good{background:var(--ok);color:white}
-    .btn.bad{background:var(--bad);color:white}
-    .btn.ghost{background:#1f2937}
-    .btn[disabled]{opacity:.4;cursor:not-allowed}
-    .right{margin-left:auto}
-    .tabs{display:flex;gap:8px;margin:10px 0 16px}
-    .tab{padding:6px 10px;border-radius:8px;background:#0b1224;color:#a9b8d9;cursor:pointer}
-    .tab.active{background:#1a2544;color:#e9f1ff}
-    .card{background:var(--panel);border-radius:12px;padding:12px;margin:12px 0}
-    .box{border-radius:12px;background:#0b1429;padding:10px 12px;display:flex;align-items:center;gap:10px}
-    .muted{color:var(--muted)}
-    .pill{border-radius:999px;padding:4px 8px}
-    .state{font-weight:600}
-    .state.running{color:#8af0b0}
-    .state.stopped{color:#f6b2b2}
-    .grid{display:grid;gap:8px}
-    .inst{display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;background:#0c1326}
-    .inst .name{font-weight:600}
-    .inst .iid{color:#6f86a9;font-size:12px}
-    .inst .actions{margin-left:auto;display:flex;gap:8px}
-    /* modal */
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
-    .modal.show{display:flex}
-    .dialog{width:min(900px,96vw);max-height:80vh;overflow:auto;background:var(--panel);border-radius:14px;padding:16px}
-    .list{background:#0b1429;border-radius:10px;padding:8px;max-height:52vh;overflow:auto}
-    .svc-row{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px}
-    .svc-row:hover{background:#0e1933}
-    .svc-name{min-width:220px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
-    .svc-status{font-weight:600}
-    .svc-status.running{color:#7ff0aa}
-    .svc-status.stopped{color:#ffb5b5}
-    .hint{font-size:12px;color:#9fb2d6;margin-top:8px}
-    input,select{background:#0b1327;border:1px solid #1f2c48;color:#dfe7ff;border-radius:8px;padding:8px 10px}
-    .w250{width:250px}
+    :root{
+      --bg:#0b1422; --card:#111b2b; --chip:#0f223e; --text:#e9f0ff; --muted:#9fb2d7;
+      --green:#1f8f5f; --red:#a34444; --blue:#4578e6; --chip2:#15233b;
+    }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1200px;margin:0 auto;padding:24px;}
+    h1{margin:0 0 12px 0;font-weight:700}
+    .stats{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 20px 0}
+    .stat{background:var(--chip);border-radius:18px;padding:10px 16px;font-weight:700}
+    .stat.big{font-size:22px;padding:14px 22px;border:1px solid #28446f;box-shadow:0 0 0 2px #0c2142 inset}
+    .topbar{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:-44px}
+    .btn{background:#20385f;color:#dbe8ff;border:none;border-radius:10px;padding:8px 12px;cursor:pointer}
+    .btn.small{padding:6px 10px}
+    .btn.green{background:var(--green)} .btn.red{background:var(--red)} .btn.blue{background:var(--blue)}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .tabs{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 16px 0}
+    .pill{background:var(--chip2);padding:8px 14px;border-radius:999px;cursor:pointer}
+    .pill.active{outline:2px solid #2b4f8a}
+    .card{background:var(--card);border-radius:14px;padding:16px;margin:12px 0}
+    .row{display:flex;align-items:center;justify-content:space-between;background:#0f192a;border-radius:10px;padding:10px 12px;margin:8px 0}
+    .name{font-weight:700}
+    .state{color:#9dd8b9;margin-right:8px}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}
+    .modal.in{display:flex}
+    .panel{max-width:620px;width:100%;background:var(--card);border-radius:16px;padding:18px}
+    .grid{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center}
+    .svc-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .muted{color:var(--muted);font-size:12px}
+    input,select{background:#0f1b2c;border:1px solid #20324d;color:#e9f0ff;border-radius:8px;padding:9px 10px}
+    .w100{width:100%}
+    .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
+    .note{font-size:12px;color:#a8b9db}
+    .svc-row{display:grid;grid-template-columns:1fr 80px 80px;gap:8px;align-items:center;background:#0f1829;border-radius:8px;padding:8px;margin:6px 0}
+    .svcname{font-family:ui-monospace,Consolas,monospace}
+    .err{background:#291316;border:1px solid #5f2b2b;border-radius:10px;padding:8px 10px;color:#ffb3b3;margin:8px 0}
+    .header{display:flex;align-items:flex-end;justify-content:space-between}
+    .who{background:#12243d;border-radius:999px;padding:8px 12px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="row">
+    <div class="header">
       <h1>EC2 Dashboard</h1>
-      <div class="chip right"><b>Total:</b> <span id="tot">0</span></div>
-      <div class="chip"><b>Running:</b> <span id="run">0</span></div>
-      <div class="chip"><b>Stopped:</b> <span id="stop">0</span></div>
-      <button id="btnLogin" class="btn right">Login</button>
-      <div id="who" class="chip" style="display:none"></div>
-      <button id="btnLogout" class="btn" style="display:none">Sign out</button>
-      <button id="btnRefresh" class="btn">Refresh</button>
+      <div class="topbar">
+        <span id="who" class="who" style="display:none"></span>
+        <button class="btn small" id="btnSignOut" style="display:none">Sign out</button>
+        <button class="btn small" id="btnRefresh">Refresh</button>
+        <button class="btn small" id="btnLogin">Login</button>
+      </div>
     </div>
 
-    <div id="tabs" class="tabs"></div>
+    <div class="stats">
+      <div class="stat big" id="statTotal">Total: 0</div>
+      <div class="stat big" id="statRun">Running: 0</div>
+      <div class="stat big" id="statStop">Stopped: 0</div>
+    </div>
+
+    <div class="tabs" id="envTabs"></div>
+
     <div id="envContainer"></div>
   </div>
 
-  <!-- Login modal (OTP first, then user/pw) -->
-  <div id="loginModal" class="modal show">
-    <div class="dialog" style="max-width:560px">
-      <h3 style="margin:0 0 8px">Sign in</h3>
-
-      <div class="tabs">
-        <div id="tabOtp" class="tab active">Email OTP</div>
-        <div id="tabCred" class="tab">User / Password</div>
+  <!-- Sign-in modal -->
+  <div class="modal" id="authModal">
+    <div class="panel" style="max-width:700px">
+      <h3>Sign in</h3>
+      <div style="display:flex;gap:8px" class="mt8">
+        <button class="btn small" id="tabOtp">Email OTP</button>
+        <button class="btn small" id="tabUpw">User / Password</button>
       </div>
 
-      <div id="paneOtp">
-        <div class="row" style="gap:6px;margin:8px 0">
-          <input id="otpEmail" class="w250" placeholder="name@${allowed_email_domain}">
-          <button id="btnReqOtp" class="btn pri">Request OTP</button>
+      <div id="otpPane" class="mt12">
+        <div class="note">Allowed domain: <b id="allowDom"></b></div>
+        <div class="mt8"><input class="w100" id="otpEmail" placeholder="name@example.com"></div>
+        <div class="mt8" style="display:flex;gap:8px">
+          <button class="btn blue" id="btnReqOtp">Request OTP</button>
+          <input id="otpCode" placeholder="6-digit code" style="width:160px">
+          <button class="btn blue" id="btnVerifyOtp">Verify OTP</button>
         </div>
-        <div class="row" style="gap:6px;margin:6px 0">
-          <input id="otpCode" class="w250" placeholder="6-digit code">
-          <button id="btnVerifyOtp" class="btn pri">Verify OTP</button>
-        </div>
-        <div class="hint">Allowed domain: <b>${allowed_email_domain}</b></div>
+        <div class="note mt8">After verification a new tab with the username/password page will open.</div>
       </div>
 
-      <div id="paneCred" style="display:none">
-        <div class="row" style="gap:6px;margin:8px 0">
-          <input id="username" class="w250" placeholder="username">
+      <div id="upwPane" class="mt12" style="display:none;opacity:.5;pointer-events:none">
+        <div class="note">Enter credentials (OTP required first).</div>
+        <div class="mt8"><input class="w100" id="upwUser" placeholder="username"></div>
+        <div class="mt8" style="display:flex;gap:8px">
+          <input id="upwPass" placeholder="password" type="password" class="w100">
+          <button class="btn blue" id="btnLogin2">Login</button>
         </div>
-        <div class="row" style="gap:6px;margin:6px 0">
-          <input id="password" class="w250" type="password" placeholder="password">
-          <button id="btnDoLogin" class="btn pri">Login</button>
-        </div>
-        <div class="hint">Tip: give a user the role <code>read</code> for demo-only (start/stop disabled).</div>
+        <div class="note mt8">Tip: give a user the role <b>read</b> for demo-only (start/stop disabled).</div>
       </div>
 
-      <div class="row" style="margin-top:12px">
-        <button id="btnCloseLogin" class="btn right">Close</button>
+      <div class="mt16" style="text-align:right">
+        <button class="btn" id="btnCloseAuth">Close</button>
       </div>
     </div>
   </div>
 
   <!-- Services modal -->
-  <div id="svcModal" class="modal">
-    <div class="dialog">
-      <div class="row">
-        <h3 id="svcTitle" style="margin:0">Services</h3>
-        <div class="right"></div>
-
-        <input id="svcFilter" class="w250" placeholder="Type to filter (svc/web)">
-        <button id="btnSvcRefresh" class="btn">Refresh</button>
-        <button id="btnIisReset" class="btn">IIS Reset</button>
-        <button id="btnSvcClose" class="btn">Close</button>
+  <div class="modal" id="svcModal">
+    <div class="panel" style="max-width:900px">
+      <div class="svc-head">
+        <div>
+          <b>Services on <span id="svcTitle"></span></b>
+          <div class="note" id="svcHint"></div>
+        </div>
+        <div>
+          <input id="svcFilter" placeholder="Type to filter (web/svc)" style="display:none">
+          <button class="btn small" id="btnIIS" style="display:none">IIS Reset</button>
+          <button class="btn small" id="btnCloseSvc">Back</button>
+        </div>
       </div>
-      <div id="svcList" class="list" style="margin-top:10px"></div>
-      <div id="svcHint" class="hint"></div>
+      <div id="svcError" class="err" style="display:none"></div>
+      <div id="svcRows"></div>
+      <div class="note" id="svcFoot"></div>
     </div>
   </div>
 
 <script>
-const API_BASE = "${api_base_url}";
-const ALLOWED_DOMAIN = "${allowed_email_domain}";
-const ENV_NAMES = "${env_names}".split(",").filter(function(x){return x;});
-let TOKEN=null, ROLE=null, USER=null;
-let ENV_DATA=null; // from /instances
-let currentServices = { id:null, name:null, kind:null };
-var q = function(sel){ return document.querySelector(sel); };
+(function(){
+  var API = "${api_base_url}";
+  var ALLOWED = "${allowed_email_domain}";
+  var ENVS = ("${env_names}"||"").split(",").filter(function(x){return x});
 
-// ---------- small helpers ----------
-function toast(msg){ alert(msg); }
-function hdr(){ return TOKEN ? { "Authorization":"Bearer "+TOKEN, "content-type":"application/json"} : {"content-type":"application/json"} }
-async function api(path, method, body){
-  method = method || "GET";
-  const res = await fetch(API_BASE+path, { method: method, headers: hdr(), body: body ? JSON.stringify(body):undefined });
-  const txt = await res.text();
-  var data = {};
-  try{ data = JSON.parse(txt); }catch(e){ data = {raw:txt}; }
-  if(!res.ok){ throw new Error(data.error || res.statusText || "request failed"); }
-  return data;
-}
+  var token = "";
+  var role = "read";
+  var userObj = null;
 
-// ---------- login modal ----------
-const loginModal = q("#loginModal");
-const tabOtp = q("#tabOtp"), tabCred = q("#tabCred");
-const paneOtp = q("#paneOtp"), paneCred = q("#paneCred");
-function switchPane(which){
-  const isOtp = which==="otp";
-  tabOtp.classList.toggle("active", isOtp);
-  tabCred.classList.toggle("active", !isOtp);
-  paneOtp.style.display = isOtp ? "" : "none";
-  paneCred.style.display = isOtp ? "none" : "";
-}
-tabOtp.onclick = function(){ switchPane("otp"); };
-tabCred.onclick = function(){ switchPane("cred"); };
-q("#btnCloseLogin").onclick = function(){ loginModal.classList.remove("show"); };
-q("#btnLogin").onclick = function(){ loginModal.classList.add("show"); };
+  var envData = {}; // cached listing response
+  var svcCtx = null; // current services context
 
-q("#btnReqOtp").onclick = async function(){
-  const email = q("#otpEmail").value.trim().toLowerCase();
-  if(!email || email.slice(-1*ALLOWED_DOMAIN.length-1)!=="@"+ALLOWED_DOMAIN) { toast("Use "+ALLOWED_DOMAIN+" email"); return; }
-  try{
-    await api("/request-otp","POST",{email:email});
-    toast("OTP sent. Check your inbox.");
-  }catch(e){ toast(e.message); }
-};
-q("#btnVerifyOtp").onclick = async function(){
-  const email = q("#otpEmail").value.trim();
-  const code  = q("#otpCode").value.trim();
-  if(!email || !code) { toast("Enter email + code"); return; }
-  try{
-    await api("/verify-otp","POST",{email:email, code:code});
-    toast("Email verified. Now sign in with username/password.");
-    switchPane("cred");
-  }catch(e){ toast(e.message); }
-};
-q("#btnDoLogin").onclick = async function(){
-  const username = q("#username").value.trim();
-  const password = q("#password").value.trim();
-  if(!username || !password) { toast("Enter username/password"); return; }
-  try{
-    const r = await api("/login","POST",{username:username, password:password});
-    TOKEN=r.token; ROLE=r.role; USER=r.user;
-    loginModal.classList.remove("show");
-    q("#btnLogin").style.display="none";
-    q("#btnLogout").style.display="";
-    q("#who").style.display="inline-flex";
-    q("#who").innerText = (USER.name || USER.username) + " • " + ROLE;
-    await refreshAll();
-  }catch(e){ toast(e.message); }
-};
-q("#btnLogout").onclick = function(){
-  TOKEN=null; ROLE=null; USER=null;
-  q("#btnLogin").style.display="";
-  q("#btnLogout").style.display="none";
-  q("#who").style.display="none";
-  ENV_DATA=null; q("#envContainer").innerHTML=""; q("#tabs").innerHTML="";
-  q("#tot").innerText="0"; q("#run").innerText="0"; q("#stop").innerText="0";
-  loginModal.classList.add("show"); switchPane("otp");
-};
+  // DOM refs
+  var envTabs = document.getElementById("envTabs");
+  var envContainer = document.getElementById("envContainer");
+  var statTotal = document.getElementById("statTotal");
+  var statRun = document.getElementById("statRun");
+  var statStop = document.getElementById("statStop");
+  var btnLogin = document.getElementById("btnLogin");
+  var btnSignOut = document.getElementById("btnSignOut");
+  var btnRefresh = document.getElementById("btnRefresh");
+  var who = document.getElementById("who");
 
-// ---------- instances & tabs ----------
-async function refreshAll(){
-  try{
-    const data = await api("/instances","GET");
-    ENV_DATA = data.envs || {};
-    q("#tot").innerText  = data.summary.total;
-    q("#run").innerText  = data.summary.running;
-    q("#stop").innerText = data.summary.stopped;
-    buildTabs();
-  }catch(e){ toast(e.message); }
-}
-function buildTabs(){
-  const tabs = q("#tabs"); tabs.innerHTML="";
-  const envs = ENV_NAMES.length?ENV_NAMES:Object.keys(ENV_DATA);
-  envs.forEach(function(env, idx){
-    const t = document.createElement("div");
-    t.className = "tab"+(idx===0?" active":"");
-    t.innerText = env;
-    t.onclick = function(){ 
-      Array.prototype.forEach.call(tabs.children,function(x){x.classList.remove("active");});
-      t.classList.add("active"); 
-      renderEnv(env); 
-    };
-    tabs.appendChild(t);
-    if(idx===0) renderEnv(env);
-  });
-}
-function renderEnv(env){
-  const root = q("#envContainer"); root.innerHTML="";
-  const blocks = ENV_DATA[env] || {"DM":[],"EA":[]};
-  Object.keys(blocks).forEach(function(group){
-    const arr = blocks[group];
-    const card = document.createElement("div"); card.className="card";
-    card.innerHTML = '<div style="font-weight:700;margin:6px 0">'+ (group==="DM"?"Dream Mapper":"Encore Anywhere") +'</div>';
-    const grid = document.createElement("div"); grid.className="grid";
-    arr.forEach(function(x){
-      const row = document.createElement("div"); row.className="inst";
-      row.innerHTML =
-        '<div class="name">'+x.name+'</div>'+
-        '<div class="iid">('+x.id+')</div>'+
-        '<span class="state '+x.state+'">'+x.state+'</span>'+
-        '<div class="actions">'+
-          '<button class="btn good btnStart">Start</button>'+
-          '<button class="btn bad btnStop">Stop</button>'+
-          '<button class="btn ghost btnSvc">Services</button>'+
-        '</div>';
-      const btnStart = row.querySelector(".btnStart");
-      const btnStop  = row.querySelector(".btnStop");
-      const btnSvc   = row.querySelector(".btnSvc");
-      btnStart.disabled = (ROLE==="read") || x.state!=="stopped";
-      btnStop.disabled  = (ROLE==="read") || x.state!=="running";
-      btnStart.onclick  = function(){ doInstance(x.id,"start"); };
-      btnStop.onclick   = function(){ doInstance(x.id,"stop"); };
-      btnSvc.onclick    = function(){ openServices(x); };
-      grid.appendChild(row);
-    });
-    card.appendChild(grid);
-    root.appendChild(card);
-  });
-}
-async function doInstance(id, action){
-  if(ROLE==="read") return;
-  try{
-    await api("/instance-action","POST",{id:id, action:action});
-    await refreshAll();
-  }catch(e){ toast(e.message); }
-}
-q("#btnRefresh").onclick = refreshAll;
+  // auth modal
+  var authModal = document.getElementById("authModal");
+  var tabOtp = document.getElementById("tabOtp");
+  var tabUpw = document.getElementById("tabUpw");
+  var otpPane = document.getElementById("otpPane");
+  var upwPane = document.getElementById("upwPane");
+  var allowDom = document.getElementById("allowDom");
+  var otpEmail = document.getElementById("otpEmail");
+  var otpCode = document.getElementById("otpCode");
+  var btnReqOtp = document.getElementById("btnReqOtp");
+  var btnVerifyOtp = document.getElementById("btnVerifyOtp");
+  var upwUser = document.getElementById("upwUser");
+  var upwPass = document.getElementById("upwPass");
+  var btnLogin2 = document.getElementById("btnLogin2");
+  var btnCloseAuth = document.getElementById("btnCloseAuth");
 
-// ---------- services ----------
-const svcModal = q("#svcModal");
-const svcTitle = q("#svcTitle");
-const svcList  = q("#svcList");
-const svcFilter= q("#svcFilter");
-const btnIis   = q("#btnIisReset");
-q("#btnSvcClose").onclick = function(){ svcModal.classList.remove("show"); };
-q("#btnSvcRefresh").onclick = function(){ loadServices(); };
+  // svc modal
+  var svcModal = document.getElementById("svcModal");
+  var svcTitle = document.getElementById("svcTitle");
+  var svcRows = document.getElementById("svcRows");
+  var svcFilter = document.getElementById("svcFilter");
+  var btnIIS = document.getElementById("btnIIS");
+  var btnCloseSvc = document.getElementById("btnCloseSvc");
+  var svcHint = document.getElementById("svcHint");
+  var svcError = document.getElementById("svcError");
+  var svcFoot = document.getElementById("svcFoot");
 
-function inferKindByName(name){
-  const n = name.toLowerCase();
-  if(n.indexOf("sql")   !== -1) return "sql";
-  if(n.indexOf("redis") !== -1) return "redis";
-  if(n.indexOf("web")   !== -1 || n.indexOf("svc") !== -1) return "web";
-  return "generic";
-}
-function openServices(inst){
-  currentServices = { id:inst.id, name:inst.name, kind:inferKindByName(inst.name) };
-  svcTitle.innerText = "Services on " + inst.name;
-  const k = currentServices.kind;
-  const showFilter = (k==="web" || k==="generic");
-  svcFilter.parentElement.style.display = showFilter ? "" : "none";
-  btnIis.style.display = (k==="web") ? "" : "none";
-  svcFilter.value = "";
-  svcModal.classList.add("show");
-  loadServices();
-}
-async function loadServices(){
-  const body = { id: currentServices.id, name: currentServices.name, mode:"list", pattern: svcFilter.value.trim() };
-  try{
-    const r = await api("/services","POST", body);
-    currentServices.kind = r.kind || currentServices.kind;
-    renderSvcList(r.services || []);
-    q("#svcHint").innerText = currentServices.kind==="sql"
-      ? "Showing SQL Server & SQL Agent services (default + named instances)."
-      : (currentServices.kind==="web" ? "Filter lists services whose Name or DisplayName contains the text. IIS Reset available."
-                                     : (currentServices.kind==="redis" ? "Showing redis* services." : ""));
-  }catch(e){
-    renderSvcList([]);
-    q("#svcHint").innerText = e.message || "Error";
+  allowDom.textContent = ALLOWED;
+
+  function show(el, yes){ el.style.display = yes ? "" : "none"; }
+  function modal(m, yes){ if(yes){m.classList.add("in")} else {m.classList.remove("in")} }
+  function hdr(){
+    if(userObj){
+      who.textContent = userObj.name+" • "+role;
+      show(who,true); show(btnSignOut,true); show(btnLogin,false);
+    }else{
+      show(who,false); show(btnSignOut,false); show(btnLogin,true);
+    }
   }
-}
-function renderSvcList(items){
-  svcList.innerHTML = "";
-  const a = Array.isArray(items) ? items : (items ? [items] : []);
-  if(a.length===0){ svcList.innerHTML="<div class='muted' style='padding:8px'>No services</div>"; return; }
-  a.forEach(function(s){
-    const nm = s.Name || s.name || "";
-    const dn = s.DisplayName || s.displayName || nm;
-    const st = String(s.Status || s.status || "").toLowerCase();
-    const row = document.createElement("div"); row.className="svc-row";
-    row.innerHTML =
-      '<div class="svc-name">'+nm+'</div>'+
-      '<div class="muted" style="flex:1">'+dn+'</div>'+
-      '<div class="svc-status '+st+'">'+(st||"-")+'</div>'+
-      '<div class="actions">'+
-        '<button class="btn good actStart">Start</button>'+
-        '<button class="btn bad actStop">Stop</button>'+
-      '</div>';
-    const bStart = row.querySelector(".actStart");
-    const bStop  = row.querySelector(".actStop");
-    bStart.disabled = ROLE==="read" || st==="running";
-    bStop.disabled  = ROLE==="read" || st!=="running";
-    bStart.onclick  = function(){ doSvc(nm,"start"); };
-    bStop.onclick   = function(){ doSvc(nm,"stop"); };
-    svcList.appendChild(row);
-  });
-}
-async function doSvc(name, action){
-  if(ROLE==="read") return;
-  try{
-    const r = await api("/services","POST",{ id: currentServices.id, name: currentServices.name, mode:action, service:name });
-    renderSvcList(r.services || []);
-  }catch(e){ toast(e.message); }
-}
-btnIis.onclick = async function(){
-  if(ROLE==="read") return;
-  try{
-    await api("/services","POST",{ id: currentServices.id, name: currentServices.name, mode:"iisreset" });
-    await loadServices();
-  }catch(e){ toast(e.message); }
-};
-svcFilter.oninput = function(){
-  if(currentServices.kind==="web" || currentServices.kind==="generic") loadServices();
-};
 
-// ---------- boot ----------
-switchPane("otp"); // OTP first
+  function api(path, opt){
+    opt = opt||{};
+    var m = opt.method||"GET";
+    var body = opt.body? JSON.stringify(opt.body): null;
+    return fetch(API+path, {method:m, headers:{"content-type":"application/json","Authorization":"Bearer "+token}, body:body})
+      .then(function(r){ return r.ok? r.json(): r.json().catch(function(){return {error:"request failed"}}) })
+  }
+
+  // ---------- OTP gating ----------
+  tabOtp.onclick = function(){ otpPane.style.display=""; upwPane.style.display="none" }
+  tabUpw.onclick = function(){ otpPane.style.display="none"; upwPane.style.display="" }
+  btnLogin.onclick = function(){ openAuth() }
+  btnCloseAuth.onclick = function(){ modal(authModal,false) }
+
+  function openAuth(){
+    modal(authModal,true);
+    // if hash is #/login, enable UPW tab
+    var hasOtp = sessionStorage.getItem("otp_token")? true:false;
+    if(location.hash=="#/login"){ 
+      tabUpw.click();
+    }else{
+      tabOtp.click();
+    }
+    setUpwEnabled(hasOtp);
+  }
+
+  function setUpwEnabled(enabled){
+    upwPane.style.opacity = enabled? "1":"0.5";
+    upwPane.style.pointerEvents = enabled? "auto":"none";
+  }
+
+  btnReqOtp.onclick = function(){
+    var em = (otpEmail.value||"").trim();
+    api("/request-otp",{method:"POST",body:{email:em}})
+      .then(function(j){ alert(j.error||"OTP sent (check your email)"); })
+  }
+
+  btnVerifyOtp.onclick = function(){
+    var em = (otpEmail.value||"").trim();
+    var code = (otpCode.value||"").trim();
+    api("/verify-otp",{method:"POST",body:{email:em,code:code}})
+      .then(function(j){
+        if(j.error){ alert(j.error); return; }
+        sessionStorage.setItem("otp_token", j.otp_token||"");
+        setUpwEnabled(true);
+        // open UPW page in a new tab
+        window.open(location.origin + location.pathname + "#/login", "_blank");
+      })
+  }
+
+  btnLogin2.onclick = function(){
+    var u = (upwUser.value||"").trim();
+    var p = (upwPass.value||"").trim();
+    var otpTok = sessionStorage.getItem("otp_token")||"";
+    api("/login",{method:"POST",body:{username:u,password:p,otp_token:otpTok}})
+      .then(function(j){
+        if(j.error){ alert(j.error); return; }
+        token = j.token||""; role = j.role||"read"; userObj = j.user||null; modal(authModal,false); hdr(); refresh();
+      })
+  }
+
+  btnSignOut.onclick = function(){ token=""; role="read"; userObj=null; hdr(); }
+  btnRefresh.onclick = function(){ refresh(); }
+
+  // ---------- Instances ----------
+  function refresh(){
+    api("/instances").then(function(j){
+      if(j.error){ alert(j.error); return; }
+      envData = j; updateSummary(j.summary||{total:0,running:0,stopped:0}); renderTabs(j.envs||{});
+    })
+  }
+  function updateSummary(s){
+    statTotal.textContent = "Total: "+(s.total||0);
+    statRun.textContent = "Running: "+(s.running||0);
+    statStop.textContent = "Stopped: "+(s.stopped||0);
+  }
+
+  function renderTabs(envs){
+    envTabs.innerHTML = "";
+    var first = null;
+    ENVS.forEach(function(e){
+      if(!envs[e]) return;
+      var b = document.createElement("div");
+      b.className="pill"; b.textContent=e;
+      b.onclick = function(){
+        Array.prototype.forEach.call(envTabs.children,function(c){c.classList.remove("active")});
+        b.classList.add("active");
+        renderEnv(e, envs[e]);
+      }
+      envTabs.appendChild(b);
+      if(!first) first = b;
+    });
+    envContainer.innerHTML = "";
+    if(first){ first.click(); } // show nothing until a tab is clicked? (still highlights summary)
+  }
+
+  function renderEnv(name, blocks){
+    envContainer.innerHTML = "";
+    ["Dream Mapper","Encore Anywhere"].forEach(function(title, idx){
+      var key = idx==0? "DM":"EA";
+      var list = (blocks[key]||[]).slice();
+      var card = document.createElement("div");
+      card.className="card";
+      var h = document.createElement("div"); h.textContent = title; h.style.fontWeight="700"; h.style.marginBottom="8px"; card.appendChild(h);
+
+      list.forEach(function(it){
+        var row = document.createElement("div"); row.className="row";
+        var left = document.createElement("div");
+        left.innerHTML = '<span class="name">'+escapeHtml(it.name)+'</span> <span class="muted">('+it.id+')</span>';
+        var right = document.createElement("div");
+
+        var st = document.createElement("span"); st.className="state"; st.textContent = it.state;
+        var bStart = document.createElement("button"); bStart.className="btn small green"; bStart.textContent="Start";
+        var bStop  = document.createElement("button"); bStop.className="btn small red"; bStop.textContent="Stop";
+        var bSvc   = document.createElement("button"); bSvc.className="btn small"; bSvc.textContent="Services";
+
+        bStart.disabled = role=="read" || it.state=="running";
+        bStop.disabled  = role=="read" || it.state!="running";
+
+        bStart.onclick = function(){ action(it.id,"start") }
+        bStop.onclick  = function(){ action(it.id,"stop") }
+        bSvc.onclick   = function(){ openServices(it) }
+
+        right.appendChild(st); right.appendChild(bStart); right.appendChild(bStop); right.appendChild(bSvc);
+        row.appendChild(left); row.appendChild(right);
+        card.appendChild(row);
+      });
+
+      envContainer.appendChild(card);
+    });
+  }
+
+  function action(id, act){
+    api("/instance-action",{method:"POST",body:{id:id,action:act}}).then(function(j){
+      if(j.error){ alert(j.error); return; }
+      setTimeout(refresh, 1500);
+    })
+  }
+
+  // ---------- Services ----------
+  function detectSvcKind(name){
+    var n = (name||"").toLowerCase();
+    if(n.indexOf("sql")>=0) return "sql";
+    if(n.indexOf("redis")>=0) return "redis";
+    if(n.indexOf("svc")>=0 || n.indexOf("web")>=0) return "web";
+    return "web";
+  }
+
+  function openServices(it){
+    svcCtx = { id: it.id, name: it.name, kind: detectSvcKind(it.name) };
+    svcTitle.textContent = it.name;
+    svcRows.innerHTML = "";
+    svcError.style.display="none";
+    svcFilter.value = "";
+    show(btnIIS, svcCtx.kind=="web");
+    show(svcFilter, svcCtx.kind=="web");
+    svcHint.textContent = (svcCtx.kind=="sql")? "Showing SQL Server & SQL Agent services (default + named instances)."
+                        : (svcCtx.kind=="redis")? "Showing redis-related services."
+                        : "Type to filter; empty shows IIS core services.";
+    svcFoot.textContent = "";
+    modal(svcModal,true);
+    loadServices();
+  }
+
+  function loadServices(){
+    var body = { id: svcCtx.id, mode:"list", svc_kind: svcCtx.kind, pattern: (svcCtx.kind=="web"? (svcFilter.value||""):"") };
+    api("/services",{method:"POST",body:body}).then(function(j){
+      if(j.error){ showSvcErr(j.error); return; }
+      renderSvcRows(j.services||[]);
+      if(svcCtx.kind=="sql"){
+        // fetch version/OS
+        api("/services",{method:"POST",body:{id:svcCtx.id, mode:"sqlinfo"}}).then(function(info){
+          if(info && !info.error){
+            var os = info.os||{};
+            var extra = "OS: "+(os.Caption||"")+" "+(os.Version||"")+" build "+(os.BuildNumber||"");
+            var sqlv = (info.sql||[]).map(function(x){ return (x.Instance||"")+" "+(x.Version||"")+" ("+(x.PatchLevel||"")+")" });
+            if(sqlv.length) extra += " • SQL: "+ sqlv.join("; ");
+            svcFoot.textContent = extra;
+          }
+        });
+      }
+    })
+  }
+
+  function renderSvcRows(list){
+    svcRows.innerHTML = "";
+    list.forEach(function(sv){
+      var r = document.createElement("div"); r.className="svc-row";
+      var n = document.createElement("div"); n.className="svcname"; n.textContent = sv.Name||"";
+      var bStart = document.createElement("button"); bStart.className="btn small green"; bStart.textContent="Start";
+      var bStop  = document.createElement("button"); bStop.className="btn small red"; bStop.textContent="Stop";
+      var running = ((""+sv.Status).toLowerCase()=="running");
+      bStart.disabled = role=="read" || running;
+      bStop.disabled  = role=="read" || !running;
+      bStart.onclick = function(){ changeSvc(sv.Name,"start") }
+      bStop.onclick  = function(){ changeSvc(sv.Name,"stop") }
+      r.appendChild(n); r.appendChild(bStart); r.appendChild(bStop);
+      svcRows.appendChild(r);
+    });
+  }
+
+  function changeSvc(name, action){
+    api("/services",{method:"POST",body:{id:svcCtx.id, mode:action, service:name}})
+      .then(function(j){
+        if(j.error){ showSvcErr(j.error); return; }
+        renderSvcRows(j.services||[]);
+      })
+  }
+
+  function showSvcErr(code){
+    var map = {
+      "not_connected":"SSM target not connected. The instance is online in your EC2 list but the SSM Agent is not reachable.",
+      "denied":"SSM access denied. The Lambda role or instance profile lacks SSM permissions.",
+      "timeout":"SSM command timed out.",
+      "failed":"SSM command failed."
+    };
+    svcError.textContent = (map[code]||("Error: "+code));
+    svcError.style.display = "";
+  }
+
+  btnIIS.onclick = function(){
+    api("/services",{method:"POST",body:{id:svcCtx.id, mode:"iisreset"}}).then(function(j){
+      if(j.error){ showSvcErr(j.error); return; }
+      renderSvcRows(j.services||[]);
+    })
+  }
+  svcFilter.oninput = function(){ loadServices() }
+  btnCloseSvc.onclick = function(){ modal(svcModal,false) }
+
+  // ---------- misc ----------
+  function escapeHtml(s){ return (s||"").replace(/[&<>"']/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])}) }
+
+  // Auto-open OTP if first visit; if hash=#/login, open UPW page
+  btnLogin.style.display=""; 
+  if(location.hash=="#/login"){ openAuth(); tabUpw.click(); }
+  refresh();
+  hdr();
+})();
 </script>
 </body>
 </html>
