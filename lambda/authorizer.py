@@ -23,21 +23,18 @@ def verify_jwt(token: str) -> dict:
     if not hmac.compare_digest(expect, s):
         raise ValueError("sig mismatch")
     payload = json.loads(_b64url_decode(p).decode())
-    # Exp optional; we only check that token isn't older than 12h to keep it simple
     now = int(time.time())
     if payload.get("iat", 0) < now - 43200:
         raise ValueError("jwt too old")
     return payload
 
 def lambda_handler(event, context):
-    # HTTP API (v2), simple responses enabled
     auth_hdr = (event.get("headers") or {}).get("authorization") or (event.get("headers") or {}).get("Authorization")
     if not auth_hdr or not auth_hdr.lower().startswith("bearer "):
         return {"isAuthorized": False}
     token = auth_hdr.split(" ", 1)[1].strip()
     try:
         claims = verify_jwt(token)
-        # context values must be strings
         ctx = {k: (str(v) if not isinstance(v, str) else v) for k, v in claims.items()}
         return {"isAuthorized": True, "context": ctx}
     except Exception:

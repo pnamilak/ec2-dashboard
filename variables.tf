@@ -1,52 +1,42 @@
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-2"
-}
-
 variable "project_name" {
-  description = "Name prefix for resources"
-  type        = string
-  default     = "ec2-dashboard"
+  type = string
+  default = "ec2-dashboard"
 }
 
-variable "allowed_email_domain" {
-  description = "Only emails from this domain can request OTP"
-  type        = string
-  default     = "gmail.com"
+variable "aws_region" {
+  type = string
+  default = "us-east-2"
 }
 
 variable "ses_sender_email" {
-  description = "Verified SES sender email address"
-  type        = string
+  type = string
+  description = "Verified SES sender email"
 }
 
-variable "website_bucket_name" {
-  description = "Optional: use an existing bucket name for the site (leave blank to create new)"
-  type        = string
-  default     = ""
-}
-
-variable "app_users" {
-  description = "Map of username -> plaintext password (stored as SecureString in SSM). Change after first deploy."
-  type        = map(string)
-  default = {
-    admin = "ChangeMe123!"
-  }
+variable "allowed_email_domain" {
+  type = string
+  default = "gmail.com"
 }
 
 variable "env_names" {
-  description = "Environments shown as tabs"
-  type        = list(string)
-  default     = ["NAQA1", "NAQA2", "NAQA3", "NAQA6", "APQA1", "EUQA1"]
+  type = list(string)
+  default = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1"]
 }
 
+variable "website_bucket_name" {
+  type = string
+  default = ""
+}
+
+# Map of app users => "password,role,email,name"
+# Example: { admin = "P@ssw0rd,admin,me@example.com,Admin Guy", demo = "demo,read,demo@example.com,Demo User" }
+variable "app_users" {
+  type = map(string)
+  default = {}
+}
+
+# Attach SSM profile to which set of instances? one of: none|running|stopped|both
 variable "assign_profile_target" {
-  description = "Attach SSM instance profile to: none | running | stopped | both"
-  type        = string
-  default     = "none"
-  validation {
-    condition     = contains(["none", "running", "stopped", "both"], var.assign_profile_target)
-    error_message = "assign_profile_target must be one of: none, running, stopped, both"
-  }
+  type = string
+  default = "none"
 }

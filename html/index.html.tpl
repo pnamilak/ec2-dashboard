@@ -1,343 +1,462 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8">
   <title>EC2 Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    :root{
-      --bg:#0e1420; --panel:#0f182a; --line:#243453; --ink:#e5ecff; --muted:#90a7d7;
-      --pill:#17233c; --pill-line:#2b3f6a; --btn:#2a3b63; --btn-line:#3a5088;
-      --ok:#244e33; --ok-line:#2f7a4d; --bad:#592b2b; --bad-line:#a34b4b;
-      --badge:#111a2e; --badge-line:#263656;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif}
-    h1,h2,h3{margin:0 0 8px}
-    .wrap{max-width:1160px;margin:24px auto;padding:0 12px}
-    .row{display:flex;gap:10px;align-items:center}
-    .space{justify-content:space-between}
-    .badge{background:var(--badge);border:1px solid var(--badge-line);border-radius:12px;padding:6px 10px;color:#a9c1ff;display:inline-flex;gap:8px;align-items:center}
-    .btn{background:var(--btn);border:1px solid var(--btn-line);color:var(--ink);border-radius:8px;padding:8px 14px;cursor:pointer}
-    .btn:disabled{opacity:.45;cursor:not-allowed}
-    .btn.red{background:var(--bad);border-color:var(--bad-line)}
-    .btn.green{background:var(--ok);border-color:var(--ok-line)}
-    .btn.ghost{background:transparent;border-color:var(--btn-line)}
-    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-    .tab{background:var(--pill);border:1px solid var(--pill-line);padding:8px 12px;border-radius:18px;cursor:pointer}
-    .tab.active{outline:2px solid #5272c6}
-    .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:16px;box-shadow:0 0 35px rgba(0,0,0,.25)}
-    .grid{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center}
+    :root { --bg:#0f172a; --card:#111827; --ink:#e5e7eb; --muted:#9ca3af; --good:#10b981; --bad:#ef4444; --btn:#60a5fa; --chip:#1f2937; }
+    html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+    h1{font-size:24px;margin:0 0 10px 0}
+    .row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+    .kpis{display:flex;gap:8px;flex-wrap:wrap}
+    .chip{background:#0b1220;border:1px solid #1e293b;color:#cbd5e1;border-radius:9999px;padding:6px 10px;font-size:12px}
+    .pill{background:var(--chip);padding:5px 10px;border-radius:8px;border:1px solid #1f2937}
+    button{background:#1e293b;border:1px solid #374151;color:#dbeafe;padding:8px 12px;border-radius:8px;cursor:pointer}
+    button:hover{background:#253142}
+    button.small{padding:6px 10px;font-size:12px}
+    button.ok{background:#064e3b;border-color:#065f46}
+    button.danger{background:#3f1d1d;border-color:#7f1d1d}
+    button.primary{background:#0c4a6e;border-color:#075985}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    .section{background:var(--card);border:1px solid #1f2937;border-radius:14px;padding:14px 14px;margin:14px 0}
+    .envtabs{display:flex;gap:10px;margin:8px 0 14px 0;flex-wrap:wrap}
+    .srv{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;margin:8px 0;background:#0b1220;border:1px solid #1e293b;border-radius:10px}
+    .name{font-weight:600}
+    .state{font-size:12px;color:#a7f3d0}
+    .state.bad{color:#fecaca}
+    .group-title{font-weight:700;margin:8px 0 4px 0}
+    .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5)}
+    .panel{background:#0b1220;border:1px solid #1f2937;border-radius:16px;max-width:820px;width:92%;padding:16px}
+    .grid{display:grid;grid-template-columns:1fr auto auto auto auto;gap:8px}
+    .svcrow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:8px;border-bottom:1px solid #172036}
+    .svcname{font-family:ui-monospace,Menlo,Consolas; font-size:13px}
+    .svcok{color:#34d399}
+    .svcbad{color:#f87171}
     .muted{color:var(--muted)}
-    .chips{display:flex;gap:10px;flex-wrap:wrap}
-    .chip{background:var(--pill);border:1px solid var(--pill-line);border-radius:10px;padding:6px 10px}
-    .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.55);z-index:10}
-    .modal>.inner{background:var(--panel);border:1px solid var(--line);border-radius:18px;max-width:860px;width:94%;padding:18px}
-    .input{background:#101a2e;border:1px solid #283a63;color:var(--ink);border-radius:8px;padding:8px 10px}
-    .split{display:flex;gap:10px;flex-wrap:wrap}
-    .toast{position:fixed;top:12px;right:12px;background:#2b2132;color:#ffd7ef;border:1px solid #5a3c63;padding:8px 10px;border-radius:8px;display:none;z-index:11}
+    input,select{background:#0b1220;border:1px solid #1f2937;color:#e5e7eb;border-radius:8px;padding:8px}
+    .right{display:flex;gap:10px;align-items:center}
+    .badge{background:#111827;border:1px solid #374151;padding:6px 10px;border-radius:999px;font-size:12px}
+    .hidden{display:none}
+    .note{font-size:12px;color:#cbd5e1}
   </style>
 </head>
 <body>
 <div class="wrap">
-
-  <!-- header -->
-  <div class="row space">
-    <h2>EC2 Dashboard</h2>
-    <div class="row">
-      <span id="userBadge" class="badge" style="display:none;"></span>
-      <button id="signOutBtn" class="btn" style="display:none;">Sign out</button>
-      <button id="loginBtn" class="btn">Login</button>
+  <div class="row">
+    <h1>EC2 Dashboard</h1>
+    <div class="right">
+      <span id="userBadge" class="badge hidden"></span>
+      <button id="loginBtn" class="small">Login</button>
+      <button id="logoutBtn" class="small hidden">Sign out</button>
+      <button id="refreshBtn" class="small">Refresh</button>
     </div>
   </div>
 
-  <!-- counters -->
-  <div class="row space" style="margin-top:12px;">
-    <div class="badge">
-      <span>Total: <b id="t_total">0</b></span>
-      <span>Running: <b id="t_run">0</b></span>
-      <span>Stopped: <b id="t_stop">0</b></span>
-    </div>
-    <div class="row">
-      <button id="refreshBtn" class="btn">Refresh</button>
-    </div>
+  <div class="kpis">
+    <span id="kTotal" class="chip">Total: 0</span>
+    <span id="kRun"   class="chip">Running: 0</span>
+    <span id="kStop"  class="chip">Stopped: 0</span>
   </div>
 
-  <!-- env tabs -->
-  <div id="envTabs" class="tabs"></div>
+  <div class="envtabs" id="envTabs"></div>
 
-  <!-- env cards -->
-  <div id="envBlocks"></div>
-
+  <div id="envContainer"></div>
 </div>
 
-<!-- modal -->
-<div id="modal" class="modal">
-  <div class="inner">
-    <div class="row space" style="margin-bottom:8px;">
-      <h3 id="modalTitle" style="margin:0;"></h3>
+<!-- Services Modal -->
+<div id="svcModal" class="modal">
+  <div class="panel">
+    <div class="row" style="margin-bottom:10px">
+      <div id="svcTitle" class="group-title">Services</div>
+      <div class="right">
+        <input id="svcFilter" placeholder="Type to filter (svc/web/sql/agent/ssm/winrm)" style="width:260px" />
+        <button id="svcRefresh" class="small">Refresh</button>
+        <button id="btnIisReset" class="small">IIS Reset</button>
+        <button id="btnSqlInfo" class="small">SQL Info</button>
+        <button id="btnSsmPing" class="small">SSM Ping</button>
+        <button id="svcClose" class="small">Close</button>
+      </div>
+    </div>
+    <div id="svcBody"></div>
+    <div id="svcFooter" class="note"></div>
+  </div>
+</div>
+
+<!-- Login Modal (username/password + OTP) -->
+<div id="loginModal" class="modal">
+  <div class="panel" style="max-width:520px">
+    <div class="group-title">Sign in</div>
+    <div style="display:flex;gap:12px;margin:10px 0 6px 0">
+      <button class="small" id="tabPwd">User / Password</button>
+      <button class="small" id="tabOtp">Email OTP</button>
+      <span class="note">Allowed domain: <b>${allowed_email_domain}</b></span>
+    </div>
+
+    <div id="formPwd">
+      <div style="margin:6px 0"><input id="inUser" placeholder="username" style="width:100%"></div>
+      <div style="margin:6px 0"><input id="inPass" type="password" placeholder="password" style="width:100%"></div>
       <div class="row">
-        <button id="ssmPingBtn" class="btn">SSM Ping</button>
-        <button id="modalClose" class="btn">Close</button>
+        <span class="note">Tip: give a user the role <code>read</code> for demo-only (start/stop disabled).</span>
+        <button id="btnLogin" class="small primary">Login</button>
       </div>
     </div>
 
-    <div class="split" style="margin:10px 0;">
-      <input id="svcFilter" class="input" style="min-width:280px" placeholder="Type to filter (svc/web/sql/agent/ssm/winrm)"/>
-      <button id="svcRefresh" class="btn">Refresh</button>
-      <button id="iisBtn" class="btn">IIS Reset</button>
-      <button id="sqlBtn" class="btn">SQL Info</button>
+    <div id="formOtp" class="hidden">
+      <div style="margin:6px 0"><input id="inEmail" placeholder="name@${allowed_email_domain}" style="width:100%"></div>
+      <div class="row">
+        <button id="btnReqOtp" class="small">Request OTP</button>
+        <span id="otpMsg" class="note"></span>
+      </div>
+      <div style="margin:6px 0"><input id="inCode" placeholder="Enter OTP code" style="width:100%"></div>
+      <div class="row">
+        <span></span>
+        <button id="btnVerifyOtp" class="small primary">Verify</button>
+      </div>
     </div>
 
-    <div id="svcArea"></div>
+    <div class="row" style="margin-top:10px">
+      <span id="loginMsg" class="note"></span>
+      <button id="loginClose" class="small">Close</button>
+    </div>
   </div>
 </div>
 
-<div id="toast" class="toast"></div>
-
 <script>
-/* ---------- Config from Terraform ---------- */
-const API = "${api_base_url}";
-const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
-const READ_ONLY_ROLE = "viewer";
+(function(){
+  var API = "${api_base_url}";
+  var ENV_NAMES = "${env_names}".split(",").filter(function(x){return x.length>0;});
+  var token = localStorage.getItem("token") || "";
+  var role  = localStorage.getItem("role")  || "";
+  var user  = localStorage.getItem("user")  || "";
 
-/* ---------- State ---------- */
-let token = localStorage.getItem("token") || "";
-let user  = JSON.parse(localStorage.getItem("user") || "null");
-let cacheByEnv = {};
-let currentTab = "";
-let currentInst = null;
-
-/* ---------- Helpers ---------- */
-function toast(msg, ms=3500){ const t=document.getElementById('toast'); t.innerText=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',ms); }
-function authz(){ return token ? {"Authorization":"Bearer "+token} : {}; }
-function readOnly(){ return !user || !user.role || user.role.toLowerCase()===READ_ONLY_ROLE; }
-function showUser(){
-  const b=document.getElementById('userBadge'), so=document.getElementById('signOutBtn'), li=document.getElementById('loginBtn');
-  if(user && token){ b.style.display='inline-flex'; b.textContent = (user.name||user.username)+" • "+(user.role||""); so.style.display='inline-block'; li.style.display='none'; }
-  else{ b.style.display='none'; so.style.display='none'; li.style.display='inline-block'; }
-}
-function badgeState(state){
-  const s=(state||"").toLowerCase();
-  if(s==="running") return `<span class="chip" style="border-color:#2e7; background:#173;">running</span>`;
-  if(s==="stopped") return `<span class="chip" style="border-color:#e72; background:#431;">stopped</span>`;
-  return `<span class="chip">$${state||"unknown"}</span>`;
-}
-
-/* ---------- Auth UI ---------- */
-document.getElementById('loginBtn').onclick = async ()=>{
-  const u = prompt("Username:","admin"); if(!u) return;
-  const p = prompt("Password:",""); if(p===null) return;
-  try{
-    const r = await fetch(API+"/login",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({username:u,password:p})});
-    const j = await r.json(); if(!r.ok) throw new Error(j.error || "login failed");
-    token=j.token; user=j.user; localStorage.setItem("token",token); localStorage.setItem("user",JSON.stringify(user));
-    showUser(); loadInstances();
-  }catch(e){ toast(e.message); }
-};
-document.getElementById('signOutBtn').onclick = ()=>{
-  localStorage.removeItem('token'); localStorage.removeItem('user'); token=""; user=null; showUser();
-  document.getElementById('envTabs').innerHTML=""; document.getElementById('envBlocks').innerHTML="";
-};
-
-/* ---------- Instances ---------- */
-document.getElementById('refreshBtn').onclick = ()=>loadInstances();
-
-async function loadInstances(){
-  if(!token){ toast("Please login"); return; }
-  try{
-    const r = await fetch(API+"/instances",{headers:authz()});
-    const j = await r.json(); if(!r.ok) throw new Error(j.error||"internal");
-    document.getElementById('t_total').innerText=j.summary.total;
-    document.getElementById('t_run').innerText=j.summary.running;
-    document.getElementById('t_stop').innerText=j.summary.stopped;
-
-    cacheByEnv = j.envs || {};
-    const envList = ENV_NAMES.length ? ENV_NAMES : Object.keys(cacheByEnv);
-    const tabs = envList.map(e => `<div class="tab $${currentTab===e ? "active":""}" data-tab="$${e}">$${e}</div>`).join("");
-    document.getElementById('envTabs').innerHTML = tabs;
-    if(!currentTab && envList.length) currentTab = envList[0];
-    document.querySelectorAll('[data-tab]').forEach(el => el.onclick = (ev)=>{ currentTab = ev.target.getAttribute('data-tab'); renderEnvCards(); });
-
-    renderEnvCards();
-  }catch(e){ toast(e.message); }
-}
-
-function renderEnvCards(){
-  const env = currentTab;
-  const data = cacheByEnv[env] || {DM:[],EA:[]};
-  const blocks = [];
-  for(const block of ["Dream Mapper","Encore Anywhere"]){
-    const key = block.startsWith("Dream") ? "DM" : "EA";
-    const arr = data[key] || [];
-    const canBulk = !readOnly() && arr.length>0;
-    const hdr =
-      `<div class="row space"><h3>$${block}</h3>
-        <div class="row">
-          <button class="btn green" data-bulk='$${JSON.stringify({env,blk:key,action:"start"})}' $${canBulk?"":"disabled"}>Start All</button>
-          <button class="btn red" data-bulk='$${JSON.stringify({env,blk:key,action:"stop"})}'  $${canBulk?"":"disabled"}>Stop All</button>
-        </div>
-      </div>`;
-
-    const rows = arr.map(it => instRow(it)).join("") || `<div class="muted">No instances</div>`;
-    blocks.push(`<div class="card">$${hdr}$${rows}</div>`);
+  function setBadge(){
+    var b = document.getElementById("userBadge");
+    var lo = document.getElementById("loginBtn");
+    var so = document.getElementById("logoutBtn");
+    if(token){
+      b.textContent = (user?user:"user") + " • " + (role?role:"");
+      b.classList.remove("hidden");
+      so.classList.remove("hidden");
+      lo.classList.add("hidden");
+    }else{
+      b.classList.add("hidden");
+      so.classList.add("hidden");
+      lo.classList.remove("hidden");
+    }
   }
-  document.getElementById('envBlocks').innerHTML = blocks.join("");
 
-  document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = async (e)=>{
-    if(readOnly()) return;
-    const cfg = JSON.parse(e.currentTarget.getAttribute('data-bulk'));
-    await bulkAction(cfg.env, cfg.blk, cfg.action);
-  });
-  wireInstanceButtons();
-}
-
-function instRow(it){
-  const isRunning = (it.state||"").toLowerCase()==="running";
-  const startDis = readOnly() || isRunning ? "disabled":"";
-  const stopDis  = readOnly() || !isRunning ? "disabled":"";
-  return `<div class="grid" style="margin-top:8px; border-top:1px solid var(--line); padding-top:8px;">
-    <div><b>$${it.name}</b> <span class="muted">( $${it.id} )</span></div>
-    <div>$${badgeState(it.state)}</div>
-    <div class="row" style="justify-content:flex-end; gap:8px;">
-      <button class="btn green" data-start="$${it.id}" $${startDis}>Start</button>
-      <button class="btn red" data-stop="$${it.id}"  $${stopDis}>Stop</button>
-      <button class="btn" data-services='$${JSON.stringify(it)}'>Services</button>
-    </div>
-  </div>`;
-}
-
-function wireInstanceButtons(){
-  document.querySelectorAll("[data-start]").forEach(b => b.onclick = async (e)=>{
-    if(readOnly()) return;
-    const id=e.currentTarget.getAttribute("data-start");
-    await instAction(id,"start");
-  });
-  document.querySelectorAll("[data-stop]").forEach(b => b.onclick = async (e)=>{
-    if(readOnly()) return;
-    const id=e.currentTarget.getAttribute("data-stop");
-    await instAction(id,"stop");
-  });
-  document.querySelectorAll("[data-services]").forEach(b => b.onclick = (e)=>{
-    const it = JSON.parse(e.currentTarget.getAttribute("data-services"));
-    openModal(it);
-  });
-}
-
-async function instAction(id, action){
-  try{
-    const r=await fetch(API+"/instance-action",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id,action})});
-    const j=await r.json(); if(!r.ok) throw new Error(j.error||"internal");
-    toast(`$${action} requested`);
-    await loadInstances();
-  }catch(e){ toast(e.message); }
-}
-
-async function bulkAction(env, blk, action){
-  const arr = (cacheByEnv[env] && cacheByEnv[env][blk]) ? cacheByEnv[env][blk] : [];
-  for(const it of arr){
-    if(action==="start" && (it.state||"").toLowerCase()==="running") continue;
-    if(action==="stop"  && (it.state||"").toLowerCase()!=="running") continue;
-    try{
-      await fetch(API+"/instance-action",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:it.id,action})});
-    }catch(_){}
+  function headers(jwt){
+    var h = {"content-type":"application/json"};
+    if(jwt){ h["Authorization"] = "Bearer " + jwt; }
+    return h;
   }
-  toast(`$${action} requested for $${blk} in $${env}`);
-  setTimeout(loadInstances, 1500);
-}
 
-/* ---------- Services Modal ---------- */
-function openModal(inst){
-  currentInst = inst;
-  document.getElementById('modalTitle').innerText = `Services on $${inst.name}`;
-  document.getElementById('svcArea').innerHTML = '';
-  document.getElementById('modal').style.display='flex';
-  document.getElementById('iisBtn').disabled = readOnly();
-  fetchServices("");
-}
+  function getJSON(url, opt, cb){
+    fetch(url, opt).then(function(r){ return r.json().catch(function(){ return {}; }) })
+      .then(function(j){ cb(null,j); })
+      .catch(function(e){ cb(e); });
+  }
 
-document.getElementById('modalClose').onclick = ()=>{ document.getElementById('modal').style.display='none'; };
-document.getElementById('svcRefresh').onclick = ()=> fetchServices(document.getElementById('svcFilter').value.trim());
+  function loadInstances(){
+    if(!token){ return; }
+    getJSON(API + "/instances", {method:"GET", headers:headers(token)}, function(err, res){
+      if(err){ return; }
+      if(!res || !res.envs){ return; }
+      document.getElementById("kTotal").textContent  = "Total: "   + (res.summary && res.summary.total   || 0);
+      document.getElementById("kRun").textContent    = "Running: " + (res.summary && res.summary.running || 0);
+      document.getElementById("kStop").textContent   = "Stopped: " + (res.summary && res.summary.stopped || 0);
 
-document.getElementById('ssmPingBtn').onclick = async ()=>{
-  if(!currentInst) return;
-  const r = await fetch(API+"/ssm-ping",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id})});
-  const j = await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-  toast(`Host: $${j.ping.Host} @ $${j.ping.Time}`);
-};
+      var envTabs = document.getElementById("envTabs");
+      envTabs.innerHTML = "";
+      var envContainer = document.getElementById("envContainer");
+      envContainer.innerHTML = "";
 
-document.getElementById('iisBtn').onclick = async ()=>{
-  if(readOnly() || !currentInst) return;
-  const r = await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"iisreset"})});
-  const j = await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-  renderServices(j.services);
-};
+      var keys = Object.keys(res.envs);
+      keys.forEach(function(k){
+        var btn = document.createElement("button");
+        btn.className = "small";
+        btn.textContent = k;
+        btn.onclick = function(){
+          var blocks = document.querySelectorAll("[data-env]");
+          blocks.forEach(function(el){ el.style.display = el.getAttribute("data-env")==k ? "block" : "none"; });
+        };
+        envTabs.appendChild(btn);
 
-document.getElementById('sqlBtn').onclick = async ()=>{
-  if(!currentInst) return;
-  const r = await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"sqlinfo"})});
-  const j = await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-  const s = j.services || [];
-  const os = j.os || {};
-  const vers = (j.sql||[]).map(x => `<span class="chip">SQL $${x.Instance} — $${x.Version} ($${x.PatchLevel})</span>`).join(" ");
-  const svc = Array.isArray(s) ? s : (s ? [s] : []);
-  document.getElementById('svcArea').innerHTML =
-    `<div class="chips" style="margin-bottom:8px;">
-       <span class="chip">OS: $${os.Caption||"?"} $${os.Version||""} ($${os.BuildNumber||""})</span>
-       $${vers || `<span class="muted">No SQL version data</span>`}
-     </div>
-     $${svc.map(row => svcRow(row)).join("")}`;
-};
+        var envBlock = document.createElement("div");
+        envBlock.setAttribute("data-env", k);
+        envBlock.className = "section";
+        envBlock.innerHTML = "<div class='group-title'>"+k+"</div>";
+        envContainer.appendChild(envBlock);
 
-async function fetchServices(pattern){
-  if(!currentInst) return;
-  const r = await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"list",pattern})});
-  const j = await r.json();
-  if(!r.ok){ document.getElementById('svcArea').innerHTML = `<div class="muted">$${j.error||"internal"}</div>`; return; }
-  renderServices(j.services);
-}
+        ["DM","EA"].forEach(function(blk){
+          var list = res.envs[k][blk] || [];
+          if(list.length===0){ return; }
+          var head = document.createElement("div");
+          head.className = "group-title";
+          head.textContent = (blk=="DM"?"Dream Mapper":"Encore Anywhere");
+          envBlock.appendChild(head);
+          list.forEach(function(it){
+            var row = document.createElement("div");
+            row.className = "srv";
+            var left = document.createElement("div");
+            left.innerHTML = "<span class='name'>"+it.name+"</span> <span class='muted'>("+it.id+")</span>";
+            var st = document.createElement("span");
+            st.className = "state" + (it.state=="running"?"":" bad");
+            st.textContent = it.state;
+            var right = document.createElement("div");
+            right.style.display = "flex"; right.style.gap="8px";
 
-function renderServices(list){
-  const arr = Array.isArray(list) ? list : (list ? [list] : []);
-  if(arr.length===0){ document.getElementById('svcArea').innerHTML = `<div class="muted">No matching services</div>`; return; }
-  document.getElementById('svcArea').innerHTML = arr.map(row => svcRow(row)).join("");
-  wireSvcButtons();
-}
+            var btnStart = document.createElement("button");
+            btnStart.className = "small ok"; btnStart.textContent = "Start";
+            btnStart.onclick = function(){ instAction(it.id,"start"); };
+            var btnStop  = document.createElement("button");
+            btnStop.className = "small danger"; btnStop.textContent = "Stop";
+            btnStop.onclick = function(){ instAction(it.id,"stop"); };
+            if(role==="read" || role==="readonly"){ btnStart.disabled = true; btnStop.disabled = true; }
 
-function svcRow(row){
-  const name=row.Name||row.name||"?"; const st=(row.Status||"").toLowerCase();
-  const on = st==="running";
-  const startDis = readOnly() || on ? "disabled":"";
-  const stopDis  = readOnly() || !on ? "disabled":"";
-  return `<div class="row space" style="border-top:1px solid var(--line); padding:8px 2px; margin-top:4px;">
-    <div><b>$${name}</b> <span class="muted">$${st||"unknown"}</span></div>
-    <div class="row" style="gap:8px;">
-      <button class="btn green" data-sstart="$${name}" $${startDis}>Start</button>
-      <button class="btn red" data-sstop="$${name}"  $${stopDis}>Stop</button>
-    </div>
-  </div>`;
-}
+            var btnSvc   = document.createElement("button");
+            btnSvc.className = "small"; btnSvc.textContent = "Services";
+            btnSvc.onclick = function(){ openSvc(it); };
 
-function wireSvcButtons(){
-  document.querySelectorAll("[data-sstart]").forEach(b => b.onclick = async (e)=>{
-    if(readOnly()) return;
-    const svc=e.currentTarget.getAttribute("data-sstart");
-    const r=await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"start",service:svc})});
-    const j=await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-    renderServices(j.services);
-  });
-  document.querySelectorAll("[data-sstop]").forEach(b => b.onclick = async (e)=>{
-    if(readOnly()) return;
-    const svc=e.currentTarget.getAttribute("data-sstop");
-    const r=await fetch(API+"/services",{method:"POST",headers:{...authz(),"content-type":"application/json"},body:JSON.stringify({id:currentInst.id,mode:"stop",service:svc})});
-    const j=await r.json(); if(!r.ok){ toast(j.error||"internal"); return; }
-    renderServices(j.services);
-  });
-}
+            right.appendChild(st);
+            right.appendChild(btnStart);
+            right.appendChild(btnStop);
+            right.appendChild(btnSvc);
+            row.appendChild(left);
+            row.appendChild(right);
+            envBlock.appendChild(row);
+          });
+        });
+      });
 
-/* ---------- boot ---------- */
-showUser();
-if(token) loadInstances();
+      // show first env
+      var first = document.querySelector("[data-env]");
+      if(first){ first.style.display = "block"; }
+    });
+  }
+
+  function instAction(id, action){
+    if(!token){ return; }
+    if(role==="read" || role==="readonly"){ return; }
+    getJSON(API + "/instance-action", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id:id, action:action})
+    }, function(){ setTimeout(loadInstances, 1500); });
+  }
+
+  // --- Services modal
+  var currentInst = null;
+  function openSvc(inst){
+    currentInst = inst;
+    document.getElementById("svcTitle").textContent = "Services on "+inst.name;
+    document.getElementById("svcBody").innerHTML = "";
+    document.getElementById("svcFooter").textContent = "";
+    if(role==="read" || role==="readonly"){
+      document.getElementById("btnIisReset").disabled = true;
+    }else{
+      document.getElementById("btnIisReset").disabled = false;
+    }
+    document.getElementById("svcModal").style.display = "flex";
+    refreshSvc();
+  }
+
+  function closeSvc(){ document.getElementById("svcModal").style.display = "none"; currentInst=null; }
+  function refreshSvc(){
+    if(!currentInst){ return; }
+    var patt = document.getElementById("svcFilter").value.trim();
+    getJSON(API + "/services", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id: currentInst.id, mode: "list", pattern: patt})
+    }, function(err, res){
+      var box = document.getElementById("svcBody");
+      box.innerHTML = "";
+      if(res && res.error){ box.innerHTML = "<div class='note'>"+res.error+"</div>"; return; }
+      var arr = res && res.services ? res.services : [];
+      if(!arr || (arr.length===0)){
+        box.innerHTML = "<div class='note'>No matching services</div>";
+        return;
+      }
+      arr.forEach(function(s){
+        var line = document.createElement("div");
+        line.className = "svcrow";
+        var nm = document.createElement("div");
+        nm.className = "svcname"; nm.textContent = s.Name;
+        var st = document.createElement("div");
+        st.className = (s.Status=="Running" ? "svcok" : "svcbad");
+        st.textContent = s.Status;
+        var controls = document.createElement("div");
+        if(role==="read" || role==="readonly"){
+          controls.innerHTML = "<span class='note'>read-only</span>";
+        }else{
+          var b1 = document.createElement("button");
+          b1.className = "small ok"; b1.textContent = "Start";
+          b1.onclick = function(){ svcAction(s.Name, "start"); };
+          var b2 = document.createElement("button");
+          b2.className = "small danger"; b2.textContent = "Stop";
+          b2.onclick = function(){ svcAction(s.Name, "stop"); };
+          controls.appendChild(b1); controls.appendChild(b2);
+        }
+        line.appendChild(nm); line.appendChild(st); line.appendChild(controls);
+        box.appendChild(line);
+      });
+    });
+  }
+
+  function svcAction(name, action){
+    if(!currentInst){ return; }
+    if(role==="read" || role==="readonly"){ return; }
+    getJSON(API + "/services", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id: currentInst.id, mode: action, service: name})
+    }, function(){ setTimeout(refreshSvc, 1200); });
+  }
+
+  function iisReset(){
+    if(!currentInst){ return; }
+    if(role==="read" || role==="readonly"){ return; }
+    getJSON(API + "/services", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id: currentInst.id, mode: "iisreset"})
+    }, function(err,res){
+      document.getElementById("svcFooter").textContent = "IIS reset requested";
+      setTimeout(refreshSvc, 1800);
+    });
+  }
+
+  function sqlInfo(){
+    if(!currentInst){ return; }
+    getJSON(API + "/services", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id: currentInst.id, mode: "sqlinfo"})
+    }, function(err,res){
+      var box = document.getElementById("svcBody");
+      box.innerHTML = "";
+      if(res && res.error){ box.innerHTML = "<div class='note'>"+res.error+"</div>"; return; }
+      var os = res && res.os ? res.os : {};
+      var sql = res && res.sql ? res.sql : [];
+      var sv = res && res.services ? res.services : [];
+      var h = "<div class='note'>OS: "+(os.Caption||"")+" "+(os.Version||"")+" ("+(os.BuildNumber||"")+")</div>";
+      if(sql && sql.length>0){
+        h += "<div class='group-title' style='margin-top:10px'>SQL Instances</div>";
+        sql.forEach(function(x){
+          h += "<div class='note'>"+x.Instance+" — v"+x.Version+" ("+x.PatchLevel+")</div>";
+        });
+      }else{
+        h += "<div class='note'>No SQL instance info found</div>";
+      }
+      h += "<div class='group-title' style='margin-top:10px'>SQL Services</div>";
+      box.innerHTML = h;
+      (sv||[]).forEach(function(s){
+        var line = document.createElement("div");
+        line.className = "svcrow";
+        var nm = document.createElement("div"); nm.className="svcname"; nm.textContent = s.Name;
+        var st = document.createElement("div"); st.className = (s.Status=="Running"?"svcok":"svcbad"); st.textContent = s.Status;
+        var controls = document.createElement("div");
+        if(role==="read" || role==="readonly"){ controls.innerHTML = "<span class='note'>read-only</span>"; }
+        else{
+          var b1 = document.createElement("button"); b1.className="small ok"; b1.textContent="Start"; b1.onclick=function(){ svcAction(s.Name,"start"); };
+          var b2 = document.createElement("button"); b2.className="small danger"; b2.textContent="Stop"; b2.onclick=function(){ svcAction(s.Name,"stop"); };
+          controls.appendChild(b1); controls.appendChild(b2);
+        }
+        line.appendChild(nm); line.appendChild(st); line.appendChild(controls);
+        box.appendChild(line);
+      });
+    });
+  }
+
+  function ssmPing(){
+    if(!currentInst){ return; }
+    getJSON(API + "/ssm-ping", {
+      method:"POST", headers:headers(token),
+      body:JSON.stringify({id: currentInst.id})
+    }, function(err,res){
+      var t = document.getElementById("svcFooter");
+      if(res && res.ping){ t.textContent = "Host: " + (res.ping.Host||"") + " • Time: " + (res.ping.Time||""); }
+      else if(res && res.error){ t.textContent = res.error; }
+      else { t.textContent = "No response"; }
+    });
+  }
+
+  // --- Auth UI
+  function openLogin(){ document.getElementById("loginModal").style.display = "flex"; }
+  function closeLogin(){ document.getElementById("loginModal").style.display = "none"; document.getElementById("loginMsg").textContent=""; }
+
+  function switchTab(which){
+    var a = document.getElementById("formPwd");
+    var b = document.getElementById("formOtp");
+    if(which==="pwd"){ a.classList.remove("hidden"); b.classList.add("hidden"); }
+    else { b.classList.remove("hidden"); a.classList.add("hidden"); }
+  }
+
+  function doLogin(){
+    var u = document.getElementById("inUser").value.trim();
+    var p = document.getElementById("inPass").value;
+    document.getElementById("loginMsg").textContent = "";
+    getJSON(API + "/login", {
+      method:"POST", headers:headers(), body:JSON.stringify({username:u,password:p})
+    }, function(err,res){
+      if(res && res.token){
+        token = res.token; role = res.role || ""; user = (res.user && res.user.name) || u;
+        localStorage.setItem("token", token);
+        localStorage.setItem("role", role);
+        localStorage.setItem("user", user);
+        setBadge(); closeLogin(); loadInstances();
+      }else{
+        document.getElementById("loginMsg").textContent = (res && res.error) ? res.error : "Login failed";
+      }
+    });
+  }
+
+  function reqOtp(){
+    var em = document.getElementById("inEmail").value.trim();
+    document.getElementById("otpMsg").textContent = "";
+    getJSON(API + "/request-otp", {method:"POST", headers:headers(), body:JSON.stringify({email:em})}, function(err,res){
+      document.getElementById("otpMsg").textContent = res && res.error ? res.error : "OTP sent (check email)";
+    });
+  }
+  function verifyOtp(){
+    var em = document.getElementById("inEmail").value.trim();
+    var cd = document.getElementById("inCode").value.trim();
+    getJSON(API + "/verify-otp", {method:"POST", headers:headers(), body:JSON.stringify({email:em, code:cd})}, function(err,res){
+      document.getElementById("loginMsg").textContent = res && res.error ? res.error : "Verified. (Now sign in with your user/password if required.)";
+    });
+  }
+
+  function logout(){
+    token=""; role=""; user="";
+    localStorage.removeItem("token"); localStorage.removeItem("role"); localStorage.removeItem("user");
+    setBadge();
+    document.getElementById("envTabs").innerHTML="";
+    document.getElementById("envContainer").innerHTML="";
+    document.getElementById("kTotal").textContent="Total: 0";
+    document.getElementById("kRun").textContent="Running: 0";
+    document.getElementById("kStop").textContent="Stopped: 0";
+  }
+
+  // wire up
+  document.getElementById("refreshBtn").onclick = loadInstances;
+  document.getElementById("loginBtn").onclick   = openLogin;
+  document.getElementById("logoutBtn").onclick  = logout;
+
+  document.getElementById("svcClose").onclick   = closeSvc;
+  document.getElementById("svcRefresh").onclick = refreshSvc;
+  document.getElementById("btnIisReset").onclick= iisReset;
+  document.getElementById("btnSqlInfo").onclick = sqlInfo;
+  document.getElementById("btnSsmPing").onclick = ssmPing;
+
+  document.getElementById("tabPwd").onclick     = function(){ switchTab("pwd"); };
+  document.getElementById("tabOtp").onclick     = function(){ switchTab("otp"); };
+  document.getElementById("btnLogin").onclick   = doLogin;
+  document.getElementById("btnReqOtp").onclick  = reqOtp;
+  document.getElementById("btnVerifyOtp").onclick = verifyOtp;
+  document.getElementById("loginClose").onclick = closeLogin;
+
+  // init
+  setBadge();
+  if(token){ loadInstances(); }
+})();
 </script>
 </body>
 </html>

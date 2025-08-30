@@ -31,9 +31,11 @@ def make_jwt(payload: dict) -> str:
     return f"{p1}.{p2}.{sig}"
 
 # ---------------- helpers ----------------
-def ok(body):    return {"statusCode": 200, "headers":{"content-type":"application/json"}, "body": json.dumps(body)}
-def bad(msg):    return {"statusCode": 400, "headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
-def denied(msg): return {"statusCode": 401, "headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
+def _headers():
+    return {"content-type":"application/json","access-control-allow-origin":"*"}
+def ok(body):    return {"statusCode": 200, "headers":_headers(), "body": json.dumps(body)}
+def bad(msg):    return {"statusCode": 400, "headers":_headers(), "body": json.dumps({"error": msg})}
+def denied(msg): return {"statusCode": 401, "headers":_headers(), "body": json.dumps({"error": msg})}
 
 def json_or_default(s, default):
     try:
@@ -52,10 +54,7 @@ def run_ps(instance_id: str, commands: list[str], timeout_sec: int = 120, first_
         Parameters={"commands": commands},
     )
     cmd_id = resp["Command"]["CommandId"]
-
-    # Give SSM a moment to materialize the invocation record
     time.sleep(first_sleep)
-
     t0 = time.time()
     while True:
         try:
@@ -65,10 +64,7 @@ def run_ps(instance_id: str, commands: list[str], timeout_sec: int = 120, first_
                 return inv
         except ClientError as e:
             code = e.response.get("Error",{}).get("Code")
-            if code == "InvocationDoesNotExist":
-                # race: keep polling until the record appears or timeout
-                pass
-            else:
+            if code != "InvocationDoesNotExist":
                 raise
         if (time.time() - t0) > timeout_sec:
             raise TimeoutError("SSM command timeout")
@@ -102,22 +98,18 @@ def route_login(body):
     username = body.get("username","").strip()
     password = body.get("password","").strip()
     if not username or not password: return bad("Missing credentials")
-
-    # SSM value format: "password,role,email,name"
+    # value format: "password,role,email,name"
     p = ssm.get_parameter(Name=f"{PARAM_USER_PREFIX}/{username}", WithDecryption=True)["Parameter"]["Value"]
     parts = [x.strip() for x in p.split(",")]
     if len(parts) < 2: return denied("User not provisioned")
     pw, role = parts[0], parts[1]
     email = parts[2] if len(parts) > 2 else ""
     name  = parts[3] if len(parts) > 3 else username
-
     if password != pw: return denied("Invalid username/password")
-
     token = make_jwt({"sub": username, "role": role, "iat": int(time.time())})
     return ok({"token": token, "role": role, "user": {"username": username, "email": email, "name": name, "role": role}})
 
 def route_instances(authz):
-    # Simple discover + grouping by ENV token and block (DM/EA) inferred from name
     resp = ec2.describe_instances()
     items = []
     for r in resp.get("Reservations", []):
@@ -130,14 +122,12 @@ def route_instances(authz):
                     name = t["Value"]; break
             if not name: continue
             items.append({"id": iid, "name": name, "state": state})
-
-    envs = {e: {"DM": [], "EA": []} for e in ENV_NAMES or ["ENV"]}
+    envs = {e: {"DM": [], "EA": []} for e in (ENV_NAMES or ["ENV"])}
     for it in items:
         env = next((e for e in ENV_NAMES if e.lower() in it["name"].lower()), None) or (ENV_NAMES[0] if ENV_NAMES else "ENV")
         blk = "DM" if "dm" in it["name"].lower() else ("EA" if "ea" in it["name"].lower() else "DM")
         envs.setdefault(env, {"DM":[],"EA":[]})
         envs[env][blk].append(it)
-
     summary = {
         "total": len(items),
         "running": sum(1 for x in items if x["state"]=="running"),
@@ -203,12 +193,11 @@ def route_services(body):
             return ok({"services": services})
 
         if mode == "iisreset":
-            cmds = [
+            inv = run_ps(iid, [
                 'iisreset /restart',
                 'Start-Sleep -Seconds 2',
                 'Get-Service W3SVC,WAS -ErrorAction SilentlyContinue | Select Name,Status | ConvertTo-Json -Compress'
-            ]
-            inv = run_ps(iid, cmds, timeout_sec=150)
+            ], timeout_sec=150)
             services = json_or_default(inv.get("StandardOutputContent",""), [])
             return ok({"services": services})
 
@@ -265,10 +254,9 @@ def lambda_handler(event, context):
     if route == "/verify-otp"  and method=="POST":  return route_verify_otp(body)
     if route == "/login"       and method=="POST":  return route_login(body)
 
-    # protected
     if route == "/instances"        and method=="GET":  return route_instances(event.get("requestContext",{}).get("authorizer"))
     if route == "/instance-action"  and method=="POST": return route_instance_action(body)
     if route == "/services"         and method=="POST": return route_services(body)
     if route == "/ssm-ping"         and method=="POST": return route_ssm_ping(body)
 
-    return {"statusCode":404, "body":"not found"}
+    return {"statusCode":404, "headers":_headers(), "body":"not found"}
