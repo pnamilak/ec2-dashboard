@@ -26,8 +26,8 @@
     .right{margin-left:auto}
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px}
     .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
-    .grid{display:grid;grid-template-columns:1fr 1fr 50px 50px;gap:10px}
-    input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
+    .grid{display:grid;grid-template-columns:1fr 1fr 70px 70px;gap:10px}
+    input{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
     .error{background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:10px;padding:8px 10px}
   </style>
 </head>
@@ -45,7 +45,6 @@
   </div>
 
   <div class="tabs row" id="envTabs"></div>
-
   <div id="envMount"></div>
 </div>
 
@@ -65,7 +64,7 @@
   </div>
 </div>
 
-<!-- Auth modal(s) -->
+<!-- Auth modal -->
 <div class="modal" id="authModal" style="display:flex">
   <div class="card" style="max-width:760px">
     <div class="row" style="gap:12px;margin-bottom:12px">
@@ -77,14 +76,14 @@
 
     <div id="paneOtp">
       <div class="row" style="gap:10px">
-        <input id="otpEmail" placeholder="name@{{allowed_email_domain}}" style="width:320px">
+        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="width:320px">
         <button class="btn" onclick="requestOtp()">Request OTP</button>
       </div>
       <div class="row" style="gap:10px;margin-top:10px">
         <input id="otpCode" placeholder="6-digit code" style="width:160px">
         <button class="btn" onclick="verifyOtp()">Verify OTP</button>
       </div>
-      <div class="mut" style="margin-top:8px">Allowed domain: {{allowed_email_domain}}</div>
+      <div class="mut" style="margin-top:8px">Allowed domain: ${allowed_email_domain}</div>
     </div>
 
     <div id="panePwd" style="display:none">
@@ -101,25 +100,15 @@
 
 <script>
   // ---------- config ----------
-  var API = "{{api_base_url}}";
-  var ENV_NAMES = "{{env_names}}".split(",");
+  var API = "${api_base_url}";
+  var ENV_NAMES = "${env_names}".split(",");
 
   // ---------- tiny helpers ----------
   function http(path, method, obj, bearer){
     var h = {"content-type":"application/json"};
     if(bearer){ h["authorization"] = "Bearer " + bearer; }
     return fetch(API + path, {method:method, headers:h, body: obj? JSON.stringify(obj): undefined})
-      .then(function(r){
-        return r.text().then(function(t){
-          var data = {};
-          try{ data = t ? JSON.parse(t) : {}; }catch(e){}
-          if(!r.ok){
-            var msg = (data && data.error) ? data.error : ("http " + r.status);
-            throw new Error(msg);
-          }
-          return data;
-        });
-      });
+      .then(function(r){ if(!r.ok) throw new Error("http " + r.status); return r.json(); });
   }
   function $(id){ return document.getElementById(id); }
   function toast(msg){ alert(msg); }
@@ -144,7 +133,7 @@
     if(!em){ toast("enter email"); return; }
     http("/request-otp","POST",{email:em}).then(function(){
       toast("OTP sent");
-    }).catch(function(err){ toast(err.message || "request failed"); });
+    }).catch(function(e){ toast(e.message || "request failed"); });
   }
   function verifyOtp(){
     var em = $("otpEmail").value.trim();
@@ -156,7 +145,7 @@
         toast("OTP verified. Opening login…");
         openLoginTab();
       })
-      .catch(function(err){ toast(err.message || "invalid OTP"); });
+      .catch(function(){ toast("invalid OTP"); });
   }
   function doLogin(){
     var u = $("uName").value.trim(), p = $("uPass").value;
@@ -169,10 +158,9 @@
       $("authModal").style.display="none";
       renderUser();
       refresh();
-    }).catch(function(e){ toast(e.message || "login failed"); });
+    }).catch(function(e){ toast("login failed"); });
   }
   $("uPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ doLogin(); } });
-  $("uName").addEventListener("keydown", function(e){ if(e.key==="Enter"){ $("uPass").focus(); } });
 
   // ---------- summary + envs ----------
   function renderUser(){
@@ -190,15 +178,18 @@
     var jwt = localStorage.getItem("jwt");
     if(!jwt){
       $("authModal").style.display="flex";
-      if(window.location.hash.indexOf("/login")>=0){ showPwd(); }
-      else { showOtp(); }
+      if(window.location.hash.indexOf("/login")>=0){
+        showPwd();
+        $("btnLogin").disabled = (localStorage.getItem("otp_verified")!=="1");
+      }else{
+        showOtp();
+      }
       return;
     }
     http("/instances","GET",null,jwt).then(function(data){
       $("tTotal").textContent = "Total: " + data.summary.total;
       $("tRun").textContent   = "Running: " + data.summary.running;
       $("tStop").textContent  = "Stopped: " + data.summary.stopped;
-
       renderTabs(data.envs);
     }).catch(function(){
       $("authModal").style.display="flex"; showOtp();
@@ -234,7 +225,8 @@
       var wrap = document.createElement("div"); wrap.className="stack";
       list.forEach(function(it){
         var line = document.createElement("div"); line.className="rowline";
-        var left = document.createElement("div"); left.innerHTML = "<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
+        var left = document.createElement("div");
+        left.innerHTML = "<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
         line.appendChild(left);
         var state = document.createElement("div"); state.className="state"; state.textContent = it.state||"";
         line.appendChild(state);
@@ -250,7 +242,7 @@
       mount.appendChild(box);
     });
   }
-  function btn(tone, css, fn){ var b=document.createElement("button"); b.textContent=tone; b.className="btn small " + css; b.onclick=fn; return b; }
+  function btn(t, cls, fn){ var b=document.createElement("button"); b.textContent=t; b.className="btn small " + cls; b.onclick=fn; return b; }
   function act(id,what){
     http("/instance-action","POST",{id:id, action:what}, localStorage.getItem("jwt"))
       .then(function(){ setTimeout(refresh, 1500); })
@@ -261,25 +253,19 @@
   var svcCtx = {id:"", name:"", type:"svcweb"};
   function openSvc(it){
     svcCtx.id = it.id; svcCtx.name = it.name||"";
-    var nm = (svcCtx.name.toLowerCase());
-    svcCtx.type = nm.indexOf("sql")>=0 ? "sql" : (nm.indexOf("redis")>=0 ? "redis" : "svcweb");
+    svcCtx.type = svcCtx.name.toLowerCase().indexOf("sql")>=0 ? "sql" : "svcweb";
     $("svcTitle").textContent = "Services on " + svcCtx.name;
 
     if(svcCtx.type==="sql"){
       $("svcFilter").style.display="none";
       $("btnRefresh").style.display="none";
       $("btnIIS").style.display="none";
-      $("svcHint").textContent = "Showing SQL Server & SQL Agent services.";
-    }else if(svcCtx.type==="redis"){
-      $("svcFilter").style.display="none";
-      $("btnRefresh").style.display="inline-block";
-      $("btnIIS").style.display="none";
-      $("svcHint").textContent = "Click Refresh to show Redis services.";
+      $("svcHint").textContent = "Showing SQL Server & SQL Agent services (default + named instances).";
     }else{
       $("svcFilter").style.display="inline-block";
       $("btnRefresh").style.display="inline-block";
       $("btnIIS").style.display="inline-block";
-      $("svcHint").textContent = "Type a fragment (e.g. 'w3svc', 'app') and press Refresh.";
+      $("svcHint").textContent = "Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh.";
     }
 
     $("svcBody").innerHTML = "";
@@ -289,58 +275,44 @@
   function closeSvc(){ $("svcModal").style.display="none"; }
 
   function svcRefresh(){
-    var role = (localStorage.getItem("role")||"read").toLowerCase();
-    var jwt  = localStorage.getItem("jwt");
-
-    if(svcCtx.type==="sql"){
-      http("/services","POST",{ id: svcCtx.id, mode: "sqlinfo" }, jwt)
-        .then(function(res){ renderSvcRows(res.services||[], role); })
-        .catch(function(){ toast("internal"); });
-      return;
+    var body = { id: svcCtx.id, mode: "list", instanceName: svcCtx.name };
+    if(svcCtx.type!=="sql"){
+      body.pattern = $("svcFilter").value.trim();
     }
-
-    var pat = "";
-    if(svcCtx.type==="redis"){ pat = "redis"; }
-    else { pat = $("svcFilter").value.trim(); }
-    var body = { id: svcCtx.id, mode: "list" };
-    if(pat){ body.pattern = pat; }
-
-    http("/services","POST", body, jwt).then(function(res){
-      if(res.error){ renderSsmError(res.error); return; }
-      if(svcCtx.type==="svcweb" && !pat){
-        var d = document.createElement("div"); d.className="mut"; d.textContent = "Enter text to filter services.";
-        $("svcBody").innerHTML=""; $("svcBody").appendChild(d); return;
-      }
-      renderSvcRows(res.services||[], role);
-    }).catch(function(){ toast("internal"); });
+    http("/services","POST", body, localStorage.getItem("jwt"))
+      .then(function(res){
+        var mount = $("svcBody"); mount.innerHTML="";
+        if(res.error){
+          var tip = "";
+          if(res.error==="not_connected") tip = "SSM target not connected. Ensure SSM agent is running, instance can reach SSM (internet or VPC endpoints), and the EC2 instance profile is attached.";
+          else if(res.error==="denied") tip = "SSM access denied. Confirm Lambda role has ssm:SendCommand/GetCommandInvocation and EC2 role trust is correct.";
+          var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + res.error + ". " + tip;
+          mount.appendChild(d);
+          return;
+        }
+        var svcs = res.services || [];
+        if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){
+          var d2 = document.createElement("div"); d2.className="mut"; d2.textContent = "Enter text to filter services.";
+          mount.appendChild(d2);
+          return;
+        }
+        var g = document.createElement("div"); g.className="grid";
+        var role = (localStorage.getItem("role")||"read").toLowerCase();
+        for(var i=0;i<svcs.length;i++){
+          var s = svcs[i] || {};
+          var n = document.createElement("div"); n.textContent = s.Name || "";
+          var d = document.createElement("div"); d.textContent = s.DisplayName || "";
+          var st = (s.Status||"").toString().toLowerCase();
+          var b1 = btn("Start","ok", (function(name){ return function(){ svcAction("start",name); };})(s.Name));
+          var b2 = btn("Stop","bad", (function(name){ return function(){ svcAction("stop",name); };})(s.Name));
+          if(role!=="admin"){ b1.disabled = true; b2.disabled = true; }
+          if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
+          g.appendChild(n); g.appendChild(d); g.appendChild(b1); g.appendChild(b2);
+        }
+        mount.appendChild(g);
+      })
+      .catch(function(){ toast("internal"); });
   }
-
-  function renderSsmError(code){
-    var tip = "";
-    if(code==="not_connected"){ tip = "SSM target not connected. Check SSM Agent, VPC endpoints or internet, and instance profile."; }
-    else if(code==="denied"){ tip = "SSM access denied. Ensure Lambda role allows ssm:SendCommand/GetCommandInvocation and EC2 profile is correct."; }
-    else { tip = "Unexpected SSM error. See CloudWatch logs for details."; }
-    var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + code + ". " + tip;
-    var m = $("svcBody"); m.innerHTML=""; m.appendChild(d);
-  }
-
-  function renderSvcRows(svcs, role){
-    var mount = $("svcBody"); mount.innerHTML="";
-    var g = document.createElement("div"); g.className="grid";
-    for(var i=0;i<svcs.length;i++){
-      var s = svcs[i];
-      var n = document.createElement("div"); n.textContent = s.Name || "";
-      var d = document.createElement("div"); d.textContent = s.DisplayName || "";
-      var st = (s.Status||"").toString().toLowerCase();
-      var b1 = btn("Start","ok", (function(name){ return function(){ svcAction("start",name); };})(s.Name));
-      var b2 = btn("Stop","bad", (function(name){ return function(){ svcAction("stop",name); };})(s.Name));
-      if(role!=="admin"){ b1.disabled = true; b2.disabled = true; }
-      if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
-      g.appendChild(n); g.appendChild(d); g.appendChild(b1); g.appendChild(b2);
-    }
-    mount.appendChild(g);
-  }
-
   function svcAction(what, name){
     http("/services","POST",{id:svcCtx.id, mode:what, service:name}, localStorage.getItem("jwt"))
       .then(function(){ svcRefresh(); })
@@ -352,17 +324,14 @@
       .catch(function(){ toast("failed"); });
   }
 
-  // ---------- first paint ----------
   (function init(){
     renderUser();
-
     if(window.location.hash.indexOf("/login")>=0){
       $("authModal").style.display="flex"; showPwd();
       $("btnLogin").disabled = (localStorage.getItem("otp_verified")!=="1");
     }else{
       $("authModal").style.display="flex"; showOtp();
     }
-
     refresh();
   })();
 </script>

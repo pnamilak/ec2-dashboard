@@ -1,4 +1,4 @@
-# NOTE: Do NOT add terraform{} or provider "aws"{} here, since backend.tf already has them.
+# NOTE: keep terraform{} + provider{} in backend.tf as before.
 
 #############################################
 # EC2 Dashboard – main.tf
@@ -7,8 +7,6 @@
 locals {
   name_prefix = "${var.project_name}-${random_id.suffix.hex}"
 
-  # Used to match instances by Name tag for EC2/SSM profile attachment
-  # Make matching case-flexible so NAQA1/naqa1/etc all match
   env_filters = flatten([
     for e in var.env_names : [
       "*${e}*",
@@ -18,13 +16,11 @@ locals {
   ])
 }
 
-resource "random_id" "suffix" {
-  byte_length = 2
-}
+resource "random_id" "suffix" { byte_length = 2 }
 
 data "aws_caller_identity" "me" {}
 
-# ---------- SES sender (verify this identity in the chosen region) ----------
+# ---------- SES sender ----------
 resource "aws_ses_email_identity" "sender" {
   email = var.ses_sender_email
 }
@@ -35,10 +31,7 @@ resource "aws_dynamodb_table" "otp" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "email"
 
-  attribute {
-    name = "email"
-    type = "S"
-  }
+  attribute { name = "email" type = "S" }
 
   ttl {
     attribute_name = "expiresAt"
@@ -76,10 +69,7 @@ data "archive_file" "api_zip" {
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
+    principals { type = "Service" identifiers = ["lambda.amazonaws.com"] }
   }
 }
 
@@ -95,61 +85,26 @@ resource "aws_iam_role_policy" "lambda_permissions" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      {
-        Sid     = "Logs",
-        Effect  = "Allow",
-        Action  = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
-        Resource = "*"
-      },
-      {
-        Sid     = "SES",
-        Effect  = "Allow",
-        Action  = ["ses:SendEmail", "ses:SendRawEmail"],
-        Resource = "*"
-      },
-      {
-        Sid     = "DDB",
-        Effect  = "Allow",
-        Action  = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
-        Resource = aws_dynamodb_table.otp.arn
-      },
-      {
-        Sid     = "EC2",
-        Effect  = "Allow",
-        Action  = ["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"],
-        Resource = "*"
-      },
-      {
-        Sid     = "SSMRun",
-        Effect  = "Allow",
-        Action  = [
-          "ssm:SendCommand",
-          "ssm:GetCommandInvocation",
-          "ssm:DescribeInstanceInformation"
-        ],
-        Resource = "*"
-      },
-      {
-        Sid     = "SSMParams",
-        Effect  = "Allow",
-        Action  = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
-        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*"
-      }
+      { Sid="Logs", Effect="Allow", Action=["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], Resource="*" },
+      { Sid="SES",  Effect="Allow", Action=["ses:SendEmail", "ses:SendRawEmail"], Resource="*" },
+      { Sid="DDB",  Effect="Allow", Action=["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"], Resource=aws_dynamodb_table.otp.arn },
+      { Sid="EC2",  Effect="Allow", Action=["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"], Resource="*" },
+      { Sid="SSMRun", Effect="Allow", Action=["ssm:SendCommand","ssm:GetCommandInvocation","ssm:DescribeInstanceInformation"], Resource="*" },
+      { Sid="SSMParams", Effect="Allow", Action=["ssm:GetParameter","ssm:GetParameters","ssm:GetParametersByPath"], Resource="arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*" }
     ]
   })
 }
 
 # ---------- Lambda functions ----------
 resource "aws_lambda_function" "api" {
-  function_name = "${local.name_prefix}-api"
-  role          = aws_iam_role.lambda_exec.arn
-  filename      = data.archive_file.api_zip.output_path
-  handler       = "handler.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 30
-
+  function_name    = "${local.name_prefix}-api"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = data.archive_file.api_zip.output_path
   source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
-  
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  timeout          = 30
+
   environment {
     variables = {
       REGION            = var.aws_region
@@ -164,14 +119,13 @@ resource "aws_lambda_function" "api" {
 }
 
 resource "aws_lambda_function" "authorizer" {
-  function_name = "${local.name_prefix}-authorizer"
-  role          = aws_iam_role.lambda_exec.arn
-  filename      = data.archive_file.api_zip.output_path
-  handler       = "authorizer.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 10
-
+  function_name    = "${local.name_prefix}-authorizer"
+  role             = aws_iam_role.lambda_exec.arn
+  filename         = data.archive_file.api_zip.output_path
   source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
+  handler          = "authorizer.lambda_handler"
+  runtime          = "python3.12"
+  timeout          = 10
 
   environment {
     variables = {
@@ -203,7 +157,7 @@ resource "aws_apigatewayv2_api" "api" {
   cors_configuration {
     allow_headers = ["*"]
     allow_methods = ["GET", "POST", "OPTIONS"]
-    allow_origins = ["*"] # tighten to CloudFront domain if you want
+    allow_origins = ["*"]
   }
 }
 
@@ -225,23 +179,26 @@ resource "aws_apigatewayv2_authorizer" "auth" {
   authorizer_result_ttl_in_seconds  = 60
 }
 
-# Public routes
+# Public routes (NO auth)
 resource "aws_apigatewayv2_route" "request_otp" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /request-otp"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /request-otp"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_route" "verify_otp" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /verify-otp"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /verify-otp"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "NONE"
 }
 
 resource "aws_apigatewayv2_route" "login" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /login"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /login"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "NONE"
 }
 
 # Protected routes
@@ -269,22 +226,13 @@ resource "aws_apigatewayv2_route" "services" {
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
 
-# Diagnostic endpoint
-resource "aws_apigatewayv2_route" "ssm_ping" {
-  api_id             = aws_apigatewayv2_api.api.id
-  route_key          = "POST /ssm-ping"
-  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
-  authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
-}
-
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
   auto_deploy = true
 }
 
-# ---------- Static site: S3 + CloudFront ----------
+# ---------- Static site ----------
 resource "aws_s3_bucket" "website" {
   bucket        = var.website_bucket_name != "" ? var.website_bucket_name : "${local.name_prefix}-site"
   force_destroy = true
@@ -292,10 +240,7 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
+  rule { object_ownership = "BucketOwnerEnforced" }
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -329,25 +274,12 @@ resource "aws_cloudfront_distribution" "site" {
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
     cached_methods         = ["GET", "HEAD"]
-
-    forwarded_values {
-      query_string = true
-
-      cookies {
-        forward = "none"
-      }
-    }
+    forwarded_values { query_string = true cookies { forward = "none" } }
   }
 
-  restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
-  }
+  restrictions { geo_restriction { restriction_type = "none" } }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
+  viewer_certificate { cloudfront_default_certificate = true }
 }
 
 data "aws_iam_policy_document" "site_bucket" {
@@ -356,17 +288,8 @@ data "aws_iam_policy_document" "site_bucket" {
     effect  = "Allow"
     actions = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.website.arn}/*"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["cloudfront.amazonaws.com"]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "AWS:SourceArn"
-      values   = [aws_cloudfront_distribution.site.arn]
-    }
+    principals { type = "Service" identifiers = ["cloudfront.amazonaws.com"] }
+    condition { test = "StringEquals" variable = "AWS:SourceArn" values = [aws_cloudfront_distribution.site.arn] }
   }
 }
 
@@ -375,12 +298,10 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Upload rendered index.html (Terraform template)
 resource "aws_s3_object" "index" {
   bucket       = aws_s3_bucket.website.id
   key          = "index.html"
   content_type = "text/html"
-
   content = templatefile("${path.module}/html/index.html.tpl", {
     api_base_url         = aws_apigatewayv2_api.api.api_endpoint
     allowed_email_domain = var.allowed_email_domain
@@ -389,17 +310,13 @@ resource "aws_s3_object" "index" {
 }
 
 # ============================================================
-# EC2 SSM – Role / Instance Profile and optional attachments
+# EC2 SSM – role/profile and optional association helper
 # ============================================================
 
-# Role for EC2 to talk to SSM
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
+    principals { type = "Service" identifiers = ["ec2.amazonaws.com"] }
   }
 }
 
@@ -408,44 +325,26 @@ resource "aws_iam_role" "ec2_ssm_role" {
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
-# Attach AWS managed policy AmazonSSMManagedInstanceCore
 resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   role       = aws_iam_role.ec2_ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Instance profile for EC2
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "${local.name_prefix}-ec2-ssm-profile"
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# Discover instances by state + Name tag matching any env token
 data "aws_instances" "targets_running" {
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
-  }
-
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name" values = ["running"] }
+  filter { name = "tag:Name" values = local.env_filters }
 }
 
 data "aws_instances" "targets_stopped" {
-  filter {
-    name   = "instance-state-name"
-    values = ["stopped"]
-  }
-
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name" values = ["stopped"] }
+  filter { name = "tag:Name" values = local.env_filters }
 }
 
-# Selection for attach behavior driven by var.assign_profile_target (none|running|stopped|both)
 locals {
   target_ids_map = {
     none    = []
@@ -456,7 +355,6 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI (no ${} expansion problems)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
