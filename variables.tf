@@ -1,41 +1,48 @@
-variable "project_name" { type = string }
-variable "aws_region"   { type = string }
-
-variable "ses_sender_email" {
-  description = "Verified SES sender address in this region"
+variable "project_name" {
   type        = string
+  default     = "ec2-dashboard"
+  description = "Prefix for resource names"
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region (e.g., us-east-2)"
+}
+
+variable "website_bucket_name" {
+  type        = string
+  default     = ""
+  description = "Optional explicit S3 bucket name for website (leave empty to auto-generate)"
+}
+
+variable "env_names" {
+  type        = list(string)
+  default     = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EQUA1"]
 }
 
 variable "allowed_email_domain" {
-  description = "Only this domain can request OTP"
   type        = string
   default     = "gmail.com"
 }
 
-variable "env_names" {
-  description = "Environment tabs"
-  type        = list(string)
-  default     = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1"]
+variable "ses_sender_email" {
+  type        = string
+  description = "SES-verified sender email (must be verified in the chosen region)"
 }
 
-variable "website_bucket_name" {
-  description = "Optional fixed bucket name (otherwise generated)"
-  type        = string
-  default     = ""
+# username => "password,role,email,name"
+# e.g. demo = "demo123,read,inf.pranay@gmail.com,Demo User"
+variable "app_users" {
+  type        = map(string)
+  default     = {}
 }
 
 variable "assign_profile_target" {
-  description = "Attach SSM instance profile: none|running|stopped|both"
   type        = string
   default     = "none"
-}
-
-variable "app_users" {
-  description = "Map of username => 'password,role,email,name'"
-  type        = map(string)
-  default     = {
-    demo     = "demo,read,demo@example.com,Demo User"
-    admin    = "changeme,admin,admin@example.com,Admin"
-    pnamilak = "changeme,admin,inf.pranay@gmail.com,Pranay"
+  description = "Attach SSM instance profile to: none|running|stopped|both"
+  validation {
+    condition     = contains(["none","running","stopped","both"], var.assign_profile_target)
+    error_message = "assign_profile_target must be one of none|running|stopped|both"
   }
 }
