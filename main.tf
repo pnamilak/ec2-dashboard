@@ -97,43 +97,43 @@ resource "aws_iam_role_policy" "lambda_permissions" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid    = "Logs"
-        Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Sid    = "Logs",
+        Effect = "Allow",
+        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
         Resource = "*"
       },
       {
-        Sid    = "SES"
-        Effect = "Allow"
-        Action = ["ses:SendEmail", "ses:SendRawEmail"]
+        Sid    = "SES",
+        Effect = "Allow",
+        Action = ["ses:SendEmail", "ses:SendRawEmail"],
         Resource = "*"
       },
       {
-        Sid    = "DDB"
-        Effect = "Allow"
-        Action = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Sid    = "DDB",
+        Effect = "Allow",
+        Action = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
         Resource = aws_dynamodb_table.otp.arn
       },
       {
-        Sid    = "EC2"
-        Effect = "Allow"
-        Action = ["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"]
+        Sid    = "EC2",
+        Effect = "Allow",
+        Action = ["ec2:DescribeInstances", "ec2:StartInstances", "ec2:StopInstances"],
         Resource = "*"
       },
       {
-        Sid    = "SSMRun"
-        Effect = "Allow"
+        Sid    = "SSMRun",
+        Effect = "Allow",
         Action = [
           "ssm:SendCommand",
           "ssm:GetCommandInvocation",
-          "ssm:DescribeInstanceInformation" # <-- added so /ssm-ping works
-        ]
+          "ssm:DescribeInstanceInformation" # <-- needed for /ssm-ping
+        ],
         Resource = "*"
       },
       {
-        Sid    = "SSMParams"
-        Effect = "Allow"
-        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
+        Sid    = "SSMParams",
+        Effect = "Allow",
+        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"],
         Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.me.account_id}:parameter/${var.project_name}/*"
       }
     ]
@@ -259,10 +259,16 @@ resource "aws_apigatewayv2_route" "services" {
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
-# diagnostic endpoint exposed by handler.py
 resource "aws_apigatewayv2_route" "ssm_ping" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "POST /ssm-ping"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+resource "aws_apigatewayv2_route" "me" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "GET /me"
   target             = "integrations/${aws_apigatewayv2_integration.api_lambda.id}"
   authorization_type = "CUSTOM"
   authorizer_id      = aws_apigatewayv2_authorizer.auth.id

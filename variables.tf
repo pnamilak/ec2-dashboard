@@ -30,7 +30,7 @@ variable "website_bucket_name" {
 variable "app_users" {
   description = "Map of username -> plaintext password (stored as SecureString in SSM). Change after first deploy."
   type        = map(string)
-  default     = {
+  default = {
     admin = "ChangeMe123!"
   }
 }
@@ -46,7 +46,7 @@ variable "assign_profile_target" {
   type        = string
   default     = "none"
   validation {
-    condition     = contains(["none","running","stopped","both"], var.assign_profile_target)
+    condition     = contains(["none", "running", "stopped", "both"], var.assign_profile_target)
     error_message = "assign_profile_target must be one of: none, running, stopped, both"
   }
 }
