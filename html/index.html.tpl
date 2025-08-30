@@ -49,7 +49,6 @@
   <div id="envMount"></div>
 </div>
 
-<!-- Services modal -->
 <div class="modal" id="svcModal">
   <div class="card">
     <div class="row" style="margin-bottom:10px">
@@ -65,7 +64,6 @@
   </div>
 </div>
 
-<!-- Auth modal -->
 <div class="modal" id="authModal">
   <div class="card" style="max-width:760px">
     <div class="row" style="gap:12px;margin-bottom:12px">
@@ -100,27 +98,26 @@
 </div>
 
 <script>
-  // ---------- config (rendered by Terraform) ----------
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
 
-  // ---------- helpers ----------
   function http(path, method, obj, bearer){
     var h = {"content-type":"application/json"};
     if(bearer){ h["authorization"] = "Bearer " + bearer; }
     return fetch(API + path, {method:method, headers:h, body: obj? JSON.stringify(obj): undefined})
-      .then(function(r){ if(!r.ok) throw new Error("http " + r.status); return r.json(); });
+      .then(async function(r){
+        const data = await r.json().catch(()=> ({}));
+        if(!r.ok){ const msg = (data && (data.error||data.message)) || ("http " + r.status); throw new Error(msg); }
+        return data;
+      });
   }
   function $(id){ return document.getElementById(id); }
   function toast(msg){ alert(msg); }
 
-  // ---------- auth ----------
   function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
   function logout(){
-    localStorage.removeItem("jwt");
-    localStorage.removeItem("role");
-    localStorage.removeItem("user");
-    localStorage.removeItem("otp_verified");
+    localStorage.removeItem("jwt"); localStorage.removeItem("role");
+    localStorage.removeItem("user"); localStorage.removeItem("otp_verified");
     refresh();
   }
   function closeAuth(){ $("authModal").style.display = "none"; }
@@ -130,199 +127,119 @@
   function requestOtp(){
     var em = $("otpEmail").value.trim();
     if(!em){ toast("enter email"); return; }
-    http("/request-otp","POST",{email:em}).then(function(){
-      toast("OTP sent");
-    }).catch(function(e){ toast(e.message || "request failed"); });
+    http("/request-otp","POST",{email:em}).then(()=>toast("OTP sent")).catch(e=>toast(e.message));
   }
   function verifyOtp(){
-    var em = $("otpEmail").value.trim();
-    var cd = $("otpCode").value.trim();
+    var em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
     if(!em || !cd){ toast("enter email and code"); return; }
     http("/verify-otp","POST",{email:em, code:cd})
       .then(function(){
         localStorage.setItem("otp_verified","1");
-        // Switch to password login on the SAME tab
-        showPwd();
-        $("btnLogin").disabled = false;
-        $("uName").focus();
-      })
-      .catch(function(){ toast("invalid OTP"); });
+        showPwd(); $("btnLogin").disabled=false; $("uName").focus();
+      }).catch(e=>toast(e.message));
   }
   function doLogin(){
     var u = $("uName").value.trim(), p = $("uPass").value;
     if(!u || !p){ toast("missing credentials"); return; }
     if(localStorage.getItem("otp_verified")!=="1"){ toast("Please verify OTP first"); return; }
-    http("/login","POST",{username:u,password:p}).then(function(res){
-      localStorage.setItem("jwt", res.token);
-      localStorage.setItem("role", res.role);
-      localStorage.setItem("user", JSON.stringify(res.user));
-      $("authModal").style.display="none";
-      renderUser();
-      refresh();
-    }).catch(function(e){ toast(e.message || "login failed"); });
+    http("/login","POST",{username:u,password:p})
+      .then(function(res){
+        localStorage.setItem("jwt", res.token);
+        localStorage.setItem("role", res.role);
+        localStorage.setItem("user", JSON.stringify(res.user));
+        $("authModal").style.display="none";
+        renderUser(); refresh();
+      }).catch(e=>toast(e.message));
   }
   $("uPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ doLogin(); } });
 
-  // ---------- summary + envs ----------
   function renderUser(){
     var u = localStorage.getItem("user");
-    if(u){
-      var o = JSON.parse(u);
-      var role = (o.role||localStorage.getItem("role")||"").toString();
-      $("userBadge").textContent = (o.name||o.username||"") + (role ? " • " + role : "");
-      $("userBadge").style.display="inline-block";
-    }else{
-      $("userBadge").style.display="none";
-    }
+    if(u){ var o=JSON.parse(u); $("userBadge").textContent=(o.name||o.username||"")+" • "+(o.role||""); $("userBadge").style.display="inline-block"; }
+    else{ $("userBadge").style.display="none"; }
   }
 
   function refresh(){
     var jwt = localStorage.getItem("jwt");
     if(!jwt){ $("authModal").style.display="flex"; showOtp(); return; }
     http("/instances","GET",null,jwt).then(function(data){
-      $("tTotal").textContent = "Total: " + data.summary.total;
-      $("tRun").textContent   = "Running: " + data.summary.running;
-      $("tStop").textContent  = "Stopped: " + data.summary.stopped;
+      $("tTotal").textContent="Total: "+data.summary.total;
+      $("tRun").textContent="Running: "+data.summary.running;
+      $("tStop").textContent="Stopped: "+data.summary.stopped;
       renderTabs(data.envs);
-    }).catch(function(){
-      $("authModal").style.display="flex"; showOtp();
-    });
+    }).catch(function(){ $("authModal").style.display="flex"; showOtp(); });
   }
 
   function renderTabs(envs){
-    var tabs = $("envTabs"); tabs.innerHTML = "";
+    var tabs=$("envTabs"); tabs.innerHTML="";
     ENV_NAMES.forEach(function(e,i){
-      var b = document.createElement("div");
-      b.className = "tab";
-      b.textContent = e;
-      b.onclick = function(){ drawEnv(envs[e]||{DM:[],EA:[]}); setActive(i); };
+      var b=document.createElement("div"); b.className="tab"; b.textContent=e;
+      b.onclick=function(){ drawEnv(envs[e]||{DM:[],EA:[]}); setActive(i); };
       tabs.appendChild(b);
     });
-    setActive(0);
-    drawEnv(envs[ENV_NAMES[0]]||{DM:[],EA:[]});
-    function setActive(idx){
-      var nodes = tabs.querySelectorAll(".tab");
-      for(var k=0;k<nodes.length;k++){ nodes[k].classList.remove("active"); }
-      if(nodes[idx]) nodes[idx].classList.add("active");
-    }
+    setActive(0); drawEnv(envs[ENV_NAMES[0]]||{DM:[],EA:[]});
+    function setActive(idx){ tabs.querySelectorAll(".tab").forEach((n,k)=>n.classList.toggle("active",k===idx)); }
   }
 
   function drawEnv(env){
-    var mount = $("envMount"); mount.innerHTML = "";
+    var mount=$("envMount"); mount.innerHTML="";
     ["Dream Mapper","Encore Anywhere"].forEach(function(section, si){
-      var box = document.createElement("div"); box.className="box";
-      var head = document.createElement("div"); head.textContent = section; head.style.fontWeight="700"; head.style.marginBottom="8px";
-      box.appendChild(head);
-
-      var list = si===0 ? (env.DM||[]) : (env.EA||[]);
-      var wrap = document.createElement("div"); wrap.className="stack";
+      var box=document.createElement("div"); box.className="box";
+      var head=document.createElement("div"); head.textContent=section; head.style.fontWeight="700"; head.style.marginBottom="8px"; box.appendChild(head);
+      var list= si===0 ? (env.DM||[]) : (env.EA||[]);
+      var wrap=document.createElement("div"); wrap.className="stack";
       list.forEach(function(it){
-        var line = document.createElement("div"); line.className="rowline";
-        var left = document.createElement("div");
-        left.innerHTML = "<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
+        var line=document.createElement("div"); line.className="rowline";
+        var left=document.createElement("div"); left.innerHTML="<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
         line.appendChild(left);
-        var state = document.createElement("div"); state.className="state"; state.textContent = it.state||"";
-        line.appendChild(state);
-        var start = btn("Start","ok", function(){ act(it.id,"start"); });
-        var stop  = btn("Stop","bad", function(){ act(it.id,"stop"); });
+        var state=document.createElement("div"); state.className="state"; state.textContent=it.state||""; line.appendChild(state);
+        var start=btn("Start","ok",function(){ act(it.id,"start"); });
+        var stop=btn("Stop","bad",function(){ act(it.id,"stop"); });
         if((it.state||"").toLowerCase()==="running"){ start.disabled=true; } else { stop.disabled=true; }
-        line.appendChild(start);
-        line.appendChild(stop);
-        line.appendChild(btn("Services","", function(){ openSvc(it); }));
+        line.appendChild(start); line.appendChild(stop);
+        line.appendChild(btn("Services","",function(){ openSvc(it); }));
         wrap.appendChild(line);
       });
-      box.appendChild(wrap);
-      mount.appendChild(box);
+      box.appendChild(wrap); mount.appendChild(box);
     });
   }
-  function btn(tone, css, fn){ var b=document.createElement("button"); b.textContent=tone; b.className="btn small " + css; b.onclick=fn; return b; }
-  function act(id,what){
-    http("/instance-action","POST",{id:id, action:what}, localStorage.getItem("jwt"))
-      .then(function(){ setTimeout(refresh, 1500); })
-      .catch(function(){ toast("action failed"); });
-  }
+  function btn(tone, css, fn){ var b=document.createElement("button"); b.textContent=tone; b.className="btn small "+css; b.onclick=fn; return b; }
+  function act(id,what){ http("/instance-action","POST",{id:id, action:what}, localStorage.getItem("jwt")).then(()=>setTimeout(refresh,1500)).catch(()=>toast("action failed")); }
 
-  // ---------- services modal ----------
-  var svcCtx = {id:"", name:"", type:"svcweb"};
+  var svcCtx={id:"",name:"",type:"svcweb"};
   function openSvc(it){
-    svcCtx.id = it.id; svcCtx.name = it.name||"";
-    var nm = (svcCtx.name.toLowerCase());
+    svcCtx.id=it.id; svcCtx.name=it.name||""; var nm=(svcCtx.name.toLowerCase());
     svcCtx.type = nm.indexOf("sql")>=0 ? "sql" : "svcweb";
-    $("svcTitle").textContent = "Services on " + svcCtx.name;
-
-    if(svcCtx.type==="sql"){
-      $("svcFilter").style.display="none";
-      $("btnRefresh").style.display="none";
-      $("btnIIS").style.display="none";
-      $("svcHint").textContent = "Showing SQL Server & SQL Agent services.";
-    }else{
-      $("svcFilter").style.display="inline-block";
-      $("btnRefresh").style.display="inline-block";
-      $("btnIIS").style.display="inline-block";
-      $("svcHint").textContent = "Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh.";
-    }
-
-    $("svcBody").innerHTML = "";
-    $("svcModal").style.display="flex";
-    svcRefresh();
+    $("svcTitle").textContent="Services on "+svcCtx.name;
+    if(svcCtx.type==="sql"){ $("svcFilter").style.display="none"; $("btnRefresh").style.display="none"; $("btnIIS").style.display="none"; $("svcHint").textContent="Showing SQL Server & SQL Agent services."; }
+    else{ $("svcFilter").style.display="inline-block"; $("btnRefresh").style.display="inline-block"; $("btnIIS").style.display="inline-block"; $("svcHint").textContent="Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh."; }
+    $("svcBody").innerHTML=""; $("svcModal").style.display="flex"; svcRefresh();
   }
   function closeSvc(){ $("svcModal").style.display="none"; }
-
   function svcRefresh(){
-    var body = { id: svcCtx.id, mode: "list", instanceName: svcCtx.name };
-    if(svcCtx.type!=="sql") body.pattern = $("svcFilter").value.trim();
-    http("/services","POST", body, localStorage.getItem("jwt"))
-      .then(function(res){
-        var mount = $("svcBody"); mount.innerHTML="";
-        if(res.error){
-          var tip = "";
-          if(res.error==="not_connected") tip = "SSM target not connected. Check SSM Agent is running, instance has internet/VPC endpoints, and the instance profile is attached.";
-          else if(res.error==="denied") tip = "SSM access denied. Ensure Lambda role and instance profile permissions are correct.";
-          var d = document.createElement("div"); d.className="error"; d.textContent = "SSM error: " + res.error + (res.reason? " ("+res.reason+")":"") + ". " + tip;
-          mount.appendChild(d);
-          return;
-        }
-        var svcs = res.services || [];
-        if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){
-          var d2 = document.createElement("div"); d2.className="mut"; d2.textContent = "Enter text to filter services.";
-          mount.appendChild(d2);
-          return;
-        }
-        var g = document.createElement("div"); g.className="grid";
-        var role = (localStorage.getItem("role")||"read").toLowerCase();
-        for(var i=0;i<svcs.length;i++){
-          var s = svcs[i];
-          var n = document.createElement("div"); n.textContent = s.Name || "";
-          var d = document.createElement("div"); d.textContent = s.DisplayName || "";
-          var st = (s.Status||"").toString().toLowerCase();
-          var b1 = btn("Start","ok", (function(name){ return function(){ svcAction("start",name); };})(s.Name));
-          var b2 = btn("Stop","bad", (function(name){ return function(){ svcAction("stop",name); };})(s.Name));
-          if(role!=="admin"){ b1.disabled = true; b2.disabled = true; }
-          if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
-          g.appendChild(n); g.appendChild(d); g.appendChild(b1); g.appendChild(b2);
-        }
-        mount.appendChild(g);
-      })
-      .catch(function(){ toast("internal"); });
+    var body={id:svcCtx.id, mode:"list", instanceName:svcCtx.name}; if(svcCtx.type!=="sql") body.pattern=$("svcFilter").value.trim();
+    http("/services","POST", body, localStorage.getItem("jwt")).then(function(res){
+      var mount=$("svcBody"); mount.innerHTML="";
+      if(res.error){
+        var tip=""; if(res.error==="not_connected") tip="SSM target not connected. Check SSM Agent is running, instance has internet/VPC endpoints, and the instance profile is attached.";
+        else if(res.error==="denied") tip="SSM access denied. Ensure Lambda role and instance profile permissions are correct.";
+        var d=document.createElement("div"); d.className="error"; d.textContent="SSM error: "+res.error+(res.reason? " ("+res.reason+")":"")+". "+tip; mount.appendChild(d); return;
+      }
+      var svcs=res.services||[]; if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){ var d2=document.createElement("div"); d2.className="mut"; d2.textContent="Enter text to filter services."; mount.appendChild(d2); return; }
+      var g=document.createElement("div"); g.className="grid"; var role=(localStorage.getItem("role")||"read").toLowerCase();
+      for(var i=0;i<svcs.length;i++){ var s=svcs[i];
+        var n=document.createElement("div"); n.textContent=s.Name||""; var d=document.createElement("div"); d.textContent=s.DisplayName||""; var st=(s.Status||"").toString().toLowerCase();
+        var b1=btn("Start","ok",(function(name){return function(){svcAction("start",name);};})(s.Name));
+        var b2=btn("Stop","bad",(function(name){return function(){svcAction("stop",name);};})(s.Name));
+        if(role!=="admin"){ b1.disabled=true; b2.disabled=true; } if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
+        g.appendChild(n); g.appendChild(d); g.appendChild(b1); g.appendChild(b2);
+      } mount.appendChild(g);
+    }).catch(()=>toast("internal"));
   }
-  function svcAction(what, name){
-    http("/services","POST",{id:svcCtx.id, mode:what, service:name}, localStorage.getItem("jwt"))
-      .then(function(){ svcRefresh(); })
-      .catch(function(){ toast("service action failed"); });
-  }
-  function svcIISReset(){
-    http("/services","POST",{id:svcCtx.id, mode:"iisreset"}, localStorage.getItem("jwt"))
-      .then(function(){ toast("IIS reset sent"); svcRefresh(); })
-      .catch(function(){ toast("failed"); });
-  }
+  function svcAction(what,name){ http("/services","POST",{id:svcCtx.id,mode:what,service:name}, localStorage.getItem("jwt")).then(()=>svcRefresh()).catch(()=>toast("service action failed")); }
+  function svcIISReset(){ http("/services","POST",{id:svcCtx.id,mode:"iisreset"}, localStorage.getItem("jwt")).then(()=>{toast("IIS reset sent"); svcRefresh();}).catch(()=>toast("failed")); }
 
-  // ---------- first paint ----------
-  (function init(){
-    renderUser();
-    $("authModal").style.display="flex";
-    showOtp(); // default landing is OTP
-    refresh();
-  })();
+  (function init(){ renderUser(); $("authModal").style.display="flex"; showOtp(); refresh(); })();
 </script>
 </body>
 </html>
