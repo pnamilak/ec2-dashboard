@@ -440,9 +440,17 @@ resource "null_resource" "attach_profile" {
       PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
       REGION="${var.aws_region}"
 
-      CUR_JSON=$(aws ec2 describe-iam-instance-profile-associations --filters Name=instance-id,Values="$IID" --region "$REGION" --output json)
-      CUR_ID=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].AssociationId // empty')
-      CUR_PROFILE=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].IamInstanceProfile.Arn | split("/")[-1] // empty')
+      # Describe current association (if any)
+      CUR_JSON=$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values="$IID" \
+        --region "$REGION" --output json)
+
+      # Safe parsing (empty string if field missing)
+      CUR_ID=$(echo "$CUR_JSON" | jq -r '.IamInstanceProfileAssociations[0].AssociationId // ""')
+      CUR_PROFILE=$(echo "$CUR_JSON" | jq -r '
+        (.IamInstanceProfileAssociations[0].IamInstanceProfile.Arn // "") as $arn
+        | if $arn == "" then "" else ($arn | tostring | (split("/")[-1])) end
+      ')
 
       if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
         echo "Instance $IID already associated with profile $PROFILE"
@@ -456,7 +464,10 @@ resource "null_resource" "attach_profile" {
       fi
 
       echo "Associating profile $PROFILE to $IID ..."
-      aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
+      aws ec2 associate-iam-instance-profile \
+        --iam-instance-profile Name="$PROFILE" \
+        --instance-id "$IID" \
+        --region "$REGION" >/dev/null
       echo "Done."
     EOT
   }
