@@ -126,7 +126,7 @@ resource "aws_iam_role_policy" "lambda_permissions" {
         Action = [
           "ssm:SendCommand",
           "ssm:GetCommandInvocation",
-          "ssm:DescribeInstanceInformation" # needed for /ssm-ping
+          "ssm:DescribeInstanceInformation" # for /ssm-ping
         ],
         Resource = "*"
       },
@@ -440,7 +440,7 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI (no jq; robust heredoc; no ${} expansion)
+# Idempotent attach via AWS CLI (no jq; robust heredoc; no ${} bash expansion)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
@@ -452,44 +452,44 @@ resource "null_resource" "attach_profile" {
 
   provisioner "local-exec" {
     interpreter = ["bash", "-lc"]
-    command = <<-EOT
-      set -euo pipefail
-      IID="${each.value}"
-      PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
-      REGION="${var.aws_region}"
+    command = <<EOF
+set -euo pipefail
+IID="${each.value}"
+PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+REGION="${var.aws_region}"
 
-      CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --region "$REGION" \
-        --query 'IamInstanceProfileAssociations[0].AssociationId' \
-        --output text 2>/dev/null || true)
+CUR_ID=$(aws ec2 describe-iam-instance-profile-associations \
+  --filters Name=instance-id,Values="$IID" \
+  --region "$REGION" \
+  --query 'IamInstanceProfileAssociations[0].AssociationId' \
+  --output text 2>/dev/null || true)
 
-      CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --region "$REGION" \
-        --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
-        --output text 2>/dev/null || true)
+CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
+  --filters Name=instance-id,Values="$IID" \
+  --region "$REGION" \
+  --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
+  --output text 2>/dev/null || true)
 
-      [ "$CUR_ID"  = "None" ] && CUR_ID=""
-      [ "$CUR_ARN" = "None" ] && CUR_ARN=""
+[ "$CUR_ID"  = "None" ] && CUR_ID=""
+[ "$CUR_ARN" = "None" ] && CUR_ARN=""
 
-      # Extract profile name without using ${...} expansion
-      CUR_PROFILE=$(echo "$CUR_ARN" | awk -F/ '{print $NF}')
+# derive profile name (last path segment) without ${...}
+CUR_PROFILE=$(printf "%s" "$CUR_ARN" | awk -F/ '{print $NF}')
 
-      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
-        echo "Instance $IID already associated with profile $PROFILE"
-        exit 0
-      fi
+if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" = "$PROFILE" ]; then
+  echo "Instance $IID already associated with profile $PROFILE"
+  exit 0
+fi
 
-      if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
-        echo "Disassociating old profile $CUR_PROFILE from $IID ..."
-        aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
-        sleep 3
-      fi
+if [ -n "$CUR_ID" ] && [ "$CUR_PROFILE" != "$PROFILE" ]; then
+  echo "Disassociating old profile $CUR_PROFILE from $IID ..."
+  aws ec2 disassociate-iam-instance-profile --association-id "$CUR_ID" --region "$REGION"
+  sleep 3
+fi
 
-      echo "Associating profile $PROFILE to $IID ..."
-      aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
-      echo "Done."
-    EOT
+echo "Associating profile $PROFILE to $IID ..."
+aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --instance-id "$IID" --region "$REGION" >/dev/null
+echo "Done."
+EOF
   }
 }
