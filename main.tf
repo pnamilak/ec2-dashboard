@@ -367,9 +367,9 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# --------- Site objects (with cache bust + CF invalidation) ---------
+# --------- Site objects (with cache bust) ---------
 
-# index.html (rendered from template) – add etag + cache control
+# index.html (rendered from template)
 resource "aws_s3_object" "index" {
   bucket        = aws_s3_bucket.website.id
   key           = "index.html"
@@ -399,15 +399,24 @@ resource "aws_s3_object" "login_js" {
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
 }
 
-# Invalidate CloudFront so the latest files serve immediately
-resource "aws_cloudfront_invalidation" "site_invalidation" {
-  distribution_id = aws_cloudfront_distribution.site.id
-  paths           = ["/*"]
-  depends_on = [
-    aws_s3_object.index,
-    aws_s3_object.login_html,
-    aws_s3_object.login_js
-  ]
+# ---------- CloudFront invalidation via local-exec ----------
+# Triggers whenever any site file changes.
+resource "null_resource" "cf_invalidation" {
+  triggers = {
+    distribution_id = aws_cloudfront_distribution.site.id
+    index_etag      = md5(local.index_html_rendered)
+    login_html_etag = filemd5("${path.module}/html/login.html")
+    login_js_etag   = filemd5("${path.module}/html/login.js")
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-lc"]
+    command = <<EOF
+aws cloudfront create-invalidation \
+  --distribution-id ${aws_cloudfront_distribution.site.id} \
+  --paths "/*"
+EOF
+  }
 }
 
 # ============================================================
