@@ -18,138 +18,181 @@
     .rowline{display:flex;align-items:center;gap:10px;justify-content:space-between;background:#0f1a2e;border:1px solid #1c2840;border-radius:12px;padding:10px 12px}
     .state{font-size:12px;color:#cfead9}
     .btn{padding:6px 12px;border-radius:10px;background:#203252;border:0;color:#dfe7f5;cursor:pointer}
-    .btn.ok{background:var(--ok)} .btn.bad{background:var(--bad)} .btn.small{padding:4px 10px;font-size:12px}
+    .btn.ok{background:var(--ok)}
+    .btn.bad{background:var(--bad)}
+    .btn.small{padding:4px 10px;font-size:12px}
     .chip{padding:6px 10px;background:#1a2742;border-radius:12px;font-size:12px}
     .mut{color:var(--mut);font-size:12px}
     .right{margin-left:auto}
-    .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
-    .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:520px;width:100%}
-    input{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px}
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
+    .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
+    .grid{display:grid;grid-template-columns:1fr 1fr 50px 50px;gap:10px}
+    input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
     .error{background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:10px;padding:8px 10px}
   </style>
 </head>
 <body>
-
-<!-- ======= AUTHED UI (hidden until JWT is present & instances load) ======= -->
-<div id="authedShell" style="display:none">
-  <div class="wrap">
-    <div class="row" id="headerBar">
-      <div class="tile big" id="tTotal">Total: 0</div>
-      <div class="tile big" id="tRun">Running: 0</div>
-      <div class="tile big" id="tStop">Stopped: 0</div>
-      <div class="right"></div>
-      <div class="chip" id="userBadge" style="display:none"></div>
-      <button class="btn small" onclick="logout()">Sign out</button>
-      <button class="btn small" onclick="refresh()">Refresh</button>
-    </div>
-
-    <div class="tabs row" id="envTabs"></div>
-    <div id="envMount"></div>
+<div class="wrap" id="app">
+  <div class="row">
+    <div class="tile big" id="tTotal">Total: 0</div>
+    <div class="tile big" id="tRun">Running: 0</div>
+    <div class="tile big" id="tStop">Stopped: 0</div>
+    <div class="right"></div>
+    <div class="chip" id="userBadge" style="display:none"></div>
+    <!-- these three are hidden until logged in -->
+    <button id="btnLoginTop"  class="btn small" onclick="openLogin()" style="display:none">Login</button>
+    <button id="btnSignout"   class="btn small" onclick="logout()"   style="display:none">Sign out</button>
+    <button id="btnRefresh"   class="btn small" onclick="refresh()"  style="display:none">Refresh</button>
   </div>
 
-  <!-- Services modal -->
-  <div class="modal" id="svcModal">
-    <div class="card">
-      <div class="row" style="margin-bottom:10px">
-        <div id="svcTitle" style="font-weight:700">Services</div>
-        <div class="right"></div>
-        <input id="svcFilter" placeholder="Type to filter (Name or DisplayName)" style="width:260px;display:none">
-        <button class="btn small" id="btnRefresh" onclick="svcRefresh()" style="display:none">Refresh</button>
-        <button class="btn small" id="btnIIS" onclick="svcIISReset()" style="display:none">IIS Reset</button>
-        <button class="btn small" onclick="closeSvc()">Back</button>
-      </div>
-      <div id="svcBody"></div>
-      <div id="svcHint" class="mut" style="margin-top:10px"></div>
+  <div class="tabs row" id="envTabs"></div>
+  <div id="envMount"></div>
+</div>
+
+<div class="modal" id="svcModal">
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      <div id="svcTitle" style="font-weight:700">Services</div>
+      <div class="right"></div>
+      <input id="svcFilter" placeholder="Type to filter (Name or DisplayName)" style="width:260px;display:none">
+      <button class="btn small" id="btnSvcRefresh" onclick="svcRefresh()" style="display:none">Refresh</button>
+      <button class="btn small" id="btnIIS" onclick="svcIISReset()" style="display:none">IIS Reset</button>
+      <button class="btn small" onclick="closeSvc()">Back</button>
     </div>
+    <div id="svcBody"></div>
+    <div id="svcHint" class="mut" style="margin-top:10px"></div>
   </div>
 </div>
 
-<!-- ======= OTP-ONLY SCREEN (default) ======= -->
-<div class="modal" id="authModal" style="display:flex">
-  <div class="card">
+<div class="modal" id="authModal">
+  <div class="card" style="max-width:760px">
     <div class="row" style="gap:12px;margin-bottom:12px">
-      <div style="font-weight:700">Email verification</div>
+      <button id="tabOtp" class="btn small" onclick="showOtp()">Email OTP</button>
+      <button id="tabPwd" class="btn small" onclick="showPwd()">User / Password</button>
       <div class="right"></div>
+      <button class="btn small" onclick="closeAuth()">Close</button>
     </div>
-    <div>
+
+    <div id="paneOtp">
       <div class="row" style="gap:10px">
-        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="flex:1;min-width:260px">
+        <input id="otpEmail" placeholder="name@${allowed_email_domain}" style="width:320px">
         <button class="btn" onclick="requestOtp()">Request OTP</button>
       </div>
       <div class="row" style="gap:10px;margin-top:10px">
-        <input id="otpCode" placeholder="6-digit code" style="width:180px">
+        <input id="otpCode" placeholder="6-digit code" style="width:160px">
         <button class="btn" onclick="verifyOtp()">Verify OTP</button>
       </div>
       <div class="mut" style="margin-top:8px">Allowed domain: ${allowed_email_domain}</div>
-      <div class="mut" style="margin-top:6px">After verification you’ll be taken to a separate sign-in page.</div>
+    </div>
+
+    <div id="panePwd" style="display:none">
+      <div class="mut" style="margin-bottom:6px">Enter credentials (OTP required first).</div>
+      <div class="row" style="gap:10px">
+        <input id="uName" placeholder="username" style="width:220px">
+        <input id="uPass" placeholder="password" type="password" style="width:220px">
+        <button id="btnLogin" class="btn" onclick="doLogin()" disabled>Login</button>
+      </div>
+      <div class="mut" style="margin-top:8px">Tip: give a user the role <b>read</b> for demo-only (start/stop disabled).</div>
     </div>
   </div>
 </div>
 
 <script>
-  // Template values
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
-  // Seed for the /login.html page
-  try { localStorage.setItem("api_base_url", API); } catch(e) {}
 
   function http(path, method, obj, bearer){
     var h = {"content-type":"application/json"};
     if(bearer){ h["authorization"] = "Bearer " + bearer; }
-    return fetch(API + path, {method, headers:h, body: obj? JSON.stringify(obj): undefined})
-      .then(async r => {
+    return fetch(API + path, {method:method, headers:h, body: obj? JSON.stringify(obj): undefined})
+      .then(async function(r){
         const data = await r.json().catch(()=> ({}));
-        if(!r.ok){ const msg = data?.error || data?.message || ("http " + r.status); throw new Error(msg); }
+        if(!r.ok){
+          const msg = (data && (data.error||data.message)) || ("http " + r.status);
+          throw new Error(msg);
+        }
         return data;
       });
   }
   function $(id){ return document.getElementById(id); }
-  function showAuthed(on){ $("authedShell").style.display = on ? "block":"none"; $("authModal").style.display = on ? "none" : "flex"; }
-  function logout(){ ["jwt","role","user","otp_verified","otp_verified_until","allowed_domain"].forEach(k=>localStorage.removeItem(k)); showAuthed(false); }
+  function toast(msg){ alert(msg); }
 
-  // OTP
+  function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
+  function logout(){
+    localStorage.removeItem("jwt"); localStorage.removeItem("role");
+    localStorage.removeItem("user"); localStorage.removeItem("otp_verified");
+    renderUser(); refresh();
+  }
+  function closeAuth(){ $("authModal").style.display = "none"; }
+  function showOtp(){ $("paneOtp").style.display="block"; $("panePwd").style.display="none"; }
+  function showPwd(){ $("paneOtp").style.display="none"; $("panePwd").style.display="block"; }
+
   function requestOtp(){
-    const em = $("otpEmail").value.trim();
-    if(!em){ alert("Enter email"); return; }
-    http("/request-otp","POST",{email:em}).then(()=>alert("OTP sent")).catch(e=>alert(e.message));
+    var em = $("otpEmail").value.trim();
+    if(!em){ toast("enter email"); return; }
+    http("/request-otp","POST",{email:em}).then(()=>toast("OTP sent")).catch(e=>toast(e.message));
   }
   function verifyOtp(){
-    const em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
-    if(!em || !cd){ alert("Enter email and code"); return; }
-    http("/verify-otp","POST",{email:em, code:cd}).then(()=>{
-      localStorage.setItem("otp_verified","1");
-      localStorage.setItem("allowed_domain","${allowed_email_domain}");
-      localStorage.setItem("otp_verified_until", String(Date.now() + 10*60*1000)); // 10m
-      window.location.assign("/login.html");
-    }).catch(e=>alert(e.message));
+    var em = $("otpEmail").value.trim(), cd = $("otpCode").value.trim();
+    if(!em || !cd){ toast("enter email and code"); return; }
+    http("/verify-otp","POST",{email:em, code:cd})
+      .then(function(){
+        localStorage.setItem("otp_verified","1");
+        showPwd(); $("btnLogin").disabled=false; $("uName").focus();
+      }).catch(e=>toast(e.message));
   }
+  function doLogin(){
+    var u = $("uName").value.trim(), p = $("uPass").value;
+    if(!u || !p){ toast("missing credentials"); return; }
+    if(localStorage.getItem("otp_verified")!=="1"){ toast("Please verify OTP first"); return; }
+    http("/login","POST",{username:u,password:p})
+      .then(function(res){
+        localStorage.setItem("jwt", res.token);
+        localStorage.setItem("role", res.role);
+        localStorage.setItem("user", JSON.stringify(res.user));
+        $("authModal").style.display="none";
+        renderUser(); refresh();
+      }).catch(e=>toast(e.message));
+  }
+  $("uPass").addEventListener("keydown", function(e){ if(e.key==="Enter"){ doLogin(); } });
 
-  // After login, the dashboard loads
   function renderUser(){
-    const u = localStorage.getItem("user");
-    if(!u){ $("userBadge").style.display="none"; return; }
-    const o = JSON.parse(u);
-    $("userBadge").textContent = (o.name||o.username||"")+" • "+(o.role||"");
-    $("userBadge").style.display = "inline-block";
+    var uStr = localStorage.getItem("user");
+    var authed = !!localStorage.getItem("jwt");
+    if(uStr && authed){
+      var o=JSON.parse(uStr);
+      $("userBadge").textContent=(o.name||o.username||"")+" • "+(o.role||"");
+      $("userBadge").style.display="inline-block";
+      $("btnLoginTop").style.display="none";
+      $("btnSignout").style.display="inline-block";
+      $("btnRefresh").style.display="inline-block";
+    }else{
+      $("userBadge").style.display="none";
+      $("btnLoginTop").style.display="inline-block";
+      $("btnSignout").style.display="none";
+      $("btnRefresh").style.display="none";
+    }
   }
 
   function refresh(){
-    const jwt = localStorage.getItem("jwt");
-    if(!jwt){ showAuthed(false); return; }
-    http("/instances","GET",null,jwt).then(data=>{
-      showAuthed(true);
+    var jwt = localStorage.getItem("jwt");
+    if(!jwt){ $("authModal").style.display="flex"; showOtp(); renderUser(); return; }
+    http("/instances","GET",null,jwt).then(function(data){
       $("tTotal").textContent="Total: "+data.summary.total;
       $("tRun").textContent="Running: "+data.summary.running;
       $("tStop").textContent="Stopped: "+data.summary.stopped;
-      renderTabs(data.envs);
       renderUser();
-    }).catch(()=> showAuthed(false));
+      renderTabs(data.envs);
+    }).catch(function(e){
+      $("authModal").style.display="flex"; showOtp();
+      toast(e.message || "auth required");
+    });
   }
 
   function renderTabs(envs){
-    const tabs=$("envTabs"); tabs.innerHTML="";
+    var tabs=$("envTabs"); tabs.innerHTML="";
     ENV_NAMES.forEach(function(e,i){
-      const b=document.createElement("div"); b.className="tab"; b.textContent=e;
+      var b=document.createElement("div"); b.className="tab"; b.textContent=e;
       b.onclick=function(){ drawEnv(envs[e]||{DM:[],EA:[]}); setActive(i); };
       tabs.appendChild(b);
     });
@@ -158,75 +201,101 @@
   }
 
   function drawEnv(env){
-    const mount=$("envMount"); mount.innerHTML="";
-    ["Dream Mapper","Encore Anywhere"].forEach(function(section, si){
-      const box=document.createElement("div"); box.className="box";
-      const head=document.createElement("div"); head.textContent=section; head.style.fontWeight="700"; head.style.marginBottom="8px"; box.appendChild(head);
-      const list= si===0 ? (env.DM||[]) : (env.EA||[]);
-      const wrap=document.createElement("div"); wrap.className="stack";
+    var mount=$("envMount"); mount.innerHTML="";
+    var role=(localStorage.getItem("role")||"read").toLowerCase();
+
+    [["Dream Mapper","DM"],["Encore Anywhere","EA"]].forEach(function(def){
+      var title=def[0], key=def[1];
+      var list = env[key] || [];
+      var box=document.createElement("div"); box.className="box";
+
+      var head=document.createElement("div");
+      head.style.display="flex"; head.style.alignItems="center"; head.style.gap="8px"; head.style.marginBottom="8px";
+      var lbl=document.createElement("div"); lbl.textContent=title; lbl.style.fontWeight="700";
+      head.appendChild(lbl);
+      var spacer=document.createElement("div"); spacer.className="right"; head.appendChild(spacer);
+
+      // Start All / Stop All (admin only)
+      var bStartAll=btn("Start all","ok",function(){ bulk(list,"start"); });
+      var bStopAll =btn("Stop all","bad",function(){ bulk(list,"stop"); });
+      if(role!=="admin"){ bStartAll.disabled=true; bStopAll.disabled=true; }
+      head.appendChild(bStartAll); head.appendChild(bStopAll);
+
+      box.appendChild(head);
+
+      var wrap=document.createElement("div"); wrap.className="stack";
       list.forEach(function(it){
-        const line=document.createElement("div"); line.className="rowline";
-        const left=document.createElement("div"); left.innerHTML="<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
+        var line=document.createElement("div"); line.className="rowline";
+        var left=document.createElement("div"); left.innerHTML="<b>"+it.name+"</b> <span class='mut'>("+it.id+")</span>";
         line.appendChild(left);
-        const state=document.createElement("div"); state.className="state"; state.textContent=it.state||""; line.appendChild(state);
-        const start=btn("Start","ok",function(){ act(it.id,"start"); });
-        const stop=btn("Stop","bad",function(){ act(it.id,"stop"); });
+        var state=document.createElement("div"); state.className="state"; state.textContent=it.state||""; line.appendChild(state);
+        var start=btn("Start","ok",function(){ act(it.id,"start"); });
+        var stop=btn("Stop","bad",function(){ act(it.id,"stop"); });
         if((it.state||"").toLowerCase()==="running"){ start.disabled=true; } else { stop.disabled=true; }
+        if(role!=="admin"){ start.disabled=true; stop.disabled=true; }
         line.appendChild(start); line.appendChild(stop);
         line.appendChild(btn("Services","",function(){ openSvc(it); }));
         wrap.appendChild(line);
       });
-      box.appendChild(wrap); mount.appendChild(box);
+      box.appendChild(wrap);
+      mount.appendChild(box);
     });
   }
-  function btn(t, css, fn){ const b=document.createElement("button"); b.textContent=t; b.className="btn small "+css; b.onclick=fn; return b; }
-  function act(id,what){ http("/instance-action","POST",{id, action:what}, localStorage.getItem("jwt")).then(()=>setTimeout(refresh,1200)).catch(()=>alert("action failed")); }
+  function btn(tone, css, fn){ var b=document.createElement("button"); b.textContent=tone; b.className="btn small "+css; b.onclick=fn; return b; }
+  function act(id,what){
+    http("/instance-action","POST",{id:id, action:what}, localStorage.getItem("jwt"))
+      .then(()=>setTimeout(refresh,1500))
+      .catch(e=>toast(e.message || "action failed"));
+  }
+  function bulk(list, action){
+    var jwt=localStorage.getItem("jwt");
+    Promise.all(list.map(function(it){
+      return http("/instance-action","POST",{id:it.id, action:action}, jwt).catch(function(){});
+    })).then(function(){ setTimeout(refresh,1800); });
+  }
 
-  // Services
+  // ------- Services modal -------
   var svcCtx={id:"",name:"",type:"svcweb"};
   function openSvc(it){
     svcCtx.id=it.id; svcCtx.name=it.name||"";
-    svcCtx.type = (svcCtx.name.toLowerCase().indexOf("sql")>=0 ? "sql" : "svcweb");
+    svcCtx.type = (svcCtx.name.toLowerCase().indexOf("sql")>=0) ? "sql" : "svcweb";
     $("svcTitle").textContent="Services on "+svcCtx.name;
-    const isSql = svcCtx.type==="sql";
-    $("svcFilter").style.display = isSql ? "none" : "inline-block";
-    $("btnRefresh").style.display = isSql ? "none" : "inline-block";
-    $("btnIIS").style.display     = isSql ? "none" : "inline-block";
-    $("svcHint").textContent = isSql ? "Showing SQL Server & SQL Agent services." : "Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh.";
+    if(svcCtx.type==="sql"){ $("svcFilter").style.display="none"; $("btnSvcRefresh").style.display="none"; $("btnIIS").style.display="none"; $("svcHint").textContent="Showing SQL Server & SQL Agent services."; }
+    else{ $("svcFilter").style.display="inline-block"; $("btnSvcRefresh").style.display="inline-block"; $("btnIIS").style.display="inline-block"; $("svcHint").textContent="Type a fragment (e.g. 'w3svc', 'app', 'redis') and press Refresh."; }
     $("svcBody").innerHTML=""; $("svcModal").style.display="flex"; svcRefresh();
   }
   function closeSvc(){ $("svcModal").style.display="none"; }
   function svcRefresh(){
-    const body={id:svcCtx.id, mode:"list", instanceName:svcCtx.name};
-    if(svcCtx.type!=="sql") body.pattern=$("svcFilter").value.trim();
+    var body={id:svcCtx.id, mode:"list", instanceName:svcCtx.name}; if(svcCtx.type!=="sql") body.pattern=$("svcFilter").value.trim();
     http("/services","POST", body, localStorage.getItem("jwt")).then(function(res){
-      const mount=$("svcBody"); mount.innerHTML="";
+      var mount=$("svcBody"); mount.innerHTML="";
       if(res.error){
-        let tip=""; if(res.error==="not_connected") tip="SSM target not connected (agent/profile/connectivity).";
-        else if(res.error==="denied") tip="SSM access denied. Check Lambda role and instance profile permissions.";
-        const d=document.createElement("div"); d.className="error"; d.textContent="SSM error: "+res.error+(res.reason? " ("+res.reason+")":"")+". "+tip; mount.appendChild(d); return;
+        var tip=""; if(res.error==="not_connected") tip="SSM target not connected."; else if(res.error==="denied") tip="SSM access denied."; else if(res.reason) tip=res.reason;
+        var d=document.createElement("div"); d.className="error"; d.textContent="SSM error: "+res.error+(tip? " ("+tip+")":""); mount.appendChild(d); return;
       }
-      const svcs=res.services||[]; if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){ const d2=document.createElement("div"); d2.className="mut"; d2.textContent="Enter text to filter services."; mount.appendChild(d2); return; }
-      const g=document.createElement("div"); g.style.display="grid"; g.style.gridTemplateColumns="1fr 1fr 70px 70px"; g.style.gap="10px";
-      const role=(localStorage.getItem("role")||"read").toLowerCase();
-      svcs.forEach(function(s){
-        const n=document.createElement("div"); n.textContent=s.Name||"";
-        const d=document.createElement("div"); d.textContent=s.DisplayName||"";
-        const st=(s.Status||"").toString().toLowerCase();
-        const b1=btn("Start","ok",()=>svcAction("start",s.Name));
-        const b2=btn("Stop","bad",()=>svcAction("stop",s.Name));
-        if(role!=="admin"){ b1.disabled=true; b2.disabled=true; }
-        if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
+      var svcs=res.services||[]; if(svcCtx.type!=="sql" && !$("svcFilter").value.trim()){ var d2=document.createElement("div"); d2.className="mut"; d2.textContent="Enter text to filter services."; mount.appendChild(d2); return; }
+      var g=document.createElement("div"); g.className="grid"; var role=(localStorage.getItem("role")||"read").toLowerCase();
+      for(var i=0;i<svcs.length;i++){ var s=svcs[i];
+        var n=document.createElement("div"); n.textContent=s.Name||""; var d=document.createElement("div"); d.textContent=s.DisplayName||""; var st=(s.Status||"").toString().toLowerCase();
+        var b1=btn("Start","ok",(function(name){return function(){svcAction("start",name);};})(s.Name));
+        var b2=btn("Stop","bad",(function(name){return function(){svcAction("stop",name);};})(s.Name));
+        if(role!=="admin"){ b1.disabled=true; b2.disabled=true; } if(st==="running"){ b1.disabled=true; } else if(st==="stopped"){ b2.disabled=true; }
         g.appendChild(n); g.appendChild(d); g.appendChild(b1); g.appendChild(b2);
-      });
-      mount.appendChild(g);
-    }).catch(()=>alert("internal"));
+      } mount.appendChild(g);
+    }).catch(function(e){ toast(e.message || "internal"); });
   }
-  function svcAction(what,name){ http("/services","POST",{id:svcCtx.id,mode:what,service:name}, localStorage.getItem("jwt")).then(()=>svcRefresh()).catch(()=>alert("service action failed")); }
-  function svcIISReset(){ http("/services","POST",{id:svcCtx.id,mode:"iisreset"}, localStorage.getItem("jwt")).then(()=>{alert("IIS reset sent"); svcRefresh();}).catch(()=>alert("failed")); }
+  function svcAction(what,name){
+    http("/services","POST",{id:svcCtx.id,mode:what,service:name}, localStorage.getItem("jwt"))
+      .then(()=>svcRefresh())
+      .catch(e=>toast(e.message || "service action failed"));
+  }
+  function svcIISReset(){
+    http("/services","POST",{id:svcCtx.id,mode:"iisreset"}, localStorage.getItem("jwt"))
+      .then(()=>{toast("IIS reset sent"); svcRefresh();})
+      .catch(e=>toast(e.message || "failed"));
+  }
 
-  // Init: show OTP screen (authed UI hidden until refresh() succeeds)
-  refresh();
+  (function init(){ renderUser(); $("authModal").style.display="flex"; showOtp(); refresh(); })();
 </script>
 </body>
 </html>

@@ -1,5 +1,10 @@
-import os, json, time, uuid, base64, hmac, hashlib, boto3
+import os, json, time, uuid, base64, hmac, hashlib, logging
+import boto3
 from botocore.exceptions import ClientError
+
+# ---------- logging ----------
+log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 # ---------- JWT helpers ----------
 def _b64url(b: bytes) -> str:
@@ -12,45 +17,24 @@ def _jwt_for(username: str, role: str, ssm_client, jwt_param_name: str, ttl_seco
     secret  = ssm_client.get_parameter(Name=jwt_param_name, WithDecryption=True)["Parameter"]["Value"].encode()
     sig     = _b64url(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
     return f"{header}.{payload}.{sig}"
-# ----------------------------------
 
-REGION            = os.environ.get("REGION", "us-east-2")
-OTP_TABLE         = os.environ["OTP_TABLE"]
-SES_SENDER        = os.environ["SES_SENDER"]
-ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "example.com")
-PARAM_USER_PREFIX = os.environ["PARAM_USER_PREFIX"]   # e.g. /ec2-dashboard/users
-JWT_PARAM         = os.environ["JWT_PARAM"]
-ENV_NAMES         = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",") if e.strip()]
+REGION             = os.environ.get("REGION", "us-east-2")
+OTP_TABLE          = os.environ["OTP_TABLE"]
+SES_SENDER         = os.environ["SES_SENDER"]
+ALLOWED_DOMAIN     = os.environ.get("ALLOWED_DOMAIN", "example.com")
+PARAM_USER_PREFIX  = os.environ["PARAM_USER_PREFIX"]   # e.g. /ec2-dashboard/users
+JWT_PARAM          = os.environ["JWT_PARAM"]
+ENV_NAMES          = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",") if e.strip()]
 
-ddb   = boto3.resource("dynamodb", region_name=REGION)
-ses   = boto3.client("ses", region_name=REGION)
-ssm   = boto3.client("ssm", region_name=REGION)
-ec2   = boto3.client("ec2", region_name=REGION)
+ddb  = boto3.resource("dynamodb", region_name=REGION)
+ses  = boto3.client("ses", region_name=REGION)
+ssm  = boto3.client("ssm", region_name=REGION)      # SSM param + SSM Fleet APIs (describe, send, etc.)
+ec2  = boto3.client("ec2", region_name=REGION)
+
 table = ddb.Table(OTP_TABLE)
 
-def ok(body):
-    return {
-        "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "authorization,content-type",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        },
-        "body": json.dumps(body),
-    }
-
-def bad(code, msg):
-    return {
-        "statusCode": code,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "authorization,content-type",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        },
-        "body": json.dumps({"error": msg}),
-    }
+def ok(b):   return {"statusCode":200,"headers":{"content-type":"application/json"},"body":json.dumps(b)}
+def bad(c,m): return {"statusCode":c,"headers":{"content-type":"application/json"},"body":json.dumps({"error":m})}
 
 # ---------- OTP ----------
 def request_otp(data):
@@ -79,46 +63,57 @@ def verify_otp(data):
 # ---------- Users from SSM ----------
 def _read_user(username: str):
     """
-    Supports BOTH:
-      - 'password|role'
-      - 'password,role[,email[,name]]'
-    Returns dict: {password, role, email, name}
+    Read /<prefix>/<username> from SSM.
+    Accepts either 'password|role'   or 'password,role[,email[,name]]'
     """
     p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
     val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"].strip()
-
-    email = ""
-    name  = username
-
     if "|" in val:
         parts = val.split("|", 1)
-        pwd  = (parts[0] if len(parts)>0 else "").strip()
-        role = (parts[1] if len(parts)>1 else "read").strip().lower()
+        pwd   = parts[0]
+        role  = (parts[1] if len(parts)>1 else "read").strip().lower()
+        name  = username
+        email = ""
     else:
-        parts = [x.strip() for x in val.split(",")]
-        pwd  = parts[0] if len(parts)>0 else ""
-        role = (parts[1] if len(parts)>1 else "read")
-        email = parts[2] if len(parts)>2 else ""
-        name  = parts[3] if len(parts)>3 else username
-        role  = (role or "read").strip().lower()
-
-    role = role or "read"
-    return {"password": pwd, "role": role, "email": email, "name": name}
+        fields = [x.strip() for x in val.split(",")]
+        pwd   = fields[0]
+        role  = (fields[1].lower() if len(fields)>1 and fields[1] else "read")
+        email = fields[2] if len(fields)>2 else ""
+        name  = fields[3] if len(fields)>3 else username
+    return {"password": pwd, "role": role, "name": name, "email": email}
 
 def login(data):
     u = (data.get("username") or "").strip()
     p = (data.get("password") or "")
-    if not u or not p:
-        return bad(400, "missing_credentials")
+    if not u or not p: return bad(400, "missing_credentials")
+
     try:
         user = _read_user(u)
-    except Exception:
+    except Exception as e:
+        log.exception("read_user failed")
         return bad(401, "invalid_user")
+
     if user.get("password") != p:
         return bad(401, "invalid_password")
-    role  = user.get("role") or "read"
+
+    role = user.get("role") or "read"
     token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
-    return ok({"token":token, "role":role, "user":{"username":u, "role":role, "name":user.get("name") or u, "email":user.get("email","")}})
+
+    body = {
+        "token": token,
+        "role": role,
+        "user": {"username": u, "role": role, "name": user.get("name") or u}
+    }
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "authorization,content-type",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        },
+        "body": json.dumps(body),
+    }
 
 # ---------- Auth helper ----------
 def _auth(event):
@@ -147,6 +142,23 @@ def instances(event, _):
             summary["running"]+= (state=="running")
             summary["stopped"]+= (state=="stopped")
     return ok({"summary":summary,"envs":envs})
+
+# ---------- EC2 actions ----------
+def instance_action(event, _):
+    body=json.loads(event.get("body") or "{}")
+    iid=body.get("id"); action=(body.get("action") or "").lower()
+    if not iid or action not in ("start","stop"):
+        return bad(400,"bad_request")
+    try:
+        if action=="start":
+            ec2.start_instances(InstanceIds=[iid])
+        else:
+            ec2.stop_instances(InstanceIds=[iid])
+        return ok({"ok":True})
+    except ClientError as e:
+        code=e.response["Error"]["Code"]
+        log.exception("EC2 action failed")
+        return ok({"error":"ec2_"+code, "reason": e.response["Error"].get("Message","")})
 
 # ---------- SSM helpers ----------
 def ssm_online(instance_id):
@@ -178,7 +190,7 @@ if ($Mode -eq "stop")  { Stop-Service -Name $Name -Force -ErrorAction SilentlyCo
 $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
 if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,DisplayName,Status | ConvertTo-Json }
 """
-POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{\"ok\":true}'"
+POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
 
 def _run_ps(instance_id, script, timeout=30):
     try:
@@ -189,12 +201,16 @@ def _run_ps(instance_id, script, timeout=30):
         )
     except ClientError as e:
         code=e.response["Error"]["Code"]
-        if code in ("AccessDenied","AccessDeniedException"): return None,"denied"
-        return None,"send_failed"
+        return None, ("denied" if code in ("AccessDenied","AccessDeniedException") else "send_failed")
+
     cmd_id=send["Command"]["CommandId"]
     t0=time.time()
     while time.time()-t0<timeout:
-        r=ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        try:
+            r=ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        except ClientError as e:
+            # small grace for propagation
+            time.sleep(1); continue
         st=r["Status"]
         if st=="Success": return (r.get("StandardOutputContent","").strip() or "[]"), None
         if st in ("Cancelled","TimedOut","Failed"): return None, "invocation_"+st.lower()
@@ -202,43 +218,54 @@ def _run_ps(instance_id, script, timeout=30):
     return None,"timeout"
 
 def services(event,_):
-    body=json.loads(event.get("body") or "{}")
-    iid=body.get("id"); mode=body.get("mode","list")
-    iname=(body.get("instanceName") or "").lower()
-    if not iid: return ok({"error":"bad_request"})
-    online, reason = ssm_online(iid)
-    if not online:
-        return ok({"error":"denied" if reason=="denied" else "not_connected","reason":reason})
-    if mode=="list":
-        if "sql" in iname:
-            out, err = _run_ps(iid, POWERSHELL_LIST_SQL)
-        else:
-            pat = body.get("pattern","")
-            scr = f'param([string]$Pattern="{pat}");'+POWERSHELL_LIST_GENERIC.split("\n",1)[1]
-            out, err = _run_ps(iid, scr)
-        if err: return ok({"error":err})
-        try: svcs=json.loads(out or "[]")
-        except Exception: svcs=[]
-        return ok({"services":svcs})
-    if mode in ("start","stop"):
-        name=body.get("service"); 
-        if not name: return ok({"error":"bad_request"})
-        script = POWERSHELL_SVC.replace('$Mode', f'"{mode}"').replace('$Name', f'"{name}"')
-        out, err = _run_ps(iid, script)
-        if err: return ok({"error":err})
-        try: svc=json.loads(out or "{}")
-        except Exception: svc={}
-        return ok({"service":svc})
-    if mode=="iisreset":
-        out, err=_run_ps(iid, POWERSHELL_IISRESET)
-        if err: return ok({"error":err})
-        return ok({"ok":True})
-    return ok({"error":"bad_request"})
+    try:
+        body=json.loads(event.get("body") or "{}")
+        iid=body.get("id"); mode=(body.get("mode") or "list").lower()
+        iname=(body.get("instanceName") or "").lower()
+        if not iid: return ok({"error":"bad_request"})
 
+        online, reason = ssm_online(iid)
+        if not online:
+            return ok({"error":"denied" if reason=="denied" else "not_connected","reason":reason})
+
+        if mode=="list":
+            if "sql" in iname:
+                out, err = _run_ps(iid, POWERSHELL_LIST_SQL)
+            else:
+                pat = body.get("pattern","").replace('"','')
+                scr = f'param([string]$Pattern="{pat}");'+POWERSHELL_LIST_GENERIC.split("\n",1)[1]
+                out, err = _run_ps(iid, scr)
+            if err: return ok({"error":err})
+            try: svcs=json.loads(out or "[]")
+            except Exception:
+                svcs=[]
+            return ok({"services":svcs})
+
+        if mode in ("start","stop"):
+            name=body.get("service")
+            if not name: return ok({"error":"bad_request"})
+            script = POWERSHELL_SVC.replace('$Mode', f'"{mode}"').replace('$Name', f'"{name}"')
+            out, err = _run_ps(iid, script)
+            if err: return ok({"error":err})
+            try: svc=json.loads(out or "{}")
+            except Exception: svc={}
+            return ok({"service":svc})
+
+        if mode=="iisreset":
+            out, err=_run_ps(iid, POWERSHELL_IISRESET)
+            if err: return ok({"error":err})
+            return ok({"ok":True})
+
+        return ok({"error":"bad_request"})
+    except Exception as ex:
+        log.exception("services handler failed")
+        return ok({"error":"exception","reason":str(ex)})
+
+# ---------- Router ----------
 def lambda_handler(event, ctx):
     # Basic CORS preflight for HTTP API
     method = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
-    path   = (event.get("rawPath") or event.get("path") or "").lower()
+    path = (event.get("rawPath") or event.get("path") or "").lower()
 
     if method == "OPTIONS":
         return ok({"ok": True})
@@ -251,7 +278,7 @@ def lambda_handler(event, ctx):
     except Exception: return bad(401,"unauthorized")
 
     if path.endswith("/instances")        and method=="GET":  return instances(event, ctx)
-    if path.endswith("/instance-action")  and method=="POST": return instances(event, ctx)  # compatibility alias
+    if path.endswith("/instance-action")  and method=="POST": return instance_action(event, ctx)
     if path.endswith("/services")         and method=="POST": return services(event, ctx)
 
     return bad(404,"not_found")
