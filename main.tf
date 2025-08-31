@@ -1,11 +1,13 @@
 #############################################
 # EC2 Dashboard – main.tf
+# - Publishes index.html (templated), login.html, login.js to S3 on every apply
+# - Exposes outputs for CloudFront invalidation
 #############################################
 
 locals {
   name_prefix = "${var.project_name}-${random_id.suffix.hex}"
 
-  # Flexible match for Name tag
+  # Match instances by Name tag (case-flexible)
   env_filters = flatten([
     for e in var.env_names : [
       "*${e}*",
@@ -153,7 +155,7 @@ resource "aws_lambda_function" "api" {
       ALLOWED_DOMAIN    = var.allowed_email_domain
       PARAM_USER_PREFIX = "/${var.project_name}/users"
       JWT_PARAM         = "/${var.project_name}/jwt_secret"
-      ENV_NAMES         = join(",", var.env_names)    # backend uses this
+      ENV_NAMES         = join(",", var.env_names)
     }
   }
 }
@@ -276,10 +278,7 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
+  rule { object_ownership = "BucketOwnerEnforced" }
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -316,21 +315,19 @@ resource "aws_cloudfront_distribution" "site" {
 
     forwarded_values {
       query_string = true
-      cookies {
-        forward = "none"
-      }
+      cookies { forward = "none" }
     }
+    # honor object cache headers
+    min_ttl     = 0
+    default_ttl = 0
+    max_ttl     = 31536000
   }
 
   restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
+    geo_restriction { restriction_type = "none" }
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
+  viewer_certificate { cloudfront_default_certificate = true }
 }
 
 data "aws_iam_policy_document" "site_bucket" {
@@ -358,35 +355,38 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# Rendered index (no-cache so updates show immediately)
+# Upload rendered index.html (template)
 resource "aws_s3_object" "index" {
-  bucket        = aws_s3_bucket.website.id
-  key           = "index.html"
-  content_type  = "text/html"
-  cache_control = "no-store, no-cache, must-revalidate, max-age=0"
-
+  bucket         = aws_s3_bucket.website.id
+  key            = "index.html"
+  content_type   = "text/html"
+  cache_control  = "no-store, no-cache, must-revalidate, max-age=0"
   content = templatefile("${path.module}/html/index.html.tpl", {
     api_base_url         = aws_apigatewayv2_api.api.api_endpoint
     allowed_email_domain = var.allowed_email_domain
-    env_names            = join(",", var.env_names)   # frontend uses .split(",")
+    env_names            = join(",", var.env_names)
   })
 }
 
-# Also upload login assets (no cache)
+# Upload static login assets (re-upload whenever file content changes)
 resource "aws_s3_object" "login_html" {
-  bucket        = aws_s3_bucket.website.bucket
+  bucket        = aws_s3_bucket.website.id
   key           = "login.html"
   source        = "${path.module}/html/login.html"
   content_type  = "text/html"
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+
+  # etag forces Terraform to detect changes and update object each apply when file content changes
+  etag = filemd5("${path.module}/html/login.html")
 }
 
 resource "aws_s3_object" "login_js" {
-  bucket        = aws_s3_bucket.website.bucket
+  bucket        = aws_s3_bucket.website.id
   key           = "login.js"
   source        = "${path.module}/html/login.js"
   content_type  = "application/javascript"
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+  etag          = filemd5("${path.module}/html/login.js")
 }
 
 # ============================================================
@@ -450,6 +450,7 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
+# Idempotent attach via AWS CLI (run locally on the runner)
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
@@ -500,4 +501,37 @@ aws ec2 associate-iam-instance-profile --iam-instance-profile Name="$PROFILE" --
 echo "Done."
 EOF
   }
+}
+
+# ---------- Outputs ----------
+output "api_base_url" {
+  value = aws_apigatewayv2_api.api.api_endpoint
+}
+
+output "api_endpoint" {
+  value = aws_apigatewayv2_api.api.api_endpoint
+}
+
+output "cloudfront_domain" {
+  value = aws_cloudfront_distribution.site.domain_name
+}
+
+output "cloudfront_id" {
+  value = aws_cloudfront_distribution.site.id
+}
+
+output "site_bucket" {
+  value = aws_s3_bucket.website.id
+}
+
+output "website_bucket" {
+  value = aws_s3_bucket.website.id
+}
+
+output "lambda_api_name" {
+  value = aws_lambda_function.api.function_name
+}
+
+output "lambda_authorizer_name" {
+  value = aws_lambda_function.authorizer.function_name
 }

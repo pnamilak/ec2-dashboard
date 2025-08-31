@@ -59,6 +59,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install AWS CLI v2
+        run: |
+          curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
+
       - name: Configure AWS creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -122,8 +129,33 @@ jobs:
           TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
           TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
-        run: terraform apply -auto-approve
+        run: |
+          terraform apply -auto-approve
 
+      - name: Export outputs (apply)
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
+        shell: bash
+        run: |
+          echo "SITE_BUCKET=$(terraform output -raw site_bucket)" >> "$GITHUB_ENV"
+          echo "CLOUDFRONT_ID=$(terraform output -raw cloudfront_id)" >> "$GITHUB_ENV"
+          echo "CF_DOMAIN=$(terraform output -raw cloudfront_domain)" >> "$GITHUB_ENV"
+          echo "API_BASE=$(terraform output -raw api_base_url)" >> "$GITHUB_ENV"
+          echo "Bucket: $SITE_BUCKET"
+          echo "CF ID : $CLOUDFRONT_ID"
+          echo "CF Domain: $CF_DOMAIN"
+
+      # No manual aws s3 cp needed; Terraform published index.html, login.html, login.js.
+
+      - name: CloudFront Invalidate (after apply)
+        if: ${{ github.event.inputs.ACTION == 'apply' }}
+        shell: bash
+        run: |
+          set -e
+          if [ -n "$CLOUDFRONT_ID" ] && [ "$CLOUDFRONT_ID" != "None" ]; then
+            aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_ID" --paths "/*"
+          else
+            echo "No CloudFront ID found to invalidate."
+          fi
 
       # ---------- DESTROY ----------
       - name: Try to empty website bucket (best-effort)
@@ -132,12 +164,12 @@ jobs:
         continue-on-error: true
         run: |
           set -e
-          BUCKET=$(terraform output -raw site_bucket 2>/dev/null || true)
+          BUCKET=$(terraform output -raw website_bucket 2>/dev/null || true)
           if [ -n "$BUCKET" ]; then
             echo "Attempting to empty s3://$BUCKET ..."
             aws s3 rm "s3://$BUCKET" --recursive || true
           else
-            echo "No site_bucket output (maybe never applied)."
+            echo "No website_bucket output (maybe never applied)."
           fi
 
       - name: Terraform Destroy
@@ -149,7 +181,8 @@ jobs:
           TF_VAR_ses_sender_email: ${{ env.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ env.WEBSITE_BUCKET_NAME }}
           TF_VAR_assign_profile_target: ${{ env.ATTACH_SSM_PROFILE }}
-        run: terraform destroy -auto-approve
+        run: |
+          terraform destroy -auto-approve
 
       - name: Post-destroy note
         if: ${{ github.event.inputs.ACTION == 'destroy' }}
