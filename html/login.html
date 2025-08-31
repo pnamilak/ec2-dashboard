@@ -1,72 +1,33 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Sign in • EC2 Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a}
-    body{margin:0;background:radial-gradient(1000px 600px at 70% -200px,#22304e 5%,#0e1624 55%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
-    .wrap{max-width:520px;margin:80px auto;padding:0 16px}
-    .card{background:rgba(18,27,43,.96);border-radius:16px;padding:24px;box-shadow:0 8px 60px rgba(0,0,0,.4)}
-    .title{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px}
-    .dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#9ef 0%,#9fb 100%)}
-    label{font-size:12px;color:#bcd}
-    input{width:100%;margin-top:6px;margin-bottom:14px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
-    .btn{width:100%;padding:10px;border-radius:12px;background:linear-gradient(90deg,#7bb9ff,#8cf3c7);border:0;color:#082035;font-weight:700;cursor:pointer}
-    .mut{color:#9aa4b2;font-size:12px;margin-top:8px}
-    .err{color:#ffaaaa;font-size:12px;margin-top:8px;min-height:16px}
-    a{color:#a8e0ff}
-  </style>
+<meta charset="utf-8">
+<title>Sign in • EC2 Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{--bg:#0e1624;--panel:#111a2b;--ink:#e7ecf3;--mut:#9aa7b8;--ok:#2ea36d;--grad:linear-gradient(90deg,#74b0ff,#7bf1c3)}
+  body{margin:0;background:radial-gradient(1000px 600px at 80% -100px,#1a2742 0%,#0e1624 60%) no-repeat,var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+  .card{max-width:520px;margin:64px auto;background:var(--panel);border-radius:16px;padding:20px 20px 16px;box-shadow:0 0 0 1px #1c2840 inset}
+  h2{margin:0 0 12px 0}
+  .mut{color:var(--mut);font-size:12px}
+  label{display:block;margin:12px 0 6px 2px;font-size:13px;color:#cfe1ff}
+  input{width:100%;padding:10px 12px;border-radius:12px;border:1px solid #243355;background:#0f1a2e;color:var(--ink)}
+  button{width:100%;padding:10px 12px;margin-top:14px;border-radius:12px;border:0;color:#05203a;background:var(--grad);cursor:pointer;font-weight:700}
+  #msg{margin-top:10px;color:#ff9aa0;font-size:12px;min-height:16px}
+</style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <div class="title"><div class="dot"></div> Complete your sign-in</div>
-      <div class="mut" style="margin:6px 0 14px 0">Enter your EC2 Dashboard credentials</div>
-
-      <label>Username</label>
-      <input id="u" autocomplete="username" required>
-
-      <label>Password</label>
-      <input id="p" type="password" autocomplete="current-password" required>
-
-      <button class="btn" id="go">Sign in</button>
-      <div class="err" id="msg"></div>
-
-      <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="./">go back</a>.</div>
-    </div>
+  <div class="card">
+    <h2>Complete your sign-in</h2>
+    <div class="mut" style="margin-bottom:12px">Enter your EC2 Dashboard credentials</div>
+    <label>Username</label>
+    <input id="u" autocomplete="username">
+    <label>Password</label>
+    <input id="p" type="password" autocomplete="current-password">
+    <button onclick="doLogin()">Sign in</button>
+    <div id="msg"></div>
+    <div class="mut" style="margin-top:10px">You’ve just verified your email OTP. If this page appeared without OTP, <a href="/" style="color:#9bdcff">go back</a>.</div>
   </div>
-
-<script>
-  var API = (localStorage.getItem("api_base_url") || "${api_base_url}");
-
-  function http(path, method, obj){
-    return fetch(API + path, {method:method, headers:{"content-type":"application/json"}, body: JSON.stringify(obj||{})})
-      .then(async r=>{ const t=await r.text(); let d={}; try{d=t?JSON.parse(t):{};}catch(e){d={raw:t};}
-        if(!r.ok) throw new Error((d&&d.error)||t||("http "+r.status)); return d; });
-  }
-  function $(id){ return document.getElementById(id); }
-
-  function requireFreshOVT(){
-    var ovt = localStorage.getItem("ovt")||"";
-    var exp = parseInt(localStorage.getItem("ovt_exp")||"0",10);
-    if(!ovt || !exp || Date.now()>exp){ window.location.href="./"; }
-  }
-  requireFreshOVT();
-
-  $("go").onclick = function(){
-    var u=$("u").value.trim(), p=$("p").value;
-    var ovt = localStorage.getItem("ovt")||"";
-    $("msg").textContent="";
-    http("/login","POST",{username:u,password:p,ovt:ovt}).then(function(res){
-      localStorage.removeItem("ovt"); localStorage.removeItem("ovt_exp");
-      localStorage.setItem("jwt", res.token);
-      localStorage.setItem("role", res.role);
-      localStorage.setItem("user", JSON.stringify(res.user));
-      window.location.href = "./";
-    }).catch(function(e){ $("msg").textContent=e.message; });
-  };
-</script>
+<script src="/login.js"></script>
 </body>
 </html>
