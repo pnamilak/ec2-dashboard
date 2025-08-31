@@ -1,56 +1,72 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EC2 Dashboard — Secure Sign-in</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <meta charset="utf-8">
+  <title>Sign in • EC2 Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root { --bg:#0b1020; --card:#121a35; --muted:#8fa1c9; --accent:#6ea8fe; --accent2:#9bffd6; --error:#ff6b6b; }
-    *{box-sizing:border-box}
-    html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 80% -10%, #1b2a5b 0%, transparent 60%), #0b1020;color:#e9f0ff;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
-    .wrap{min-height:100%;display:grid;place-items:center;padding:24px}
-    .card{width:100%;max-width:460px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:28px}
-    .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
-    .logo{width:36px;height:36px;border-radius:9px;background:conic-gradient(from 180deg,#6ea8fe,#9bffd6,#6ea8fe)}
-    h1{margin:0;font-size:22px;font-weight:700}
-    p.sub{margin:6px 0 22px;color:var(--muted);font-size:13px}
-    label{font-size:13px;color:#cfe0ff;display:block;margin-bottom:8px}
-    .field{background:#0f1630;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px 14px;margin-bottom:14px}
-    .field input{width:100%;background:transparent;border:0;outline:0;color:#e9f0ff;font-size:14px}
-    .hint{color:var(--muted);font-size:12px;margin:-6px 0 16px}
-    .btn{width:100%;padding:12px 16px;font-weight:600;font-size:14px;border-radius:12px;border:0;cursor:pointer;background:linear-gradient(90deg,var(--accent),var(--accent2));color:#0b1020}
-    .err{color:var(--error);font-size:13px;margin:10px 0 0;min-height:18px;white-space:pre-wrap}
-    .footer{margin-top:16px;text-align:center;color:var(--muted);font-size:12px}
+    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a}
+    body{margin:0;background:radial-gradient(1000px 600px at 70% -200px,#22304e 5%,#0e1624 55%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+    .wrap{max-width:520px;margin:80px auto;padding:0 16px}
+    .card{background:rgba(18,27,43,.96);border-radius:16px;padding:24px;box-shadow:0 8px 60px rgba(0,0,0,.4)}
+    .title{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px}
+    .dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#9ef 0%,#9fb 100%)}
+    label{font-size:12px;color:#bcd}
+    input{width:100%;margin-top:6px;margin-bottom:14px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
+    .btn{width:100%;padding:10px;border-radius:12px;background:linear-gradient(90deg,#7bb9ff,#8cf3c7);border:0;color:#082035;font-weight:700;cursor:pointer}
+    .mut{color:#9aa4b2;font-size:12px;margin-top:8px}
+    .err{color:#ffaaaa;font-size:12px;margin-top:8px;min-height:16px}
+    a{color:#a8e0ff}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <div class="brand"><div class="logo" aria-hidden="true"></div><h1>Complete your sign-in</h1></div>
-      <p class="sub">Enter your EC2 Dashboard credentials</p>
+      <div class="title"><div class="dot"></div> Complete your sign-in</div>
+      <div class="mut" style="margin:6px 0 14px 0">Enter your EC2 Dashboard credentials</div>
 
-      <form id="login-form" autocomplete="off">
-        <label for="username">Username</label>
-        <div class="field"><input id="username" name="username" type="text" placeholder="e.g., demo" required></div>
+      <label>Username</label>
+      <input id="u" autocomplete="username" required>
 
-        <label for="password">Password</label>
-        <div class="field"><input id="password" name="password" type="password" placeholder="Your password" required></div>
+      <label>Password</label>
+      <input id="p" type="password" autocomplete="current-password" required>
 
-        <div class="hint" id="domain-hint"></div>
+      <button class="btn" id="go">Sign in</button>
+      <div class="err" id="msg"></div>
 
-        <button class="btn" type="submit">Sign in</button>
-        <div class="err" id="error"></div>
-      </form>
-
-      <div class="footer">
-        You’ve just verified your email OTP. If this page appeared without OTP, <a href="./" style="color:#9bffd6;text-underline-offset:3px;">go back</a>.
-      </div>
+      <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="./">go back</a>.</div>
     </div>
   </div>
 
-  <script src="./login.js"></script>
+<script>
+  var API = (localStorage.getItem("api_base_url") || "${api_base_url}");
+
+  function http(path, method, obj){
+    return fetch(API + path, {method:method, headers:{"content-type":"application/json"}, body: JSON.stringify(obj||{})})
+      .then(async r=>{ const t=await r.text(); let d={}; try{d=t?JSON.parse(t):{};}catch(e){d={raw:t};}
+        if(!r.ok) throw new Error((d&&d.error)||t||("http "+r.status)); return d; });
+  }
+  function $(id){ return document.getElementById(id); }
+
+  function requireFreshOVT(){
+    var ovt = localStorage.getItem("ovt")||"";
+    var exp = parseInt(localStorage.getItem("ovt_exp")||"0",10);
+    if(!ovt || !exp || Date.now()>exp){ window.location.href="./"; }
+  }
+  requireFreshOVT();
+
+  $("go").onclick = function(){
+    var u=$("u").value.trim(), p=$("p").value;
+    var ovt = localStorage.getItem("ovt")||"";
+    $("msg").textContent="";
+    http("/login","POST",{username:u,password:p,ovt:ovt}).then(function(res){
+      localStorage.removeItem("ovt"); localStorage.removeItem("ovt_exp");
+      localStorage.setItem("jwt", res.token);
+      localStorage.setItem("role", res.role);
+      localStorage.setItem("user", JSON.stringify(res.user));
+      window.location.href = "./";
+    }).catch(function(e){ $("msg").textContent=e.message; });
+  };
+</script>
 </body>
 </html>
