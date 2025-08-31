@@ -1,5 +1,3 @@
-# NOTE: backend/provider live in backend.tf
-
 #############################################
 # EC2 Dashboard – main.tf
 #############################################
@@ -7,7 +5,7 @@
 locals {
   name_prefix = "${var.project_name}-${random_id.suffix.hex}"
 
-  # Match instances by Name tag (case-flexible)
+  # Flexible match for Name tag
   env_filters = flatten([
     for e in var.env_names : [
       "*${e}*",
@@ -15,13 +13,6 @@ locals {
       "*${upper(e)}*"
     ]
   ])
-
-  # Render index.html once so we can md5 it for etag
-  index_html_rendered = templatefile("${path.module}/html/index.html.tpl", {
-    api_base_url         = aws_apigatewayv2_api.api.api_endpoint
-    allowed_email_domain = var.allowed_email_domain
-    env_names            = join(",", var.env_names)
-  })
 }
 
 resource "random_id" "suffix" {
@@ -154,8 +145,6 @@ resource "aws_lambda_function" "api" {
   runtime       = "python3.12"
   timeout       = 30
 
-  source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
-
   environment {
     variables = {
       REGION            = var.aws_region
@@ -164,7 +153,7 @@ resource "aws_lambda_function" "api" {
       ALLOWED_DOMAIN    = var.allowed_email_domain
       PARAM_USER_PREFIX = "/${var.project_name}/users"
       JWT_PARAM         = "/${var.project_name}/jwt_secret"
-      ENV_NAMES         = join(",", var.env_names)
+      ENV_NAMES         = join(",", var.env_names)    # backend uses this
     }
   }
 }
@@ -176,8 +165,6 @@ resource "aws_lambda_function" "authorizer" {
   handler       = "authorizer.lambda_handler"
   runtime       = "python3.12"
   timeout       = 10
-
-  source_code_hash = filebase64sha256(data.archive_file.api_zip.output_path)
 
   environment {
     variables = {
@@ -289,7 +276,6 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
@@ -329,21 +315,15 @@ resource "aws_cloudfront_distribution" "site" {
 
     forwarded_values {
       query_string = true
-      cookies {
-        forward = "none"
-      }
+      cookies { forward = "none" }
     }
   }
 
   restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
+    geo_restriction { restriction_type = "none" }
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
+  viewer_certificate { cloudfront_default_certificate = true }
 }
 
 data "aws_iam_policy_document" "site_bucket" {
@@ -371,70 +351,35 @@ resource "aws_s3_bucket_policy" "site" {
   policy = data.aws_iam_policy_document.site_bucket.json
 }
 
-# --------- Site objects (with cache bust) ---------
-
-# index.html (rendered from template)
+# Rendered index (no-cache so updates show immediately)
 resource "aws_s3_object" "index" {
-  bucket       = aws_s3_bucket.website.id
-  key          = "index.html"
-  content_type = "text/html"
+  bucket        = aws_s3_bucket.website.id
+  key           = "index.html"
+  content_type  = "text/html"
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
 
   content = templatefile("${path.module}/html/index.html.tpl", {
     api_base_url         = aws_apigatewayv2_api.api.api_endpoint
     allowed_email_domain = var.allowed_email_domain
-    env_names            = jsonencode(var.env_names) # ← safer format for the template
+    env_names            = join(",", var.env_names)   # frontend uses .split(",")
   })
-
-  # Optional: force new ETag when template variables change
-  etag = md5(
-    templatefile("${path.module}/html/index.html.tpl", {
-      api_base_url         = aws_apigatewayv2_api.api.api_endpoint
-      allowed_email_domain = var.allowed_email_domain
-      env_names            = jsonencode(var.env_names)
-    })
-  )
 }
 
-
-# login.html – always push if file changes (etag = md5(file))
+# Also upload login assets (no cache)
 resource "aws_s3_object" "login_html" {
   bucket        = aws_s3_bucket.website.bucket
   key           = "login.html"
   source        = "${path.module}/html/login.html"
   content_type  = "text/html"
-  etag          = filemd5("${path.module}/html/login.html")
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
 }
 
-# login.js – always push if file changes (etag = md5(file))
 resource "aws_s3_object" "login_js" {
   bucket        = aws_s3_bucket.website.bucket
   key           = "login.js"
   source        = "${path.module}/html/login.js"
   content_type  = "application/javascript"
-  etag          = filemd5("${path.module}/html/login.js")
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
-}
-
-# ---------- CloudFront invalidation via local-exec ----------
-# Triggers whenever any site file changes.
-resource "null_resource" "cf_invalidation" {
-  triggers = {
-    distribution_id = aws_cloudfront_distribution.site.id
-    index_etag      = md5(local.index_html_rendered)
-    login_html_etag = filemd5("${path.module}/html/login.html")
-    login_js_etag   = filemd5("${path.module}/html/login.js")
-  }
-
-  provisioner "local-exec" {
-    interpreter = ["bash", "-lc"]
-    command = <<EOF
-aws cloudfront create-invalidation \
-  --distribution-id ${aws_cloudfront_distribution.site.id} \
-  --paths "/*"
-EOF
-  }
 }
 
 # ============================================================
@@ -443,10 +388,7 @@ EOF
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
+    principals { type = "Service", identifiers = ["ec2.amazonaws.com"] }
   }
 }
 
@@ -467,25 +409,13 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
 
 # Discover instances
 data "aws_instances" "targets_running" {
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name", values = ["running"] }
+  filter { name = "tag:Name", values = local.env_filters }
 }
 
 data "aws_instances" "targets_stopped" {
-  filter {
-    name   = "instance-state-name"
-    values = ["stopped"]
-  }
-  filter {
-    name   = "tag:Name"
-    values = local.env_filters
-  }
+  filter { name = "instance-state-name", values = ["stopped"] }
+  filter { name = "tag:Name", values = local.env_filters }
 }
 
 locals {
@@ -498,7 +428,6 @@ locals {
   target_ids = local.target_ids_map[var.assign_profile_target]
 }
 
-# Idempotent attach via AWS CLI
 resource "null_resource" "attach_profile" {
   for_each = toset(local.target_ids)
 
