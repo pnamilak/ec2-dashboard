@@ -26,7 +26,7 @@
     .right{margin-left:auto}
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}
     .modal .card{background:var(--panel);border-radius:14px;padding:16px;max-width:900px;width:100%}
-    .grid{display:grid;grid-template-columns:1fr 1fr 70px 70px;gap:12px}
+    .grid{display:grid;grid-template-columns:1fr 1fr 120px 80px 80px;gap:12px}
     input,select{background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:8px 10px}
     .error{background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:10px;padding:8px 10px}
   </style>
@@ -100,7 +100,6 @@
   var API = "${api_base_url}";
   var ENV_NAMES = "${env_names}".split(",");
 
-  // ------------- HTTP helpers -------------
   function $(id){ return document.getElementById(id); }
   function toast(msg){ alert(msg); }
   function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
@@ -111,25 +110,21 @@
     return fetch(API + path, {method:method, headers:h, body: obj? JSON.stringify(obj): undefined})
       .then(async function(r){
         const data = await r.json().catch(()=> ({}));
-        if(!r.ok){
-          const msg = (data && (data.error||data.message)) || r.statusText || ("http " + r.status);
-          throw new Error(msg);
-        }
+        if(!r.ok){ const msg = (data && (data.error||data.message)) || r.statusText || ("http " + r.status); throw new Error(msg); }
         return data;
       });
   }
   async function httpRetry(path, method, obj, bearer){
     try { return await http(path, method, obj, bearer); }
-    catch(e){                     // retry once for transient 5xx/cold start
+    catch(e){
       if((e.message||"").toLowerCase().includes("service") || (e.message||"").includes("http 5")){
-        await sleep(800);
+        await sleep(800);  // cold start / transient
         return await http(path, method, obj, bearer);
       }
       throw e;
     }
   }
 
-  // ------------- Auth / header -------------
   function openLogin(){ $("authModal").style.display="flex"; showOtp(); }
   function logout(){
     localStorage.removeItem("jwt"); localStorage.removeItem("role");
@@ -187,7 +182,6 @@
     }
   }
 
-  // ------------- Data / UI -------------
   function refresh(){
     var jwt = localStorage.getItem("jwt");
     if(!jwt){ $("authModal").style.display="flex"; showOtp(); renderUser(); return; }
@@ -245,7 +239,6 @@
         var state=document.createElement("div"); state.className="state"; state.textContent=st||"";
         line.appendChild(state);
 
-        // show only the right button; show disabled during transitions
         if(st==="running"){
           var stop=btn("Stop","bad",function(){ act(it.id,"stop"); });
           if(role!=="admin") stop.disabled=true;
@@ -307,24 +300,31 @@
       }
       var g=document.createElement("div"); g.className="grid"; var role=(localStorage.getItem("role")||"read").toLowerCase();
       for(var i=0;i<svcs.length;i++){
-        var s=svcs[i]; var st=((""+s.Status)||"").toString().toLowerCase().trim();
+        var s=svcs[i]; var st=((""+s.Status)||"").toString(); var stLower=st.toLowerCase();
+
         var n=document.createElement("div"); n.textContent=s.Name||"";
         var d=document.createElement("div"); d.textContent=s.DisplayName||"";
+        var t=document.createElement("div"); t.textContent=st || ""; t.className="mut";
+
         var start=btn("Start","ok",(function(name){return function(){svcAction("start",name);};})(s.Name));
         var stop =btn("Stop","bad",(function(name){return function(){svcAction("stop",name);};})(s.Name));
 
         if(role!=="admin"){ start.disabled=true; stop.disabled=true; }
-        if(st==="running"){ start.style.display="none"; }
-        else if(st==="stopped"){ stop.style.display="none"; }
+        if(stLower==="running"){ start.style.display="none"; }
+        else if(stLower==="stopped"){ stop.style.display="none"; }
         else { start.disabled=true; stop.disabled=true; }
 
-        g.appendChild(n); g.appendChild(d); g.appendChild(start); g.appendChild(stop);
+        g.appendChild(n); g.appendChild(d); g.appendChild(t); g.appendChild(start); g.appendChild(stop);
       } mount.appendChild(g);
     }).catch(function(e){ toast(e.message || "internal"); });
   }
   function svcAction(what,name){
     httpRetry("/services","POST",{id:svcCtx.id,mode:what,service:name}, localStorage.getItem("jwt"))
-      .then(()=>svcRefresh())
+      .then(function(res){
+        if(res && res.error){ toast("SSM error: "+res.error+(res.reason? " ("+res.reason+")":"")); return; }
+        if(res && res.service && res.service.Status){ toast(name+" → "+res.service.Status); }
+        svcRefresh();
+      })
       .catch(e=>toast(e.message || "service action failed"));
   }
   function svcIISReset(){

@@ -65,42 +65,30 @@ def _read_user(username: str):
     """
     p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
     val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"].strip()
-    if "|" in val:  # legacy style
-        parts = val.split("|", 1)
-        pwd   = parts[0]
-        role  = (parts[1] if len(parts)>1 else "read").strip().lower()
-        name  = username
-        email = ""
-    else:           # csv: password,role,email?,name?
-        fields = [x.strip() for x in val.split(",")]
-        pwd   = fields[0]
-        role  = (fields[1].lower() if len(fields)>1 and fields[1] else "read")
-        email = fields[2] if len(fields)>2 else ""
-        name  = fields[3] if len(fields)>3 else username
+    if "|" in val:
+        pwd, role = (val.split("|",1)+["read"])[:2]
+        email, name = "", username
+    else:
+        f = [x.strip() for x in val.split(",")]
+        pwd   = f[0]
+        role  = (f[1].lower() if len(f)>1 and f[1] else "read")
+        email = f[2] if len(f)>2 else ""
+        name  = f[3] if len(f)>3 else username
     return {"password": pwd, "role": role, "name": name, "email": email}
 
 def login(data):
     u = (data.get("username") or "").strip()
     p = (data.get("password") or "")
     if not u or not p: return bad(400, "missing_credentials")
-
     try:
         user = _read_user(u)
     except Exception:
         log.exception("read_user failed")
         return bad(401, "invalid_user")
-
     if user.get("password") != p:
         return bad(401, "invalid_password")
-
     role = user.get("role") or "read"
     token = _jwt_for(u, role, ssm, JWT_PARAM, ttl_seconds=3600)
-
-    body = {
-        "token": token,
-        "role": role,
-        "user": {"username": u, "role": role, "name": user.get("name") or u}
-    }
     return {
         "statusCode": 200,
         "headers": {
@@ -109,7 +97,7 @@ def login(data):
             "Access-Control-Allow-Headers": "authorization,content-type",
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
         },
-        "body": json.dumps(body),
+        "body": json.dumps({"token":token,"role":role,"user":{"username":u,"role":role,"name":user.get("name") or u}}),
     }
 
 # ---------- Auth helper ----------
@@ -120,10 +108,7 @@ def _auth(event):
     return True
 
 # ---------- EC2 listing ----------
-_TRANSITIONAL = {"stopping","pending","starting","shutting-down"}
-
 def instances(event, _):
-    # include transitional states so instances don't "disappear" during start/stop
     r = ec2.describe_instances(Filters=[{"Name":"instance-state-name","Values":["running","stopped","stopping","pending","starting","shutting-down"]}])
 
     envs = {e:{"DM":[],"EA":[]} for e in ENV_NAMES}
@@ -134,24 +119,18 @@ def instances(event, _):
             name=next((t["Value"] for t in i.get("Tags",[]) if t["Key"]=="Name"),"")
             if not name: continue
 
-            # pick environment by substring
             env=None; lname=name.lower()
             for e in ENV_NAMES:
-                if e.lower() in lname:
-                    env=e; break
-            if not env:  # if no match, drop
-                continue
+                if e.lower() in lname: env=e; break
+            if not env: continue
 
-            # group heuristic
             bucket="DM" if any(x in lname for x in ["dmsql","dmsvc","dmweb","dream","sql"]) else "EA"
-
             envs[env][bucket].append({"id":i["InstanceId"],"name":name,"state":state})
             summary["total"]+=1
             if state=="running": summary["running"]+=1
             if state=="stopped": summary["stopped"]+=1
     return ok({"summary":summary,"envs":envs})
 
-# ---------- EC2 actions ----------
 def instance_action(event, _):
     body=json.loads(event.get("body") or "{}")
     iid=body.get("id"); action=(body.get("action") or "").lower()
@@ -180,26 +159,34 @@ def ssm_online(instance_id):
             return False,"denied"
         return False,"error"
 
-POWERSHELL_LIST_SQL = r"""
+# Ensure JSON only, with depth and no warnings.
+_PREAMBLE = r"""
+$ErrorActionPreference='SilentlyContinue'
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+"""
+
+POWERSHELL_LIST_SQL = _PREAMBLE + r"""
 $svcs = Get-Service | Where-Object { $_.Name -match '^MSSQL' -or $_.Name -match '^SQLSERVERAGENT' }
-$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json
+$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 4 -Compress
 """
-POWERSHELL_LIST_GENERIC = r"""
+
+POWERSHELL_LIST_GENERIC = _PREAMBLE + r"""
 param([string]$Pattern="")
-if ($Pattern -eq "") { Write-Output "[]"; exit 0 }
 $svcs = Get-Service | Where-Object { $_.Name -like "*$Pattern*" -or $_.DisplayName -like "*$Pattern*" }
-$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json
+$svcs | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 4 -Compress
 """
-POWERSHELL_SVC = r"""
+
+POWERSHELL_SVC = _PREAMBLE + r"""
 param([string]$Name,[string]$Mode)
 if ($Mode -eq "start") { Start-Service -Name $Name -ErrorAction SilentlyContinue }
 if ($Mode -eq "stop")  { Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue }
 $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
-if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,DisplayName,Status | ConvertTo-Json }
+if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 4 -Compress }
 """
-POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
 
-def _run_ps(instance_id, script, timeout=20):  # keep under API Gateway 30s integration timeout
+POWERSHELL_IISRESET = _PREAMBLE + r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
+
+def _run_ps(instance_id, script, timeout=40):
     try:
         send = ssm.send_command(
             DocumentName="AWS-RunPowerShellScript",
@@ -218,8 +205,15 @@ def _run_ps(instance_id, script, timeout=20):  # keep under API Gateway 30s inte
         except ClientError:
             time.sleep(1); continue
         st=r["Status"]
-        if st=="Success": return (r.get("StandardOutputContent","").strip() or "[]"), None
-        if st in ("Cancelled","TimedOut","Failed"): return None, "invocation_"+st.lower()
+        if st=="Success":
+            out = (r.get("StandardOutputContent","") or "").strip()
+            err = (r.get("StandardErrorContent","") or "").strip()
+            if err and not out:
+                return None, ("stderr:" + err[:250])
+            return (out or "[]"), None
+        if st in ("Cancelled","TimedOut","Failed"):
+            err = (r.get("StandardErrorContent","") or "").strip()
+            return None, ("invocation_"+st.lower() + ((":"+err[:180]) if err else ""))
         time.sleep(1)
     return None,"timeout"
 
@@ -238,12 +232,14 @@ def services(event,_):
             if "sql" in iname:
                 out, err = _run_ps(iid, POWERSHELL_LIST_SQL)
             else:
-                pat = body.get("pattern","").replace('"','')
-                scr = f'param([string]$Pattern="{pat}");'+POWERSHELL_LIST_GENERIC.split("\n",1)[1]
-                out, err = _run_ps(iid, scr)
+                pat = (body.get("pattern","") or "").replace('"','')
+                script = f'param([string]$Pattern="{pat}");' + POWERSHELL_LIST_GENERIC.split("\n",1)[1]
+                out, err = _run_ps(iid, script)
             if err: return ok({"error":err})
             try: svcs=json.loads(out or "[]")
-            except Exception: svcs=[]
+            except Exception as ex:
+                log.warning("JSON parse failed: %s", out[:200])
+                svcs=[]
             return ok({"services":svcs})
 
         if mode in ("start","stop"):
