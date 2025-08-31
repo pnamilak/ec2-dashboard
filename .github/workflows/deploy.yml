@@ -76,13 +76,36 @@ jobs:
 
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-          # Compose safe, globally unique defaults if not provided
-          # Bucket names must be lowercase and globally unique
+          sanitize_bucket() {
+            local raw="$1"
+            # lowercase and keep only a-z 0-9 and hyphen, using printf (no newline)
+            local s
+            s="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+            # collapse multiple hyphens, trim leading/trailing hyphens
+            s="$(printf '%s' "$s" | sed -E 's/-{2,}/-/g; s/^-+//; s/-+$//')"
+            # limit length to 63 and ensure it doesn't end with a hyphen
+            s="${s:0:63}"
+            s="$(printf '%s' "$s" | sed -E 's/-+$//')"
+            # ensure length >= 3; fall back to a safe pattern
+            if [ ${#s} -lt 3 ]; then
+              s="tfstate-${ACCOUNT_ID}-${REGION}"
+              s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+              s="$(printf '%s' "$s" | sed -E 's/-{2,}/-/g; s/^-+//; s/-+$//')"
+              s="${s:0:63}"
+              s="$(printf '%s' "$s" | sed -E 's/-+$//')"
+            fi
+            # ensure last char is alphanumeric; if not, drop it
+            if ! [[ "${s: -1}" =~ [a-z0-9] ]]; then
+              s="$(printf '%s' "${s%?}")"
+            fi
+            printf '%s' "$s"
+          }
+
           if [ -z "$USER_BUCKET" ]; then
             RAW="tfstate-${ENVNAME}-${ACCOUNT_ID}-${REGION}"
-            BUCKET=$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9.-' '-')
+            BUCKET="$(sanitize_bucket "$RAW")"
           else
-            BUCKET="$USER_BUCKET"
+            BUCKET="$(sanitize_bucket "$USER_BUCKET")"
           fi
 
           if [ -z "$USER_TABLE" ]; then
