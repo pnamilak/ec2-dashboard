@@ -1,218 +1,167 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>EC2 Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
+  <meta http-equiv="x-ua-compatible" content="ie=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EC2 Dashboard • Verify your email</title>
   <style>
-    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a;--chip:#19243a;--brand:#7b8cff}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
-    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .tile{background:var(--chip);padding:14px 18px;border-radius:14px;font-weight:700;box-shadow:0 0 0 1px #1c2840 inset}
-    .tile.big{font-size:24px}
-    .chip{padding:6px 10px;background:#1a2742;border-radius:12px;font-size:12px}
-    .btn{padding:8px 14px;border-radius:12px;background:#203252;border:0;color:#dfe7f5;cursor:pointer}
-    .btn.small{padding:6px 12px;font-size:12px}
-    .btn.ok{background:var(--ok)}
-    .btn.bad{background:var(--bad)}
-    .tabs .tab{background:var(--chip);padding:8px 14px;border-radius:12px;cursor:pointer}
-    .tabs .tab.active{outline:2px solid var(--brand)}
-    .box{background:var(--panel);border-radius:14px;padding:14px 16px;margin:12px 0}
-    .stack{display:flex;flex-direction:column;gap:10px}
-    .rowline{display:flex;align-items:center;gap:10px;justify-content:space-between;background:#0f1a2e;border:1px solid #1c2840;border-radius:12px;padding:10px 12px}
-    .mut{color:var(--mut);font-size:12px}
-    .state{font-size:12px;color:#cfead9}
-    .right{margin-left:auto}
-
-    /* fatal error panel */
-    .fatal{position:fixed;inset:16px auto auto 16px;max-width:min(760px,90vw);background:#2b1620;color:#ffd9de;border:1px solid #5a2533;border-radius:12px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.35);z-index:9999}
-    .fatal b{display:block;margin-bottom:6px}
-    .hidden{display:none}
+    :root {
+      --bg: #0b1220;
+      --panel: #121b2e;
+      --muted: #a9b4c6;
+      --text: #e7eefc;
+      --danger: #ff6b6b;
+      --ok: #63e6be;
+      --btnStart: linear-gradient(90deg,#5aa8ff,#79f8d6);
+    }
+    html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial}
+    .wrap{min-height:100%;display:grid;place-items:center;padding:24px}
+    .card{
+      width:min(760px,92vw);
+      background:rgba(18,27,46,.92);
+      border-radius:16px;
+      box-shadow:0 20px 60px rgba(0,0,0,.45);
+      padding:28px 28px 24px;
+      backdrop-filter:saturate(140%) blur(6px);
+    }
+    h1{margin:0 0 14px;font-size:22px;letter-spacing:.2px}
+    p.sub{margin:0 0 20px;color:var(--muted)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .row>*{flex:1 1 260px}
+    label{display:block;margin:16px 0 8px;color:var(--muted);font-size:13px}
+    input{
+      width:100%;height:44px;border-radius:10px;border:1px solid #1e2942;
+      background:#0e1627;color:var(--text);padding:0 12px;outline:none
+    }
+    input:focus{border-color:#2f8fff;box-shadow:0 0 0 3px rgba(47,143,255,.15)}
+    button{
+      height:44px;border:0;border-radius:10px;padding:0 16px;cursor:pointer;
+      color:#081018;font-weight:600
+    }
+    .btnPrimary{background:var(--btnStart);min-width:140px}
+    .btnGhost{background:#1a2440;color:#d9e7ff}
+    .msg{min-height:22px;margin-top:10px;font-size:13px}
+    .msg.ok{color:var(--ok)}
+    .msg.err{color:var(--danger)}
+    .foot{margin-top:18px;color:var(--muted);font-size:13px}
+    a{color:#8fd8ff;text-decoration:none}
+    a:hover{text-decoration:underline}
   </style>
 </head>
 <body>
-<div class="wrap" id="app">
-  <div class="row" style="margin-bottom:12px">
-    <div class="tile big" id="tTotal">Total: 0</div>
-    <div class="tile big" id="tRun">Running: 0</div>
-    <div class="tile big" id="tStop">Stopped: 0</div>
-    <div class="right"></div>
-    <div class="chip" id="userBadge" style="display:none"></div>
-    <button class="btn small" id="btnSignOut">Sign out</button>
-    <button class="btn small" id="btnRefresh">Refresh</button>
+  <div class="wrap">
+    <div class="card">
+      <h1>Verify your email</h1>
+      <p class="sub">Enter your email to receive a one-time code. Allowed domain: <strong>${allowed_email_domain}</strong>.</p>
+
+      <div class="row">
+        <div>
+          <label for="otpEmail">Email</label>
+          <input id="otpEmail" type="email" placeholder="name@${allowed_email_domain}" autocomplete="email" />
+        </div>
+        <div style="align-self:end">
+          <button id="btnReq" class="btnGhost" type="button">Request OTP</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="otpCode">6-digit code</label>
+          <input id="otpCode" inputmode="numeric" maxlength="6" placeholder="123456" />
+        </div>
+        <div style="align-self:end">
+          <button id="btnVer" class="btnPrimary" type="button">Verify OTP</button>
+        </div>
+      </div>
+
+      <div id="otpMsg" class="msg"></div>
+
+      <div class="foot">
+        After successful verification you’ll be redirected to the credentials page.
+      </div>
+    </div>
   </div>
 
-  <div class="tabs row" id="envTabs"></div>
-  <div id="envMount"></div>
-</div>
+  <script>
+  (function () {
+    // Persist API base url so login.js can reuse it too
+    const API = "${api_base_url}";
+    const ALLOWED = "${allowed_email_domain}";
+    const OTP_TTL_SECONDS = 600; // 10 minutes
 
-<!-- fatal error panel -->
-<div class="fatal hidden" id="fatal">
-  <b>Something went wrong while loading the dashboard.</b>
-  <div id="fatalMsg"></div>
-</div>
+    try {
+      // Keep a copy in localStorage for other pages
+      const current = localStorage.getItem("api_base_url");
+      if (current !== API) localStorage.setItem("api_base_url", API);
+    } catch (_) {}
 
-<script>
-(function(){
-  // ----- CONFIG injected by Terraform -----
-  const API_BASE = "${api_base_url}";
-  // safer JSON parse for env names
-  const ENV_NAMES = (function(raw){
-    try{
-      // Allow old "A,B,C" or JSON array. We prefer JSON array when available.
-      if (raw.trim().startsWith("[")) return JSON.parse(raw);
-      if (!raw) return [];
-      return raw.split(",").map(s=>s.trim()).filter(Boolean);
-    }catch(e){ return []; }
-  })("${env_names}");
-  const ALLOWED_DOMAIN = "${allowed_email_domain}";
-  const VERSION = "${timestamp()}" // forces a new copy into caches each apply
-  // ---------------------------------------
+    const emailEl = document.getElementById('otpEmail');
+    const codeEl  = document.getElementById('otpCode');
+    const reqBtn  = document.getElementById('btnReq');
+    const verBtn  = document.getElementById('btnVer');
+    const msgEl   = document.getElementById('otpMsg');
 
-  // Helpers
-  const $  = (id)=>document.getElementById(id);
-  const showFatal = (msg)=>{
-    $('fatalMsg').textContent = msg;
-    $('fatal').classList.remove('hidden');
-  };
-  const http = (path, method, obj, bearer)=>{
-    const h = {"content-type":"application/json"};
-    if (bearer) h.authorization = "Bearer " + bearer;
-    return fetch(API_BASE + path, {
-      method,
-      headers: h,
-      body: obj ? JSON.stringify(obj) : undefined,
-    }).then(async r=>{
-      const data = await r.json().catch(()=> ({}));
-      if (!r.ok) {
-        const msg = (data && (data.error || data.message)) || ("http " + r.status);
-        throw new Error(msg);
-      }
-      return data;
-    });
-  };
+    const setMsg = (t, cls) => { msgEl.className = 'msg ' + (cls||''); msgEl.textContent = t||''; };
 
-  // Show user badge if present
-  const renderUser = ()=>{
-    const u = localStorage.getItem("user");
-    if (u) {
-      try {
-        const o = JSON.parse(u);
-        $('userBadge').textContent = (o.name || o.username || "") + " • " + (o.role || "");
-        $('userBadge').style.display = 'inline-block';
-      } catch {}
-    } else {
-      $('userBadge').style.display = 'none';
-    }
-  };
-
-  // Build tabs eagerly so page never looks empty
-  const renderTabs = (envs)=>{
-    const tabs = $('envTabs'); tabs.innerHTML = '';
-    (ENV_NAMES.length ? ENV_NAMES : ['Default']).forEach((name, idx)=>{
-      const b = document.createElement('div');
-      b.className = 'tab';
-      b.textContent = name;
-      b.onclick = ()=>{ drawEnv(envs[name] || {DM:[],EA:[]}); setActive(idx); };
-      tabs.appendChild(b);
-    });
-    function setActive(i){
-      tabs.querySelectorAll('.tab').forEach((n,k)=>n.classList.toggle('active', k===i));
-    }
-    // initial draw
-    const first = ENV_NAMES[0] || 'Default';
-    setActive(0);
-    drawEnv(envs[first] || {DM:[],EA:[]});
-  };
-
-  const btn = (txt, css, fn)=>{
-    const b = document.createElement('button');
-    b.textContent = txt; b.className = 'btn small ' + (css||''); b.onclick = fn;
-    return b;
-  };
-
-  const drawEnv = (env)=>{
-    const mount = $('envMount'); mount.innerHTML = '';
-    [
-      ['Dream Mapper','DM'],
-      ['Encore Anywhere','EA']
-    ].forEach(([title,key])=>{
-      const box = document.createElement('div'); box.className='box';
-      const head = document.createElement('div'); head.style.fontWeight='700'; head.style.marginBottom='8px';
-      head.textContent = title; box.appendChild(head);
-      const wrap = document.createElement('div'); wrap.className='stack';
-      (env[key] || []).forEach(it=>{
-        const line = document.createElement('div'); line.className='rowline';
-        const left = document.createElement('div');
-        left.innerHTML = "<b>"+(it.name||'')+"</b> <span class='mut'>("+(it.id||'')+")</span>";
-        line.appendChild(left);
-        const state = document.createElement('div'); state.className='state'; state.textContent = it.state||'';
-        line.appendChild(state);
-        const start = btn('Start','ok', ()=> act(it.id,'start'));
-        const stop  = btn('Stop','bad', ()=> act(it.id,'stop'));
-        if ((it.state||'').toLowerCase()==='running'){ start.disabled=true; } else { stop.disabled=true; }
-        line.appendChild(start); line.appendChild(stop);
-        // services button (modal from older version can be re-added if needed)
-        line.appendChild(btn('Services','',()=> openServices(it)));
-        wrap.appendChild(line);
+    async function post(path, body) {
+      const r = await fetch(API + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body || {})
       });
-      box.appendChild(wrap); mount.appendChild(box);
-    });
-  };
+      const data = await r.json().catch(()=> ({}));
+      if (!r.ok) throw new Error(data.error || data.message || ('http_'+r.status));
+      return data;
+    }
 
-  // Placeholder; you already have a services modal in your earlier copy.
-  function openServices(it){
-    alert('Services panel for ' + (it.name||it.id));
-  }
-
-  function act(id,what){
-    http('/instance-action','POST',{id,action:what}, localStorage.getItem('jwt'))
-      .then(()=> setTimeout(refresh, 1500))
-      .catch(e=> alert(e.message||'action failed'));
-  }
-
-  function refresh(){
-    const jwt = localStorage.getItem('jwt');
-    if (!jwt){ location.href = 'login.html?v=' + VERSION; return; }
-    http('/instances','GET',null,jwt).then(data=>{
-      $('tTotal').textContent = "Total: "   + (data.summary?.total   ?? 0);
-      $('tRun').textContent   = "Running: " + (data.summary?.running ?? 0);
-      $('tStop').textContent  = "Stopped: " + (data.summary?.stopped ?? 0);
-      renderTabs(data.envs || {});
-    }).catch(err=>{
-      // Token expired etc.
-      if (String(err.message || '').toLowerCase().includes('unauthorized')){
-        localStorage.removeItem('jwt');
-        location.href = 'login.html?v=' + VERSION;
-      } else {
-        showFatal('Failed to load instances: ' + err.message);
+    reqBtn.onclick = async () => {
+      setMsg('');
+      const email = (emailEl.value||'').trim().toLowerCase();
+      if (!email.endsWith('@'+ALLOWED)) { setMsg('bad_email_domain', 'err'); return; }
+      try {
+        reqBtn.disabled = true;
+        await post('/request-otp', { email });
+        setMsg('otp_sent', 'ok');
+      } catch (e) {
+        setMsg(e.message || 'send_failed', 'err');
+      } finally {
+        reqBtn.disabled = false;
       }
-    });
-  }
+    };
 
-  // global error trap -> show panel instead of a blank page
-  window.addEventListener('error', function(e){
-    try { showFatal((e.error && e.error.message) ? e.error.message : (e.message || 'Unknown error')); }
-    catch {}
-  });
+    verBtn.onclick = async () => {
+      setMsg('');
+      const email = (emailEl.value||'').trim().toLowerCase();
+      const code  = (codeEl.value||'').trim();
+      if (!email.endsWith('@'+ALLOWED)) { setMsg('bad_email_domain', 'err'); return; }
+      if (!/^[0-9]{6}$/.test(code))      { setMsg('bad_code', 'err'); return; }
+      try {
+        verBtn.disabled = true;
+        await post('/verify-otp', { email, code });
+        // Store short-lived proof for the next page
+        sessionStorage.setItem('otp_token', code);
+        sessionStorage.setItem('otp_email', email);
+        sessionStorage.setItem('otp_ts', String(Math.floor(Date.now()/1000)));
 
-  // wire buttons
-  $('btnRefresh').onclick = refresh;
-  $('btnSignOut').onclick = ()=>{
-    localStorage.removeItem('jwt');
-    localStorage.removeItem('role');
-    localStorage.removeItem('user');
-    localStorage.removeItem('otp_verified');
-    localStorage.removeItem('otp_email');
-    location.href = 'login.html?v=' + VERSION;
-  };
+        // Only now go to credentials page
+        location.href = '/login.html?v=' + Date.now();
+      } catch (e) {
+        setMsg(e.message || 'invalid_otp', 'err');
+      } finally {
+        verBtn.disabled = false;
+      }
+    };
 
-  // boot
-  renderUser();
-  refresh();
-})();
-</script>
+    // If user already has a fresh OTP, you may auto-forward (optional)
+    try {
+      const ts = Number(sessionStorage.getItem('otp_ts') || 0);
+      if (ts && (Math.floor(Date.now()/1000) - ts) < OTP_TTL_SECONDS) {
+        // we have a very recent OTP -> let them continue if they refresh
+        // location.href = '/login.html?v=' + Date.now();
+      }
+    } catch (_) {}
+  })();
+  </script>
 </body>
 </html>
