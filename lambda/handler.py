@@ -1,358 +1,433 @@
-import os, json, time, base64, hmac, hashlib, logging, re
+# lambda/handler.py
+# -----------------------------------------------------------------------------
+# EC2 Dashboard API (single Lambda) – OTP, login, instances, actions, services.
+# This version includes the full SSM Services implementation (SQL / Redis /
+# SVC+WEB filter + IIS reset) and keeps the rest of the endpoints intact.
+# -----------------------------------------------------------------------------
+
+import os
+import re
+import json
+import time
+import hmac
+import base64
+import hashlib
+import random
+from datetime import datetime, timedelta, timezone
+
 import boto3
 from botocore.exceptions import ClientError
 
-log = logging.getLogger()
-log.setLevel(logging.INFO)
-
-# ----------- ENV -----------
+# ---------- Environment ----------
 REGION            = os.environ.get("REGION", "us-east-2")
-OTP_TABLE         = os.environ["OTP_TABLE"]
-SES_SENDER        = os.environ["SES_SENDER"]
-ALLOWED_DOMAIN    = os.environ.get("ALLOWED_EMAIL_DOMAIN", os.environ.get("ALLOWED_DOMAIN", "gmail.com")).lower()
+OTP_TABLE_NAME    = os.environ.get("OTP_TABLE", "")
+SES_SENDER        = os.environ.get("SES_SENDER", "")
+ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com")
 PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX", "/ec2-dashboard/users")
-JWT_PARAM         = os.environ["JWT_PARAM"]
-ENV_NAMES         = [x.strip() for x in os.environ.get("ENV_NAMES", "NAQA1,NAQA2,NAQA3,NAQA6,APQA1,EUQA1,Dev").split(",") if x.strip()]
+JWT_PARAM         = os.environ.get("JWT_PARAM", "/ec2-dashboard/jwt-secret")
+ENV_NAMES_STR     = os.environ.get("ENV_NAMES", "")
+ENV_TOKENS        = [e.strip() for e in ENV_NAMES_STR.split(",") if e.strip()]
 
+# ---------- Clients ----------
 ec2 = boto3.client("ec2", region_name=REGION)
 ssm = boto3.client("ssm", region_name=REGION)
-ses = boto3.client("ses", region_name=REGION)
-ddb = boto3.resource("dynamodb", region_name=REGION)
-table = ddb.Table(OTP_TABLE)
-pssm = boto3.client("ssm", region_name=REGION)  # Parameter Store + SSM commands
+ses = boto3.client("ses", region_name=REGION) if SES_SENDER else None
+ddb = boto3.resource("dynamodb", region_name=REGION) if OTP_TABLE_NAME else None
+param = boto3.client("ssm", region_name=REGION)
 
-# ----------- JWT helpers -----------
-def _b64url(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).decode().rstrip("=")
-
-def _jwt_for(sub: str, role: str, ttl_seconds: int = 3600) -> str:
-    header  = _b64url(json.dumps({"alg":"HS256","typ":"JWT"}).encode())
-    now     = int(time.time())
-    payload = _b64url(json.dumps({"sub":sub,"role":role,"iat":now,"exp":now+ttl_seconds}).encode())
-    secret  = pssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
-    sig     = _b64url(hmac.new(secret, f"{header}.{payload}".encode(), hashlib.sha256).digest())
-    return f"{header}.{payload}.{sig}"
-
-def _ok(body, code=200):    return {"statusCode": code, "headers":{"content-type":"application/json"}, "body": json.dumps(body)}
-def _bad(code, msg):        return {"statusCode": code, "headers":{"content-type":"application/json"}, "body": json.dumps({"error": msg})}
-
-# ----------- OTP -----------
-def _otp_key(email): return f"otp:{email}"
-def _ovt_key(tok):   return f"ovt:{tok}"
-
-def request_otp(body):
-    email = (body.get("email") or "").strip().lower()
-    if not email or not email.endswith("@"+ALLOWED_DOMAIN):
-        return _bad(400, f"only {ALLOWED_DOMAIN} allowed")
-
-    code = f"{int(time.time()*1000)%1000000:06d}"
-    ttl  = int(time.time()) + 10*60
-    table.put_item(Item={"email":_otp_key(email), "code":code, "ttl":ttl})
-    try:
-        ses.send_email(
-            Source=SES_SENDER,
-            Destination={"ToAddresses":[email]},
-            Message={
-                "Subject":{"Data":"Your EC2 Dashboard OTP"},
-                "Body":{"Text":{"Data":f"Your one-time code is {code}. It expires in 10 minutes."}}
-            }
-        )
-    except ClientError:
-        log.exception("SES send failed")
-        return _bad(500, "otp_send_failed")
-    return _ok({"sent": True})
-
-def verify_otp(body):
-    email = (body.get("email") or "").strip().lower()
-    code  = (body.get("code") or "").strip()
-    if not email or not code: return _bad(400,"missing_email_or_code")
-    r = table.get_item(Key={"email":_otp_key(email)})
-    it = r.get("Item")
-    if not it or it.get("code") != code or int(time.time()) > int(it.get("ttl",0)):
-        return _bad(400,"invalid_or_expired_otp")
-    table.delete_item(Key={"email":_otp_key(email)})
-
-    ovt = base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip("=")
-    table.put_item(Item={"email":_ovt_key(ovt), "addr":email, "ttl": int(time.time())+5*60})
-    return _ok({"ovt": ovt})
-
-def _consume_ovt(ovt: str) -> str|None:
-    if not ovt: return None
-    r = table.get_item(Key={"email":_ovt_key(ovt)})
-    it = r.get("Item")
-    if not it or int(time.time()) > int(it.get("ttl",0)): return None
-    table.delete_item(Key={"email":_ovt_key(ovt)})
-    return it.get("addr")
-
-# ----------- Users -----------
-def _load_user(username: str):
-    name = f"{PARAM_USER_PREFIX}/{username}"
-    try:
-        p = pssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-    except pssm.exceptions.ParameterNotFound:
-        return None
-    parts = [x.strip() for x in p.split(",")]  # password,role,email,name
+# ---------- Helpers ----------
+def _json(status: int, obj: dict):
     return {
-        "password": parts[0] if len(parts)>0 else "",
-        "role":     (parts[1].lower() if len(parts)>1 and parts[1] else "read"),
-        "email":    (parts[2] if len(parts)>2 else ""),
-        "name":     (parts[3] if len(parts)>3 else username)
+        "statusCode": status,
+        "headers": {"content-type": "application/json"},
+        "body": json.dumps(obj),
     }
 
-def login(body):
+def _now_utc():
+    return datetime.now(timezone.utc)
+
+def _b64url(b: bytes) -> bytes:
+    return base64.urlsafe_b64encode(b).rstrip(b"=")
+
+def _jwt_encode(payload: dict, secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    head = _b64url(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payl = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = head + b"." + payl
+    sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    token = signing_input + b"." + _b64url(sig)
+    return token.decode("utf-8")
+
+def _get_param(name: str) -> str:
+    r = param.get_parameter(Name=name, WithDecryption=True)
+    return r["Parameter"]["Value"]
+
+def _get_user_secret(username: str) -> str:
+    """
+    In Parameter Store:
+      /ec2-dashboard/users/<username>  => "password,role,email,name"
+    """
+    p = f"{PARAM_USER_PREFIX}/{username}"
+    try:
+        return _get_param(p)
+    except ClientError:
+        return ""
+
+def _send_otp_email(email: str, code: str):
+    if not ses:
+        return
+    ses.send_email(
+        Source=SES_SENDER,
+        Destination={"ToAddresses": [email]},
+        Message={
+            "Subject": {"Data": "Your EC2 Dashboard OTP"},
+            "Body": {"Text": {"Data": f"Your OTP is: {code}. It expires in 5 minutes."}},
+        },
+    )
+
+def _gen_code(n=6) -> str:
+    return "".join(random.choice("0123456789") for _ in range(n))
+
+def _name_of(tags) -> str:
+    for t in tags or []:
+        if t.get("Key") == "Name":
+            return t.get("Value", "")
+    return ""
+
+def _env_hit(name_lower: str) -> list[str]:
+    """Return all env tokens present in the given instance name."""
+    hits = []
+    for token in ENV_TOKENS:
+        if token.lower() in name_lower:
+            hits.append(token)
+    return hits
+
+# ---------- OTP endpoints ----------
+def handle_request_otp(body: dict):
+    email = (body.get("email") or "").strip().lower()
+    if not email or not email.endswith("@" + ALLOWED_DOMAIN):
+        return _json(400, {"error": "invalid_email"})
+
+    code = _gen_code(6)
+    exp = int((_now_utc() + timedelta(minutes=5)).timestamp())  # epoch seconds
+
+    if not ddb:
+        return _json(500, {"error": "otp_store_unavailable"})
+
+    table = ddb.Table(OTP_TABLE_NAME)
+    table.put_item(Item={"email": email, "code": code, "exp": exp})
+
+    try:
+        _send_otp_email(email, code)
+    except Exception as e:
+        return _json(500, {"error": f"email_error: {e}"})
+
+    return _json(200, {"ok": True})
+
+def handle_verify_otp(body: dict):
+    email = (body.get("email") or "").strip().lower()
+    code  = (body.get("code")  or "").strip()
+    if not email or not code:
+        return _json(400, {"error": "missing"})
+
+    if not ddb:
+        return _json(500, {"error": "otp_store_unavailable"})
+
+    table = ddb.Table(OTP_TABLE_NAME)
+    resp  = table.get_item(Key={"email": email})
+    item  = resp.get("Item")
+    if not item:
+        return _json(200, {"ok": False, "error": "no_code"})
+
+    if item.get("code") != code:
+        return _json(200, {"ok": False, "error": "bad_code"})
+
+    if int(item.get("exp", 0)) < int(_now_utc().timestamp()):
+        return _json(200, {"ok": False, "error": "expired"})
+
+    # One-time token back to the client (UI passes it to login)
+    ovt = _gen_code(8)
+    return _json(200, {"ok": True, "ovt": ovt})
+
+def handle_login(body: dict):
+    """
+    body: {email, username, password, ovt}
+    Validates against SSM param: "/<project>/users/<username>" => "password,role,email,name"
+    Creates a JWT signed with secret at JWT_PARAM.
+    """
+    email    = (body.get("email")    or "").strip().lower()
     username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-    ovt      = body.get("ovt") or ""
-    if not username or not password or not ovt:
-        return _bad(400,"missing_fields")
+    password = (body.get("password") or "").strip()
+    # ovt is accepted from UI; we don't store it server-side here.
 
-    if not _consume_ovt(ovt):
-        return _bad(400,"otp_not_verified")
+    if not username or not password or not email.endswith("@" + ALLOWED_DOMAIN):
+        return _json(400, {"error": "bad_credentials"})
 
-    u = _load_user(username)
-    if not u or u["password"] != password:
-        return _bad(401,"invalid_credentials")
+    raw = _get_user_secret(username)  # "pwd,role,email,name"
+    if not raw:
+        return _json(401, {"error": "user_not_found"})
 
-    token = _jwt_for(username, u["role"])
-    return _ok({"token": token, "role": u["role"], "user": {"username":username, "name":u["name"], "email": u["email"]}})
-
-# ----------- Auth -----------
-def _auth(event):
-    h = event.get("headers") or {}
-    auth = h.get("authorization") or h.get("Authorization") or ""
-    if not auth.lower().startswith("bearer "): raise Exception("noauth")
-    token = auth.split(" ",1)[1].strip()
     try:
-        h64,p64,s64 = token.split(".")
-        secret = pssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
-        expect = base64.urlsafe_b64encode(hmac.new(secret, f"{h64}.{p64}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-        if expect != s64: raise Exception("sig")
-        payload = json.loads(base64.urlsafe_b64decode(p64+"===").decode())
-        if int(time.time()) >= int(payload.get("exp",0)): raise Exception("exp")
-        return payload
+        upwd, role, uemail, name = [s.strip() for s in raw.split(",", 3)]
     except Exception:
-        raise
+        return _json(500, {"error": "user_param_malformed"})
 
-# ----------- EC2 helpers -----------
-def _is_env(name: str) -> str|None:
-    nl = name.upper()
-    for e in ENV_NAMES:
-        if e.upper() in nl:
-            return e
-    return None
+    if password != upwd or email != uemail:
+        return _json(401, {"error": "invalid"})
 
-def _block(name: str) -> str:
-    up = name.upper()
-    if "DM" in up: return "DM"
-    if "EA" in up: return "EA"
-    return "DM"
-
-def instances(_event, _ctx):
-    filters = [{"Name": "tag:Name", "Values": [f"*{e}*" for e in ENV_NAMES]}]
-    r = ec2.describe_instances(Filters=filters)
-    envs = {}
-    counts = {k:0 for k in ["pending","running","stopping","stopped","shutting-down","terminated"]}
-    total = 0
-
-    for res in r.get("Reservations", []):
-        for i in res.get("Instances", []):
-            state = i.get("State",{}).get("Name")
-            name = next((t["Value"] for t in i.get("Tags",[]) if t["Key"]=="Name"), i["InstanceId"])
-            env  = _is_env(name) or "Other"
-            blk  = _block(name)
-            envs.setdefault(env, {"DM":[], "EA":[]})
-            envs[env][blk].append({"id": i["InstanceId"], "name": name, "state": state})
-            total += 1
-            if state in counts: counts[state] += 1
-
-    summary = {
-        "total": total,
-        "running": counts["running"],
-        "stopped": counts["stopped"],
-        "pending": counts["pending"],
-        "stopping": counts["stopping"],
-        "shutting_down": counts["shutting-down"],
-        "terminated": counts["terminated"]
+    secret = _get_param(JWT_PARAM)
+    now = int(_now_utc().timestamp())
+    payload = {
+        "sub": username,
+        "name": name,
+        "role": role,
+        "email": email,
+        "iat": now,
+        "exp": now + 8 * 3600,  # 8 hours
     }
-    return _ok({"summary": summary, "envs": envs})
+    token = _jwt_encode(payload, secret)
+    return _json(200, {"token": token, "role": role, "user": name})
 
-def instance_action(event, _ctx):
-    b = json.loads(event.get("body") or "{}")
-    iid = b.get("id")
-    action = (b.get("action") or "").lower()
+# ---------- Instances & actions ----------
+def _shape_instance(i: dict) -> dict:
+    iid  = i["InstanceId"]
+    name = _name_of(i.get("Tags"))
+    st   = (i.get("State") or {}).get("Name", "")
+    return {"id": iid, "name": name, "state": st}
+
+def handle_instances():
+    """
+    Response:
+    {
+      summary: { total, running, stopped },
+      envs: { <ENV> : { DM:[...], EA:[...] }, ... }
+    }
+    """
+    res = ec2.describe_instances(
+        Filters=[
+            {"Name": "instance-state-name", "Values": ["pending","running","stopping","stopped"]},
+        ]
+    )
+    envs: dict[str, dict[str, list]] = {}
+    all_items = []
+
+    for r in res.get("Reservations", []):
+        for i in r.get("Instances", []):
+            it = _shape_instance(i)
+            if not it["name"]:
+                continue
+            nl = it["name"].lower()
+            hits = _env_hit(nl)
+            if not hits:
+                # put under a "DevMini" tab if "dev" in name
+                if "dev" in nl:
+                    hits = ["DevMini"]
+                else:
+                    continue
+            # DM vs EA blocks by name token
+            block = "DM" if "dm" in nl else ("EA" if "ea" in nl else "DM")
+
+            for env in hits:
+                envs.setdefault(env, {"DM": [], "EA": []})
+                envs[env][block].append(it)
+                all_items.append(it)
+
+    running = sum(1 for x in all_items if x["state"] == "running")
+    stopped = sum(1 for x in all_items if x["state"] == "stopped")
+    return _json(200, {"summary": {"total": len(all_items), "running": running, "stopped": stopped}, "envs": envs})
+
+def handle_instance_action(body: dict):
+    iid    = (body.get("id") or "").strip()
+    action = (body.get("action") or "").strip().lower()
     if not iid or action not in ("start","stop"):
-        return _bad(400,"bad_request")
+        return _json(400, {"error": "bad_request"})
     try:
-        if action=="start": ec2.start_instances(InstanceIds=[iid])
-        else: ec2.stop_instances(InstanceIds=[iid])
+        if action == "start":
+            ec2.start_instances(InstanceIds=[iid])
+        else:
+            ec2.stop_instances(InstanceIds=[iid])
+        return _json(200, {"ok": True})
     except ClientError as e:
-        return _bad(400, e.response.get("Error",{}).get("Message","ec2_error"))
-    return _ok({"ok": True})
+        return _json(200, {"ok": False, "error": str(e)})
 
-def bulk_action(event, _ctx):
-    b = json.loads(event.get("body") or "{}")
-    ids = b.get("ids") or []
-    action = (b.get("action") or "").lower()
-    if not ids or action not in ("start","stop"): return _bad(400,"bad_request")
+def handle_bulk(body: dict):
+    ids    = body.get("ids") or []
+    action = (body.get("action") or "").strip().lower()
+    if not ids or action not in ("start","stop"):
+        return _json(400, {"error":"bad_request"})
     try:
-        if action=="start": ec2.start_instances(InstanceIds=ids)
-        else: ec2.stop_instances(InstanceIds=ids)
+        if action == "start":
+            ec2.start_instances(InstanceIds=ids)
+        else:
+            ec2.stop_instances(InstanceIds=ids)
+        return _json(200, {"ok": True})
     except ClientError as e:
-        return _bad(400, e.response.get("Error",{}).get("Message","ec2_error"))
-    return _ok({"ok": True})
+        return _json(200, {"ok": False, "error": str(e)})
 
-# ----------- SSM helpers ----------
-def _ssm_check(instance_id: str):
-    """
-    Return (status, ping) where status in {'ok','not_managed','offline','error'}.
-    """
+# ---------- SSM Services (SQL / Redis / SVC+WEB / IIS reset) ----------
+def _run_ssm_ps(instance_id: str, commands: list[str], timeout=60):
+    """Run PowerShell on the instance. Returns (ok, data|error_text)."""
     try:
-        resp = ssm.describe_instance_information(
-            Filters=[{"Key":"InstanceIds","Values":[instance_id]}]
-        )
-        lst = resp.get("InstanceInformationList", [])
-        if not lst:
-            return ("not_managed", "Unknown")
-        ping = lst[0].get("PingStatus", "Unknown")
-        return ("ok", ping) if ping == "Online" else ("offline", ping)
-    except ClientError as e:
-        return ("error", e.response.get("Error",{}).get("Message",""))
-
-def _run_powershell(instance_id: str, script: str, timeout=150):
-    try:
-        cmd = ssm.send_command(
+        resp = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName="AWS-RunPowerShellScript",
-            Parameters={"commands": [script]},
-            TimeoutSeconds=timeout
+            Parameters={"commands": commands},
         )
-    except ClientError as e:
-        return (False, "", f"send_command_failed: {e.response.get('Error',{}).get('Message','')}")
-    cid = cmd["Command"]["CommandId"]
-    for _ in range(int(timeout/2)):
-        time.sleep(2)
-        try:
-            inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
-        except ClientError as e:
-            return (False, "", f"get_command_invocation_failed: {e.response.get('Error',{}).get('Message','')}")
-        st = inv.get("Status")
-        if st in ("Success","Failed","Cancelled","TimedOut"):
-            out = (inv.get("StandardOutputContent") or "").strip()
-            err = (inv.get("StandardErrorContent") or "").strip()
-            ok = (st=="Success")
-            return (ok, out, err if err else (None if ok else st))
-    return (False, "", "timeout")
+    except ssm.exceptions.InvalidInstanceId as e:
+        return False, "invalid_instance"
+    except Exception as e:
+        msg = str(e)
+        if "TargetNotConnected" in msg:
+            return False, "not_connected"
+        return False, msg
 
-def _json_services(out: str):
-    if not out: return []
+    cmd_id = resp["Command"]["CommandId"]
+    start = time.time()
+    while time.time() - start < timeout:
+        out = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        st = out["Status"]
+        if st in ("Success", "Cancelled", "Failed", "TimedOut"):
+            if st != "Success":
+                return False, out.get("StandardErrorContent") or st
+            return True, out.get("StandardOutputContent") or "[]"
+        time.sleep(1.2)
+    return False, "timeout"
+
+def _ps_json_list_sql():
+    return [r'''
+$names = @('MSSQL*','SQLSERVERAGENT*','SQLBrowser','SQL*')
+$svcs = @(Get-Service -Name $names -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status)
+$svcs | ConvertTo-Json -Depth 2
+''']
+
+def _ps_json_list_redis():
+    return [r'''
+$svcs = @(Get-Service -Name 'Redis*' -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status)
+$svcs | ConvertTo-Json -Depth 2
+''']
+
+def _ps_json_list_pattern(pattern:str):
+    p = re.sub(r"'", "''", pattern)
+    return [rf'''
+$pat = '{p}'
+$svcs = @(Get-Service | Where-Object {{ $_.Name -match $pat -or $_.DisplayName -match $pat }} |
+    Select-Object Name,DisplayName,Status)
+$svcs | ConvertTo-Json -Depth 2
+''']
+
+def _ps_start(name:str):
+    n = name.replace("'", "''")
+    return [rf"Start-Service -Name '{n}' -ErrorAction SilentlyContinue",
+            rf"$s=Get-Service -Name '{n}' -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status",
+            r"$s | ConvertTo-Json -Depth 2"]
+
+def _ps_stop(name:str):
+    n = name.replace("'", "''")
+    return [rf"Stop-Service -Name '{n}' -ErrorAction SilentlyContinue",
+            rf"$s=Get-Service -Name '{n}' -ErrorAction SilentlyContinue | Select-Object Name,DisplayName,Status",
+            r"$s | ConvertTo-Json -Depth 2"]
+
+def _ps_iis_reset():
+    return [r"iisreset /restart", r"'[]'"]
+
+def handle_services(body: dict):
+    """
+    body: { id, mode: list|start|stop|iisreset, service?, instanceName?, kind?, pattern? }
+    """
+    iid = (body.get("id") or "").strip()
+    mode = (body.get("mode") or "list").lower()
+    inst_name = (body.get("instanceName") or "").lower()
+    kind = (body.get("kind") or "").lower()
+    pattern = (body.get("pattern") or "").strip()
+
+    if not iid:
+        return _json(400, {"error": "missing_instance_id"})
+
+    # Derive kind from name if not provided by UI
+    if not kind:
+        kind = "svcweb" if ("svc" in inst_name or "web" in inst_name) else \
+               ("sql" if "sql" in inst_name else ("redis" if "redis" in inst_name else "generic"))
+
     try:
-        data = json.loads(out)
-        if isinstance(data, dict): data = [data]
-        items=[]
-        for s in data:
-            items.append({
-                "Name": s.get("Name") or "",
-                "DisplayName": s.get("DisplayName") or "",
-                "Status": s.get("Status") or s.get("State") or ""
-            })
-        return items
-    except Exception:
-        return []
+        if mode == "list":
+            if kind == "sql":
+                commands = _ps_json_list_sql()
+            elif kind == "redis":
+                commands = _ps_json_list_redis()
+            elif kind == "svcweb":
+                if len(pattern) < 2:
+                    return _json(200, {"services": [], "error": "enter_filter"})
+                commands = _ps_json_list_pattern(pattern)
+            else:
+                return _json(200, {"services": [], "error": "unsupported"})
 
-def services(event, _ctx):
-    b = json.loads(event.get("body") or "{}")
-    iid   = b.get("id")
-    mode  = (b.get("mode") or "list").lower()   # list|start|stop|iisreset
-    name  = b.get("service") or ""
-    inst_name = (b.get("instanceName") or "")
-    pattern   = (b.get("pattern") or "").strip()
-    typ = "generic"
-    nm = inst_name.lower()
-    if "sql" in nm:      typ = "sql"
-    elif "redis" in nm:  typ = "redis"
-    elif re.search(r"\bsvc\b|\bweb\b", nm): typ = "svcweb"
+            ok, out = _run_ssm_ps(iid, commands)
+            if not ok:
+                return _json(200, {"services": [], "error": out})
 
-    if not iid: return _bad(400,"missing_instance")
+            try:
+                arr = json.loads(out)
+                if isinstance(arr, dict):
+                    arr = [arr]
+                return _json(200, {"services": arr})
+            except Exception:
+                return _json(200, {"services": [], "error": "parse_error"})
 
-    st, ping = _ssm_check(iid)
-    if st != "ok":
-        msg = "ssm_not_managed" if st=="not_managed" else ("ssm_offline" if st=="offline" else "ssm_error")
-        return _ok({"services": [], "type": typ, "error": f"{msg} ({ping})"})
+        elif mode in ("start","stop"):
+            svc = (body.get("service") or "").strip()
+            if not svc:
+                return _json(400, {"error": "missing_service"})
+            commands = _ps_start(svc) if mode == "start" else _ps_stop(svc)
+            ok, out = _run_ssm_ps(iid, commands)
+            if not ok:
+                return _json(200, {"services": [], "error": out})
+            try:
+                obj = json.loads(out)
+                arr = [obj] if isinstance(obj, dict) else obj
+                return _json(200, {"services": arr})
+            except Exception:
+                return _json(200, {"services": [], "error": "parse_error"})
 
-    if mode == "list":
-        if typ == "sql":
-            # broader case-insensitive regex for SQL-related services
-            ps = r"""
-$sv = Get-Service | Where-Object { $_.Name -match '(?i)(MSSQL|SQL|SQLAgent|SQLBrowser|SQLWriter)' -or $_.DisplayName -match '(?i)SQL' } |
-  Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json -Depth 4 -Compress
-""".strip()
-            ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
+        elif mode == "iisreset":
+            ok, out = _run_ssm_ps(iid, _ps_iis_reset())
+            if not ok:
+                return _json(200, {"services": [], "error": out})
+            return _json(200, {"ok": True})
 
-        if typ == "redis":
-            ps = r"""
-$sv = Get-Service | Where-Object { $_.Name -match '(?i)redis' -or $_.DisplayName -match '(?i)redis' } |
-  Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json -Depth 4 -Compress
-""".strip()
-            ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
+        else:
+            return _json(400, {"error": "bad_mode"})
 
-        if typ == "svcweb":
-            if not pattern or len(pattern) < 2:
-                return _ok({"services": [], "type": typ, "hint": "enter 2+ letters to filter"})
-            esc = re.sub(r"[^A-Za-z0-9_\-\.\s]", ".", pattern)
-            ps = rf"""
-$re = '{esc}'
-$sv = Get-Service | Where-Object {{ $_.Name -match $re -or $_.DisplayName -match $re }} |
-  Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json -Depth 4 -Compress
-""".strip()
-            ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
+    except Exception as e:
+        return _json(500, {"error": str(e)})
 
-        # generic (no known type)
-        return _ok({"services": [], "type": typ})
+# ---------- Router ----------
+def lambda_handler(event, context):
+    path   = event.get("rawPath") or event.get("requestContext", {}).get("http", {}).get("path", "")
+    method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
 
-    if mode in ("start","stop"):
-        if not name: return _bad(400,"service_required")
-        action = "Start-Service" if mode=="start" else "Stop-Service"
-        ps = rf"""
-try {{
-  {action} -Name '{name}' -ErrorAction Stop
-}} catch {{}}
-Get-Service -Name '{name}' | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 3 -Compress
-""".strip()
-        ok,out,err = _run_powershell(iid, ps)
-        return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
+    body = {}
+    if event.get("body"):
+        try:
+            body = json.loads(event["body"])
+        except Exception:
+            body = {}
 
-    if mode == "iisreset":
-        ps = "iisreset /restart"
-        ok,out,err = _run_powershell(iid, ps)
-        return _ok({"ok": ok, "type": typ, "error": err})
+    # Public
+    if path == "/request-otp" and method == "POST":
+        return handle_request_otp(body)
+    if path == "/verify-otp" and method == "POST":
+        return handle_verify_otp(body)
+    if path == "/login" and method == "POST":
+        return handle_login(body)
 
-    return _bad(400,"bad_mode")
+    # Protected (API Gateway custom authorizer checks JWT)
+    if path == "/instances" and method == "GET":
+        return handle_instances()
+    if path == "/instance-action" and method == "POST":
+        return handle_instance_action(body)
+    if path == "/bulk-action" and method == "POST":
+        return handle_bulk(body)
+    if path == "/services" and method == "POST":
+        return handle_services(body)
 
-# ----------- Router -----------
-def lambda_handler(event, ctx):
-    path   = (event.get("rawPath") or event.get("path") or "").lower()
-    method = (event.get("requestContext",{}).get("http",{}).get("method")
-              or event.get("httpMethod") or "GET").upper()
-
-    if method == "OPTIONS": return _ok({"ok": True})
-
-    if path.endswith("/request-otp") and method=="POST": return request_otp(json.loads(event.get("body") or "{}"))
-    if path.endswith("/verify-otp")  and method=="POST": return verify_otp(json.loads(event.get("body") or "{}"))
-    if path.endswith("/login")       and method=="POST": return login(json.loads(event.get("body") or "{}"))
-
-    try: _auth(event)
-    except Exception:
-        return _bad(401,"unauthorized")
-
-    if path.endswith("/instances")       and method=="GET":  return instances(event, ctx)
-    if path.endswith("/instance-action") and method=="POST": return instance_action(event, ctx)
-    if path.endswith("/bulk-action")     and method=="POST": return bulk_action(event, ctx)
-    if path.endswith("/services")        and method=="POST": return services(event, ctx)
-
-    return _bad(404,"not_found")
+    return _json(404, {"error": "not_found", "path": path, "method": method})

@@ -1,3 +1,7 @@
+############################################
+# EC2 Dashboard – main.tf
+############################################
+
 locals {
   site_bucket_name = var.website_bucket_name != "" ? var.website_bucket_name : "${var.project_name}-${random_id.site.hex}-site"
   name_filters     = [for e in var.env_names : "*${e}*"]
@@ -336,7 +340,7 @@ resource "aws_lambda_permission" "apigw_invoke_auth" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ----------------------- SSM Instance Profile (optional) -----------------------
+# ----------------------- SSM Instance Profile -----------------------
 resource "aws_iam_role" "ec2_ssm_role" {
   name = "${var.project_name}-ec2-ssm-role"
 
@@ -360,6 +364,7 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
+# ----------------------- Target instances to (re)attach profile -----------------------
 # Find instances by env tokens + state
 data "aws_instances" "running" {
   instance_state_names = ["running"]
@@ -377,48 +382,79 @@ data "aws_instances" "stopped" {
   }
 }
 
+# -- choose target ids based on your existing data sources
 locals {
   running_ids = try(data.aws_instances.running.ids, [])
   stopped_ids = try(data.aws_instances.stopped.ids, [])
-  target_ids  = (
-    var.assign_profile_target == "running" ? local.running_ids :
-    (
-      var.assign_profile_target == "stopped" ? local.stopped_ids :
-      (
-        var.assign_profile_target == "both" ? distinct(concat(local.running_ids, local.stopped_ids)) :
-        []
-      )
-    )
-  )
+
+  # none|running|stopped|both  (controlled by var.assign_profile_target)
+  target_ids = var.assign_profile_target == "running" ? local.running_ids :
+               var.assign_profile_target == "stopped" ? local.stopped_ids :
+               var.assign_profile_target == "both"    ? distinct(concat(local.running_ids, local.stopped_ids)) : []
 }
 
-# Attach/replace profile using AWS CLI (idempotent)
-resource "null_resource" "attach_profile" {
-  for_each = { for id in local.target_ids : id => id }
+# Attach/replace instance profile for each target instance (idempotent).
+# On destroy, disassociate so IAM resources delete cleanly.
+resource "null_resource" "attach_ssm_profile" {
+  for_each = toset(local.target_ids)
 
   triggers = {
     instance_id  = each.value
     profile_name = aws_iam_instance_profile.ec2_ssm_profile.name
+    region       = var.aws_region
   }
 
   provisioner "local-exec" {
-    when    = create
-    command = <<-EOT
-      set -e
+    when        = create
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
       IID="${each.value}"
-      PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+      PROF="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+      REGION="${var.aws_region}"
 
       ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values=$IID \
-        --query "IamInstanceProfileAssociations[0].AssociationId" \
-        --output text || true)
+        --filters Name=instance-id,Values="$${IID}" \
+        --query 'IamInstanceProfileAssociations[0].AssociationId' \
+        --output text --region "$${REGION}" || true)
 
-      if [ "$ASSOC_ID" = "None" ] || [ -z "$ASSOC_ID" ]; then
-        aws ec2 associate-iam-instance-profile --instance-id "$IID" --iam-instance-profile Name="$PROFILE" >/dev/null
+      if [ -z "$${ASSOC_ID}" ] || [ "$${ASSOC_ID}" = "None" ]; then
+        echo "Associating $${IID} -> $${PROF}"
+        aws ec2 associate-iam-instance-profile \
+          --instance-id "$${IID}" \
+          --iam-instance-profile Name="$${PROF}" \
+          --region "$${REGION}"
       else
-        aws ec2 replace-iam-instance-profile-association --association-id "$ASSOC_ID" --iam-instance-profile Name="$PROFILE" >/dev/null
+        echo "Replacing $${IID} assoc $${ASSOC_ID} -> $${PROF}"
+        aws ec2 replace-iam-instance-profile-association \
+          --association-id "$${ASSOC_ID}" \
+          --iam-instance-profile Name="$${PROF}" \
+          --region "$${REGION}"
       fi
     EOT
-    interpreter = ["/bin/bash","-lc"]
   }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      IID="${self.triggers.instance_id}"
+      REGION="${self.triggers.region}"
+
+      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values="$${IID}" \
+        --query 'IamInstanceProfileAssociations[0].AssociationId' \
+        --output text --region "$${REGION}" || true)
+
+      if [ -n "$${ASSOC_ID}" ] && [ "$${ASSOC_ID}" != "None" ]; then
+        echo "Disassociating $${IID} assoc $${ASSOC_ID}"
+        aws ec2 disassociate-iam-instance-profile \
+          --association-id "$${ASSOC_ID}" \
+          --region "$${REGION}"
+      fi
+    EOT
+  }
+
+  depends_on = [aws_iam_instance_profile.ec2_ssm_profile]
 }

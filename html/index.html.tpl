@@ -261,28 +261,41 @@ $("btnRefreshTop").onclick = refresh;
 function openServices(it){
   const dlg = $("svcDlg");
   $("svcInst").textContent = it.name + ' ('+it.id+')';
-  const nm = it.name.toLowerCase();
-  const type = nm.includes('sql') ? 'sql' : (nm.includes('redis') ? 'redis' : ((/\bsvc\b|\bweb\b/.test(nm)) ? 'svcweb' : 'generic'));
+  const nm = (it.name||"").toLowerCase();
 
+  // Looser detection so names like "naqa6dmweb01" are picked up
+  const type =
+    nm.includes('sql')   ? 'sql'   :
+    nm.includes('redis') ? 'redis' :
+    (nm.includes('svc') || nm.includes('web')) ? 'svcweb' : 'generic';
+
+  // Show filter + IIS reset only for SVC/WEB
   const controls = $("svcControls");
   controls.style.display = (type === 'svcweb') ? 'flex' : 'none';
   $("btnIIS").style.display = (type === 'svcweb') ? 'inline-block' : 'none';
+  $("svcBody").innerHTML = '';
   $("svcMsg").textContent = '';
 
   async function list(){
-    let payload = { id: it.id, mode:'list', instanceName: it.name };
-    if (type==='svcweb') {
+    let payload = { id: it.id, mode:'list', instanceName: it.name, kind:type };
+    if (type === 'svcweb') {
       const pat = $("svcFilter").value.trim();
-      if (!pat || pat.length < 2) { $("svcBody").innerHTML = ""; $("svcMsg").textContent = "Enter 2+ letters to list services."; return; }
+      if (pat.length < 2) {
+        $("svcBody").innerHTML = "";
+        $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
+        return;
+      }
       payload.pattern = pat;
     }
     try{
       const r = await http('/services','POST', payload);
+      const items = r.services || [];
       const body = $("svcBody"); body.innerHTML='';
-      const items = r.services||[];
-      if(!items.length){
+      if (!items.length){
         $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
-      } else { $("svcMsg").textContent = ''; }
+        return;
+      }
+      $("svcMsg").textContent = '';
       items.forEach(s=>{
         const tr=document.createElement('tr');
         const disp = `<span class="chip">${s.DisplayName||''}</span>`;
@@ -292,20 +305,31 @@ function openServices(it){
         a.className = (s.Status==='Running'?'btn btn-stop':'btn btn-start');
         a.textContent = (s.Status==='Running'?'Stop':'Start');
         a.onclick = async ()=>{ a.disabled=true;
-          try{ await http('/services','POST',{id:it.id, mode:(s.Status==='Running'?'stop':'start'), service:s.Name, instanceName: it.name});
-               await list(); } finally{ a.disabled=false; } };
+          try{
+            await http('/services','POST',{
+              id:it.id, mode:(s.Status==='Running'?'stop':'start'),
+              service:s.Name, instanceName: it.name
+            });
+            await list();
+          } finally{ a.disabled=false; }
+        };
         td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
       });
     }catch(e){
-      $("svcBody").innerHTML='';
+      $("svcBody").innerHTML = "";
       $("svcMsg").textContent = "Error: " + e.message;
     }
   }
 
   $("btnFilter").onclick = (e)=>{ e.preventDefault(); list(); };
-  $("btnIIS").onclick    = async (e)=>{ e.preventDefault(); await http('/services','POST',{id:it.id, mode:'iisreset', instanceName: it.name}); };
+  $("btnIIS").onclick    = async (e)=>{ e.preventDefault();
+    try { await http('/services','POST',{ id:it.id, mode:'iisreset', instanceName: it.name}); $("svcMsg").textContent="IIS reset sent."; }
+    catch(err){ $("svcMsg").textContent = "IIS reset error: " + err.message; }
+  };
 
-  if (type==='sql' || type==='redis') list(); else { $("svcBody").innerHTML=''; $("svcMsg").textContent=''; }
+  // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
+  if (type==='sql' || type==='redis') list();
+
   dlg.showModal();
 }
 
