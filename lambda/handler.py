@@ -2,7 +2,6 @@ import os, json, time, uuid, base64, hmac, hashlib, logging
 import boto3
 from botocore.exceptions import ClientError
 
-# ---------- logging ----------
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
@@ -28,9 +27,8 @@ ENV_NAMES          = [e.strip() for e in os.environ.get("ENV_NAMES","").split(",
 
 ddb  = boto3.resource("dynamodb", region_name=REGION)
 ses  = boto3.client("ses", region_name=REGION)
-ssm  = boto3.client("ssm", region_name=REGION)      # SSM param + SSM Fleet APIs (describe, send, etc.)
+ssm  = boto3.client("ssm", region_name=REGION)      # SSM Parameter Store + Fleet
 ec2  = boto3.client("ec2", region_name=REGION)
-
 table = ddb.Table(OTP_TABLE)
 
 def ok(b):   return {"statusCode":200,"headers":{"content-type":"application/json"},"body":json.dumps(b)}
@@ -63,18 +61,17 @@ def verify_otp(data):
 # ---------- Users from SSM ----------
 def _read_user(username: str):
     """
-    Read /<prefix>/<username> from SSM.
     Accepts either 'password|role'   or 'password,role[,email[,name]]'
     """
     p = f"{PARAM_USER_PREFIX.rstrip('/')}/{username}"
     val = ssm.get_parameter(Name=p, WithDecryption=True)["Parameter"]["Value"].strip()
-    if "|" in val:
+    if "|" in val:  # legacy style
         parts = val.split("|", 1)
         pwd   = parts[0]
         role  = (parts[1] if len(parts)>1 else "read").strip().lower()
         name  = username
         email = ""
-    else:
+    else:           # csv: password,role,email?,name?
         fields = [x.strip() for x in val.split(",")]
         pwd   = fields[0]
         role  = (fields[1].lower() if len(fields)>1 and fields[1] else "read")
@@ -89,7 +86,7 @@ def login(data):
 
     try:
         user = _read_user(u)
-    except Exception as e:
+    except Exception:
         log.exception("read_user failed")
         return bad(401, "invalid_user")
 
@@ -123,24 +120,35 @@ def _auth(event):
     return True
 
 # ---------- EC2 listing ----------
+_TRANSITIONAL = {"stopping","pending","starting","shutting-down"}
+
 def instances(event, _):
-    r = ec2.describe_instances(Filters=[{"Name":"instance-state-name","Values":["running","stopped"]}])
+    # include transitional states so instances don't "disappear" during start/stop
+    r = ec2.describe_instances(Filters=[{"Name":"instance-state-name","Values":["running","stopped","stopping","pending","starting","shutting-down"]}])
+
     envs = {e:{"DM":[],"EA":[]} for e in ENV_NAMES}
     summary = {"total":0,"running":0,"stopped":0}
     for res in r.get("Reservations",[]):
         for i in res.get("Instances",[]):
-            state=i["State"]["Name"]
+            state=i["State"]["Name"].lower()
             name=next((t["Value"] for t in i.get("Tags",[]) if t["Key"]=="Name"),"")
             if not name: continue
+
+            # pick environment by substring
             env=None; lname=name.lower()
             for e in ENV_NAMES:
-                if e.lower() in lname: env=e; break
-            if not env: continue
+                if e.lower() in lname:
+                    env=e; break
+            if not env:  # if no match, drop
+                continue
+
+            # group heuristic
             bucket="DM" if any(x in lname for x in ["dmsql","dmsvc","dmweb","dream","sql"]) else "EA"
+
             envs[env][bucket].append({"id":i["InstanceId"],"name":name,"state":state})
             summary["total"]+=1
-            summary["running"]+= (state=="running")
-            summary["stopped"]+= (state=="stopped")
+            if state=="running": summary["running"]+=1
+            if state=="stopped": summary["stopped"]+=1
     return ok({"summary":summary,"envs":envs})
 
 # ---------- EC2 actions ----------
@@ -157,7 +165,6 @@ def instance_action(event, _):
         return ok({"ok":True})
     except ClientError as e:
         code=e.response["Error"]["Code"]
-        log.exception("EC2 action failed")
         return ok({"error":"ec2_"+code, "reason": e.response["Error"].get("Message","")})
 
 # ---------- SSM helpers ----------
@@ -192,7 +199,7 @@ if ($null -eq $svc) { Write-Output "{}" } else { $svc | Select-Object Name,Displ
 """
 POWERSHELL_IISRESET = r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
 
-def _run_ps(instance_id, script, timeout=30):
+def _run_ps(instance_id, script, timeout=20):  # keep under API Gateway 30s integration timeout
     try:
         send = ssm.send_command(
             DocumentName="AWS-RunPowerShellScript",
@@ -208,8 +215,7 @@ def _run_ps(instance_id, script, timeout=30):
     while time.time()-t0<timeout:
         try:
             r=ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
-        except ClientError as e:
-            # small grace for propagation
+        except ClientError:
             time.sleep(1); continue
         st=r["Status"]
         if st=="Success": return (r.get("StandardOutputContent","").strip() or "[]"), None
@@ -237,8 +243,7 @@ def services(event,_):
                 out, err = _run_ps(iid, scr)
             if err: return ok({"error":err})
             try: svcs=json.loads(out or "[]")
-            except Exception:
-                svcs=[]
+            except Exception: svcs=[]
             return ok({"services":svcs})
 
         if mode in ("start","stop"):
@@ -263,7 +268,6 @@ def services(event,_):
 
 # ---------- Router ----------
 def lambda_handler(event, ctx):
-    # Basic CORS preflight for HTTP API
     method = (event.get("requestContext",{}).get("http",{}).get("method") or event.get("httpMethod") or "GET").upper()
     path = (event.get("rawPath") or event.get("path") or "").lower()
 

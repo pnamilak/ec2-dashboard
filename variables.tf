@@ -16,8 +16,10 @@ variable "website_bucket_name" {
 }
 
 variable "env_names" {
+  description = "Environment name tokens to match by EC2 Name tag (used for tabs)."
   type        = list(string)
-  default     = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EQUA1"]
+  # Add/adjust here. The UI will show tabs in this order.
+  default     = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EQUA1","Dev"]
 }
 
 variable "allowed_email_domain" {
@@ -46,3 +48,4 @@ variable "assign_profile_target" {
     error_message = "assign_profile_target must be one of none|running|stopped|both"
   }
 }
+
