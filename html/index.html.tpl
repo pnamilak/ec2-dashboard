@@ -7,15 +7,12 @@
   <style>
     :root{
       --bg:#0e1624; --ink:#e6e9ef; --mut:#9aa4b2; --panel:#121b2b; --card:#162338;
-      --emerald1:#36df9f; --emerald2:#0fb87b; --emeraldShadow:#0d7d57;
-      --amber1:#fff1b3; --amber2:#ffcc63; --amberShadow:#b47a1a;
-      --rose1:#ffb3b3; --rose2:#ff6262; --roseShadow:#a02323;
-      --blue1:#86b5ff; --blue2:#3d79ff;
-      --violet1:#d2b8ff; --violet2:#8c66ff;
-      --orange1:#ffd1a6; --orange2:#ff8f42;
-      --grey1:#cfd6e4; --grey2:#a3afc2;
-      --chip1:#2a3d6b; --chip2:#2e415f;
       --tab:#1a243b; --tabA:#2a395e;
+
+      /* mild summary colors */
+      --m-total-1:#bed3ff; --m-total-2:#97bdff; --m-total-text:#0e1a2e;
+      --m-run-1:#c9f2da;  --m-run-2:#9fe2bf;  --m-run-text:#0d281a;
+      --m-stop-1:#e9eef6; --m-stop-2:#ced8e7; --m-stop-text:#0e1a2e;
     }
     body{margin:0;background:radial-gradient(1100px 680px at 70% -240px,#263557 5%,#0e1624 58%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
 
@@ -30,14 +27,14 @@
     input,button{font:inherit}
     input[type=text],input[type=password],input[type=email],input[type=number]{width:100%;margin-top:6px;margin-bottom:12px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
 
-    /* 3D buttons */
+    /* Buttons */
     .btn{padding:10px 16px;border-radius:999px;border:0;font-weight:800;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease}
     .btn:active{transform:translateY(2px)}
     .btn.mono{background:#1a2a45;color:#cfe6ff;border:1px solid #2c3e64;box-shadow:0 4px 0 #12213a, 0 10px 20px rgba(0,0,0,.25)}
     .btn-ghost{background:transparent;border:1px solid #31476f;color:#cfe6ff}
-    .btn-start{background:linear-gradient(180deg,var(--emerald1),var(--emerald2)); color:#07291c; box-shadow:0 6px 0 var(--emeraldShadow), 0 14px 22px rgba(0,0,0,.3)}
-    .btn-stop{background:linear-gradient(180deg,var(--rose1),var(--rose2)); color:#3e0b0b; box-shadow:0 6px 0 var(--roseShadow), 0 14px 22px rgba(0,0,0,.3)}
-    .btn-svc{background:linear-gradient(180deg,var(--amber1),var(--amber2)); color:#3a2500; box-shadow:0 6px 0 var(--amberShadow), 0 14px 22px rgba(0,0,0,.25)}
+    .btn-start{background:linear-gradient(180deg,#bff3d1,#93dfb7); color:#0e2a1b; box-shadow:0 6px 0 #0d7d57, 0 14px 22px rgba(0,0,0,.18)}
+    .btn-stop{background:linear-gradient(180deg,#ffd0c9,#ff8d80); color:#401212; box-shadow:0 6px 0 #a02323, 0 14px 22px rgba(0,0,0,.18)}
+    .btn-svc{background:linear-gradient(180deg,#fff1b3,#ffcc63); color:#3a2500; box-shadow:0 6px 0 #b47a1a, 0 14px 22px rgba(0,0,0,.16)}
 
     .mut{color:var(--mut);font-size:12px}
     .err{color:#ffaaaa;font-size:12px;min-height:16px;margin-top:6px}
@@ -53,7 +50,7 @@
     .list{padding:10px 12px}
     .row{display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px dashed #2b3d63}
     .row:last-child{border-bottom:0}
-    .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,var(--chip1),var(--chip2));color:#bfe1ff;margin-left:6px}
+    .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,#2a3d6b,#2e415f);color:#bfe1ff;margin-left:6px}
 
     dialog{background:#0f172a;color:#e6e9ef;border:1px solid #2a3a62;border-radius:12px;max-width:820px;width:92%}
     table{width:100%;border-collapse:collapse}
@@ -61,18 +58,15 @@
     .chip{background:linear-gradient(90deg,#a4b8ff,#a4ffd4); color:#061a22; padding:4px 8px; border-radius:10px; display:inline-block}
     .controls{display:flex; gap:8px; align-items:center}
 
-    /* Summary tiles — vertical list */
+    /* Summary tiles — vertical list (mild) */
     .vstats{display:flex;flex-direction:column;gap:12px}
-    .stat{display:flex;align-items:center;justify-content:space-between;padding:16px;border-radius:14px;border:1px solid #223356;box-shadow:0 10px 26px rgba(0,0,0,.25)}
+    .stat{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-radius:14px;border:1px solid #223356;box-shadow:0 8px 22px rgba(0,0,0,.20)}
     .stat .label{font-weight:800;letter-spacing:.4px}
-    .stat .num{font-size:32px;font-weight:900}
-    .s-total{background:linear-gradient(180deg,var(--blue1),var(--blue2))}
-    .s-run{background:linear-gradient(180deg,var(--emerald1),var(--emerald2))}
-    .s-stop{background:linear-gradient(180deg,var(--grey1),var(--grey2)); color:#0c1322}
-    .s-pend{background:linear-gradient(180deg,var(--violet1),var(--violet2))}
-    .s-stopping{background:linear-gradient(180deg,var(--orange1),var(--orange2)); color:#261200}
-    .s-sd{background:linear-gradient(180deg,var(--rose1),var(--rose2));}
-    .s-term{background:linear-gradient(180deg,#9aa7b7,#6e7a8a)}
+    .stat .num{font-size:30px;font-weight:900}
+
+    .s-total{background:linear-gradient(180deg,var(--m-total-1),var(--m-total-2)); color:var(--m-total-text)}
+    .s-run{background:linear-gradient(180deg,var(--m-run-1),var(--m-run-2)); color:var(--m-run-text)}
+    .s-stop{background:linear-gradient(180deg,var(--m-stop-1),var(--m-stop-2)); color:var(--m-stop-text)}
   </style>
 </head>
 <body>
@@ -202,14 +196,9 @@ function renderSummary(){
   const card = document.createElement('div'); card.className='card';
   const box = document.createElement('div'); box.className='vstats';
 
-  box.appendChild(statRow('s-total', 'Total', d.summary.total));
-  box.appendChild(statRow('s-run', 'Running', d.summary.running));
-  box.appendChild(statRow('s-stop', 'Stopped', d.summary.stopped));
-  box.appendChild(statRow('s-pend', 'Pending', d.summary.pending));
-  box.appendChild(statRow('s-stopping', 'Stopping', d.summary.stopping));
-  box.appendChild(statRow('s-sd', 'Shutting-down', d.summary.shutting_down));
-  if (typeof d.summary.terminated !== 'undefined')
-    box.appendChild(statRow('s-term', 'Terminated', d.summary.terminated));
+  box.appendChild(statRow('s-total', 'Total',   d.summary.total ?? 0));
+  box.appendChild(statRow('s-run',   'Running', d.summary.running ?? 0));
+  box.appendChild(statRow('s-stop',  'Stopped', d.summary.stopped ?? 0));
 
   card.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div style="font-size:20px;font-weight:900">Summary</div>
@@ -219,7 +208,7 @@ function renderSummary(){
   content.appendChild(card);
   $("btnRefresh").onclick = refresh;
 
-  $("summary").textContent = `Summary • Total: ${d.summary.total} • Running: ${d.summary.running} • Stopped: ${d.summary.stopped}`;
+  $("summary").textContent = `Summary • Total: ${d.summary.total ?? 0} • Running: ${d.summary.running ?? 0} • Stopped: ${d.summary.stopped ?? 0}`;
 }
 
 function renderEnv(){
