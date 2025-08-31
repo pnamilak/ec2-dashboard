@@ -276,6 +276,7 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
+
   rule {
     object_ownership = "BucketOwnerEnforced"
   }
@@ -315,15 +316,21 @@ resource "aws_cloudfront_distribution" "site" {
 
     forwarded_values {
       query_string = true
-      cookies { forward = "none" }
+      cookies {
+        forward = "none"
+      }
     }
   }
 
   restrictions {
-    geo_restriction { restriction_type = "none" }
+    geo_restriction {
+      restriction_type = "none"
+    }
   }
 
-  viewer_certificate { cloudfront_default_certificate = true }
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 }
 
 data "aws_iam_policy_document" "site_bucket" {
@@ -388,7 +395,10 @@ resource "aws_s3_object" "login_js" {
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
     actions = ["sts:AssumeRole"]
-    principals { type = "Service", identifiers = ["ec2.amazonaws.com"] }
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
   }
 }
 
@@ -409,13 +419,25 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
 
 # Discover instances
 data "aws_instances" "targets_running" {
-  filter { name = "instance-state-name", values = ["running"] }
-  filter { name = "tag:Name", values = local.env_filters }
+  filter {
+    name   = "instance-state-name"
+    values = ["running"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
 }
 
 data "aws_instances" "targets_stopped" {
-  filter { name = "instance-state-name", values = ["stopped"] }
-  filter { name = "tag:Name", values = local.env_filters }
+  filter {
+    name   = "instance-state-name"
+    values = ["stopped"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = local.env_filters
+  }
 }
 
 locals {
