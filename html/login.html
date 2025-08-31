@@ -5,27 +5,29 @@
   <title>Sign in • EC2 Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}
-    .card{background:var(--panel);padding:22px;border-radius:16px;box-shadow:0 0 0 1px #1c2840 inset;width:min(520px,92vw)}
-    .title{display:flex;gap:10px;align-items:center;margin-bottom:12px;font-weight:800;font-size:20px}
-    .mut{color:var(--mut);font-size:12px}
-    input{width:100%;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px;margin-top:8px}
-    button{margin-top:12px;width:100%;padding:10px;border-radius:12px;border:0;background:linear-gradient(90deg,#5aa3ff,#8cf7d2);color:#062440;font-weight:700;cursor:pointer}
-    .err{margin-top:8px;color:#ffdbe0}
+    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{background:var(--panel);border-radius:16px;padding:18px;min-width:560px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .title{font-size:22px;font-weight:700;margin:2px 0 12px 0}
+    .mut{color:var(--mut);font-size:12px;margin-top:8px}
+    input{width:100%;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px}
+    .btn{width:100%;padding:12px;border-radius:10px;border:0;background:linear-gradient(90deg,#58a7ff,#83ffd8);color:#0b1530;font-weight:700;margin-top:10px;cursor:pointer}
+    .error{color:#ffb3bc;margin-top:10px;font-size:13px;min-height:18px}
   </style>
 </head>
 <body>
+<div class="wrap">
   <div class="card">
     <div class="title">Complete your sign-in</div>
-    <div class="mut">Enter your EC2 Dashboard credentials</div>
-    <input id="uName" placeholder="Username" autocomplete="username">
-    <input id="uPass" placeholder="Password" type="password" autocomplete="current-password">
-    <button onclick="doLogin()">Sign in</button>
-    <div id="msg" class="err"></div>
-    <div class="mut" style="margin-top:10px">You’ve just verified your email OTP. If this page appeared without OTP, <a href="/" style="color:#8cf7d2">go back</a>.</div>
+    <div style="margin-bottom:8px"><input id="uName" placeholder="username"></div>
+    <div><input id="uPass" placeholder="password" type="password"></div>
+    <button class="btn" onclick="doLogin()">Sign in</button>
+    <div id="msg" class="error"></div>
+    <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="/">go back</a>.</div>
   </div>
+</div>
 
-  <script src="/login.js"></script>
+<script src="/login.js"></script>
 </body>
 </html>
