@@ -19,7 +19,9 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -66,15 +68,22 @@ resource "aws_cloudfront_distribution" "site" {
     forwarded_values {
       query_string = false
       headers      = ["Origin"]
-      cookies { forward = "none" }
+
+      cookies {
+        forward = "none"
+      }
     }
   }
 
   restrictions {
-    geo_restriction { restriction_type = "none" }
+    geo_restriction {
+      restriction_type = "none"
+    }
   }
 
-  viewer_certificate { cloudfront_default_certificate = true }
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 }
 
 resource "aws_s3_bucket_policy" "site" {
@@ -103,7 +112,10 @@ resource "aws_dynamodb_table" "otp" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "email"
 
-  attribute { name = "email" type = "S" }
+  attribute {
+    name = "email"
+    type = "S"
+  }
 }
 
 # ----------------------- SSM Params -----------------------
@@ -141,6 +153,7 @@ data "archive_file" "auth_zip" {
 # ----------------------- Lambda Role -----------------------
 resource "aws_iam_role" "lambda_exec" {
   name = "${var.project_name}-lambda-exec"
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -154,6 +167,7 @@ resource "aws_iam_role" "lambda_exec" {
 resource "aws_iam_role_policy" "lambda_policy" {
   name = "${var.project_name}-policy"
   role = aws_iam_role.lambda_exec.id
+
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
@@ -329,6 +343,7 @@ resource "aws_lambda_permission" "apigw_invoke_auth" {
 # ----------------------- SSM Instance Profile (optional) -----------------------
 resource "aws_iam_role" "ec2_ssm_role" {
   name = "${var.project_name}-ec2-ssm-role"
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17",
     Statement = [{
@@ -349,28 +364,36 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# --------- Select targets (fixed: no chained ternary) ----------
+# --------- Select targets (no chained ternary) ----------
 data "aws_instances" "running" {
   instance_state_names = ["running"]
-  filter { name = "tag:Name" values = local.name_filters }
+  filter {
+    name   = "tag:Name"
+    values = local.name_filters
+  }
 }
 
 data "aws_instances" "stopped" {
   instance_state_names = ["stopped"]
-  filter { name = "tag:Name" values = local.name_filters }
+  filter {
+    name   = "tag:Name"
+    values = local.name_filters
+  }
 }
 
 locals {
   running_ids = try(data.aws_instances.running.ids, [])
   stopped_ids = try(data.aws_instances.stopped.ids, [])
   both_ids    = distinct(concat(local.running_ids, local.stopped_ids))
-  target_map  = {
+
+  target_map = {
     running = local.running_ids
     stopped = local.stopped_ids
     both    = local.both_ids
     none    = []
   }
-  target_ids  = lookup(local.target_map, var.assign_profile_target, [])
+
+  target_ids = lookup(local.target_map, var.assign_profile_target, [])
 }
 
 # Attach/replace profile using AWS CLI (idempotent), and clean on destroy
@@ -385,7 +408,7 @@ resource "null_resource" "attach_ssm_profile" {
 
   depends_on = [aws_iam_instance_profile.ec2_ssm_profile]
 
-  # Create/Update: replace existing association or associate if none
+  # Create/Update
   provisioner "local-exec" {
     when        = create
     interpreter = ["/bin/bash", "-lc"]
