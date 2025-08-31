@@ -32,7 +32,7 @@ on:
       ASSIGN_PROFILE_TARGET:
         description: "Attach SSM instance profile to which EC2s?"
         required: true
-        default: "none"
+        default: "both"
         type: choice
         options: [none, running, stopped, both]
       TF_BACKEND_BUCKET:
