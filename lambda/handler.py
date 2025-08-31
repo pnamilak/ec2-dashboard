@@ -9,7 +9,7 @@ log.setLevel(logging.INFO)
 REGION            = os.environ.get("REGION", "us-east-2")
 OTP_TABLE         = os.environ["OTP_TABLE"]
 SES_SENDER        = os.environ["SES_SENDER"]
-ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com").lower()
+ALLOWED_DOMAIN    = os.environ.get("ALLOWED_EMAIL_DOMAIN", os.environ.get("ALLOWED_DOMAIN", "gmail.com")).lower()
 PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX", "/ec2-dashboard/users")
 JWT_PARAM         = os.environ["JWT_PARAM"]
 ENV_NAMES         = [x.strip() for x in os.environ.get("ENV_NAMES", "NAQA1,NAQA2,NAQA3,NAQA6,APQA1,EUQA1,Dev").split(",") if x.strip()]
@@ -19,7 +19,7 @@ ssm = boto3.client("ssm", region_name=REGION)
 ses = boto3.client("ses", region_name=REGION)
 ddb = boto3.resource("dynamodb", region_name=REGION)
 table = ddb.Table(OTP_TABLE)
-pssm = boto3.client("ssm", region_name=REGION)  # param store + sendCommand
+pssm = boto3.client("ssm", region_name=REGION)  # Parameter Store + SSM commands
 
 # ----------- JWT helpers -----------
 def _b64url(b: bytes) -> str:
@@ -44,6 +44,7 @@ def request_otp(body):
     email = (body.get("email") or "").strip().lower()
     if not email or not email.endswith("@"+ALLOWED_DOMAIN):
         return _bad(400, f"only {ALLOWED_DOMAIN} allowed")
+
     code = f"{int(time.time()*1000)%1000000:06d}"
     ttl  = int(time.time()) + 10*60
     table.put_item(Item={"email":_otp_key(email), "code":code, "ttl":ttl})
@@ -65,22 +66,25 @@ def verify_otp(body):
     email = (body.get("email") or "").strip().lower()
     code  = (body.get("code") or "").strip()
     if not email or not code: return _bad(400,"missing_email_or_code")
-    it = table.get_item(Key={"email":_otp_key(email)}).get("Item")
+    r = table.get_item(Key={"email":_otp_key(email)})
+    it = r.get("Item")
     if not it or it.get("code") != code or int(time.time()) > int(it.get("ttl",0)):
         return _bad(400,"invalid_or_expired_otp")
     table.delete_item(Key={"email":_otp_key(email)})
+
     ovt = base64.urlsafe_b64encode(os.urandom(12)).decode().rstrip("=")
     table.put_item(Item={"email":_ovt_key(ovt), "addr":email, "ttl": int(time.time())+5*60})
     return _ok({"ovt": ovt})
 
 def _consume_ovt(ovt: str) -> str|None:
     if not ovt: return None
-    it = table.get_item(Key={"email":_ovt_key(ovt)}).get("Item")
+    r = table.get_item(Key={"email":_ovt_key(ovt)})
+    it = r.get("Item")
     if not it or int(time.time()) > int(it.get("ttl",0)): return None
     table.delete_item(Key={"email":_ovt_key(ovt)})
     return it.get("addr")
 
-# ----------- Users (SSM Parameter Store) -----------
+# ----------- Users -----------
 def _load_user(username: str):
     name = f"{PARAM_USER_PREFIX}/{username}"
     try:
@@ -101,11 +105,14 @@ def login(body):
     ovt      = body.get("ovt") or ""
     if not username or not password or not ovt:
         return _bad(400,"missing_fields")
+
     if not _consume_ovt(ovt):
         return _bad(400,"otp_not_verified")
+
     u = _load_user(username)
     if not u or u["password"] != password:
         return _bad(401,"invalid_credentials")
+
     token = _jwt_for(username, u["role"])
     return _ok({"token": token, "role": u["role"], "user": {"username":username, "name":u["name"], "email": u["email"]}})
 
@@ -115,13 +122,16 @@ def _auth(event):
     auth = h.get("authorization") or h.get("Authorization") or ""
     if not auth.lower().startswith("bearer "): raise Exception("noauth")
     token = auth.split(" ",1)[1].strip()
-    h64,p64,s64 = token.split(".")
-    secret = pssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
-    expect = base64.urlsafe_b64encode(hmac.new(secret, f"{h64}.{p64}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-    if expect != s64: raise Exception("sig")
-    payload = json.loads(base64.urlsafe_b64decode(p64+"===").decode())
-    if int(time.time()) >= int(payload.get("exp",0)): raise Exception("exp")
-    return payload
+    try:
+        h64,p64,s64 = token.split(".")
+        secret = pssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
+        expect = base64.urlsafe_b64encode(hmac.new(secret, f"{h64}.{p64}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+        if expect != s64: raise Exception("sig")
+        payload = json.loads(base64.urlsafe_b64decode(p64+"===").decode())
+        if int(time.time()) >= int(payload.get("exp",0)): raise Exception("exp")
+        return payload
+    except Exception:
+        raise
 
 # ----------- EC2 helpers -----------
 def _is_env(name: str) -> str|None:
@@ -141,7 +151,9 @@ def instances(_event, _ctx):
     filters = [{"Name": "tag:Name", "Values": [f"*{e}*" for e in ENV_NAMES]}]
     r = ec2.describe_instances(Filters=filters)
     envs = {}
-    total = running = stopped = 0
+    counts = {k:0 for k in ["pending","running","stopping","stopped","shutting-down","terminated"]}
+    total = 0
+
     for res in r.get("Reservations", []):
         for i in res.get("Instances", []):
             state = i.get("State",{}).get("Name")
@@ -151,14 +163,25 @@ def instances(_event, _ctx):
             envs.setdefault(env, {"DM":[], "EA":[]})
             envs[env][blk].append({"id": i["InstanceId"], "name": name, "state": state})
             total += 1
-            if state=="running": running+=1
-            if state=="stopped": stopped+=1
-    return _ok({"summary":{"total": total, "running": running, "stopped": stopped}, "envs": envs})
+            if state in counts: counts[state] += 1
+
+    summary = {
+        "total": total,
+        "running": counts["running"],
+        "stopped": counts["stopped"],
+        "pending": counts["pending"],
+        "stopping": counts["stopping"],
+        "shutting_down": counts["shutting-down"],
+        "terminated": counts["terminated"]
+    }
+    return _ok({"summary": summary, "envs": envs})
 
 def instance_action(event, _ctx):
     b = json.loads(event.get("body") or "{}")
-    iid = b.get("id"); action = (b.get("action") or "").lower()
-    if not iid or action not in ("start","stop"): return _bad(400,"bad_request")
+    iid = b.get("id")
+    action = (b.get("action") or "").lower()
+    if not iid or action not in ("start","stop"):
+        return _bad(400,"bad_request")
     try:
         if action=="start": ec2.start_instances(InstanceIds=[iid])
         else: ec2.stop_instances(InstanceIds=[iid])
@@ -168,7 +191,8 @@ def instance_action(event, _ctx):
 
 def bulk_action(event, _ctx):
     b = json.loads(event.get("body") or "{}")
-    ids = b.get("ids") or []; action = (b.get("action") or "").lower()
+    ids = b.get("ids") or []
+    action = (b.get("action") or "").lower()
     if not ids or action not in ("start","stop"): return _bad(400,"bad_request")
     try:
         if action=="start": ec2.start_instances(InstanceIds=ids)
@@ -179,18 +203,19 @@ def bulk_action(event, _ctx):
 
 # ----------- SSM helpers ----------
 def _ssm_check(instance_id: str):
-    """Return (status, ping). status in {'ok','not_managed','offline','error'}"""
+    """
+    Return (status, ping) where status in {'ok','not_managed','offline','error'}.
+    """
     try:
         resp = ssm.describe_instance_information(
             Filters=[{"Key":"InstanceIds","Values":[instance_id]}]
         )
         lst = resp.get("InstanceInformationList", [])
         if not lst:
-            return ("not_managed", "")
+            return ("not_managed", "Unknown")
         ping = lst[0].get("PingStatus", "Unknown")
         return ("ok", ping) if ping == "Online" else ("offline", ping)
     except ClientError as e:
-        log.exception("SSM describe_instance_information failed")
         return ("error", e.response.get("Error",{}).get("Message",""))
 
 def _run_powershell(instance_id: str, script: str, timeout=150):
@@ -199,7 +224,7 @@ def _run_powershell(instance_id: str, script: str, timeout=150):
             InstanceIds=[instance_id],
             DocumentName="AWS-RunPowerShellScript",
             Parameters={"commands": [script]},
-            CloudWatchOutputConfig={"CloudWatchLogGroupName":"__ec2_dashboard__", "CloudWatchOutputEnabled": False},
+            TimeoutSeconds=timeout
         )
     except ClientError as e:
         return (False, "", f"send_command_failed: {e.response.get('Error',{}).get('Message','')}")
@@ -223,11 +248,14 @@ def _json_services(out: str):
     try:
         data = json.loads(out)
         if isinstance(data, dict): data = [data]
-        return [{
-            "Name": s.get("Name") or "",
-            "DisplayName": s.get("DisplayName") or "",
-            "Status": s.get("Status") or s.get("State") or ""
-        } for s in data]
+        items=[]
+        for s in data:
+            items.append({
+                "Name": s.get("Name") or "",
+                "DisplayName": s.get("DisplayName") or "",
+                "Status": s.get("Status") or s.get("State") or ""
+            })
+        return items
     except Exception:
         return []
 
@@ -238,37 +266,38 @@ def services(event, _ctx):
     name  = b.get("service") or ""
     inst_name = (b.get("instanceName") or "")
     pattern   = (b.get("pattern") or "").strip()
-
-    # --- Robust type detection (substring, case-insensitive)
+    typ = "generic"
     nm = inst_name.lower()
-    if   "sql"   in nm: typ = "sql"
-    elif "redis" in nm: typ = "redis"
-    elif "svc"   in nm or "web" in nm: typ = "svcweb"
-    else: typ = "generic"
+    if "sql" in nm:      typ = "sql"
+    elif "redis" in nm:  typ = "redis"
+    elif re.search(r"\bsvc\b|\bweb\b", nm): typ = "svcweb"
 
     if not iid: return _bad(400,"missing_instance")
 
-    # We *try* even if SSM says offline; if it fails, the error is surfaced.
-    ssm_status, ssm_ping = _ssm_check(iid)
+    st, ping = _ssm_check(iid)
+    if st != "ok":
+        msg = "ssm_not_managed" if st=="not_managed" else ("ssm_offline" if st=="offline" else "ssm_error")
+        return _ok({"services": [], "type": typ, "error": f"{msg} ({ping})"})
 
     if mode == "list":
         if typ == "sql":
+            # broader case-insensitive regex for SQL-related services
             ps = r"""
-$sv = Get-Service | Where-Object { $_.Name -match '^(MSSQL|SQLAgent|SQLBrowser|SQLWriter)' } |
+$sv = Get-Service | Where-Object { $_.Name -match '(?i)(MSSQL|SQL|SQLAgent|SQLBrowser|SQLWriter)' -or $_.DisplayName -match '(?i)SQL' } |
   Select-Object Name,DisplayName,Status
 $sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err or (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
         if typ == "redis":
             ps = r"""
-$sv = Get-Service | Where-Object { $_.Name -match 'redis' -or $_.DisplayName -match 'redis' } |
+$sv = Get-Service | Where-Object { $_.Name -match '(?i)redis' -or $_.DisplayName -match '(?i)redis' } |
   Select-Object Name,DisplayName,Status
 $sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err or (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
         if typ == "svcweb":
             if not pattern or len(pattern) < 2:
@@ -281,9 +310,10 @@ $sv = Get-Service | Where-Object {{ $_.Name -match $re -or $_.DisplayName -match
 $sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err or (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
-        return _ok({"services": [], "type": typ, "error": (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+        # generic (no known type)
+        return _ok({"services": [], "type": typ})
 
     if mode in ("start","stop"):
         if not name: return _bad(400,"service_required")
@@ -295,13 +325,12 @@ try {{
 Get-Service -Name '{name}' | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 3 -Compress
 """.strip()
         ok,out,err = _run_powershell(iid, ps)
-        return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err or (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+        return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
     if mode == "iisreset":
-        if not ("svc" in nm or "web" in nm):
-            return _bad(400,"iisreset_only_for_svcweb")
-        ok,out,err = _run_powershell(iid, "iisreset /restart")
-        return _ok({"ok": ok, "type": typ, "error": err or (ssm_status+(":"+ssm_ping if ssm_ping else ""))})
+        ps = "iisreset /restart"
+        ok,out,err = _run_powershell(iid, ps)
+        return _ok({"ok": ok, "type": typ, "error": err})
 
     return _bad(400,"bad_mode")
 
