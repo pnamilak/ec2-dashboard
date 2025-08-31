@@ -5,83 +5,68 @@
   <title>Sign in • EC2 Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root{ --bg:#0e1624; --panel:#121b2b; --ink:#e6e9ef; --mut:#9aa4b2; --ok:#2e9762; --bad:#b94a4a; --chip:#19243a }
-    html,body{height:100%}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif;display:flex;align-items:center;justify-content:center}
-    .card{width:min(640px,92vw);background:var(--panel);border-radius:16px;padding:18px;box-shadow:0 0 0 1px #1c2840 inset}
-    input{width:100%;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px;margin-top:10px}
-    .btn{margin-top:14px;width:100%;padding:12px;border-radius:10px;background:linear-gradient(90deg,#6aa8ff,#7affe3);border:0;color:#0e1624;font-weight:700;cursor:pointer}
+    :root{--bg:#0e1624;--panel:#121b2b;--ink:#e6e9ef;--mut:#9aa4b2;--ok:#2e9762;--bad:#b94a4a}
+    body{margin:0;background:radial-gradient(1000px 600px at 70% -200px,#22304e 5%,#0e1624 55%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+    .wrap{max-width:520px;margin:80px auto;padding:0 16px}
+    .card{background:rgba(18,27,43,.96);border-radius:16px;padding:24px;box-shadow:0 8px 60px rgba(0,0,0,.4)}
+    .title{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px}
+    .dot{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#9ef 0%,#9fb 100%)}
+    label{font-size:12px;color:#bcd}
+    input{width:100%;margin-top:6px;margin-bottom:14px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
+    .btn{width:100%;padding:10px;border-radius:12px;background:linear-gradient(90deg,#7bb9ff,#8cf3c7);border:0;color:#082035;font-weight:700;cursor:pointer}
     .mut{color:#9aa4b2;font-size:12px;margin-top:8px}
-    .err{color:#ffb3bf;font-size:12px;margin-top:8px}
+    .err{color:#ffaaaa;font-size:12px;margin-top:8px;min-height:16px}
+    a{color:#a8e0ff}
   </style>
 </head>
 <body>
-  <div class="card">
-    <div style="font-size:20px;font-weight:700">Complete your sign-in</div>
-    <input id="u" placeholder="username" autocomplete="username" />
-    <input id="p" placeholder="password" type="password" autocomplete="current-password" />
-    <button class="btn" onclick="signin()">Sign in</button>
-    <div id="msg" class="err"></div>
-    <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="/" style="color:#8bc5ff">go back</a>.</div>
+  <div class="wrap">
+    <div class="card">
+      <div class="title"><div class="dot"></div> Complete your sign-in</div>
+      <div class="mut" style="margin:6px 0 14px 0">Enter your EC2 Dashboard credentials</div>
+
+      <label>Username</label>
+      <input id="u" autocomplete="username" required>
+
+      <label>Password</label>
+      <input id="p" type="password" autocomplete="current-password" required>
+
+      <button class="btn" id="go">Sign in</button>
+      <div class="err" id="msg"></div>
+
+      <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="./">go back</a>.</div>
+    </div>
   </div>
 
 <script>
-(function(){
-  // 1) read API base from storage (set by index.html.tpl)
-  const API = localStorage.getItem("api_base_url") || "";
-
-  // 2) get verified email from URL 'e' OR from storage (session first, then local)
-  const qs = new URLSearchParams(location.search);
-  const fromQS = (qs.get("e")||"").trim().toLowerCase();
-  let otpEmail = fromQS || (sessionStorage.getItem("otp_email")||"").toLowerCase() || (localStorage.getItem("otp_email")||"").toLowerCase();
-
-  // 3) if we found it in the URL, persist it to BOTH storages (covers new CF domains/tabs)
-  if(fromQS){
-    try { sessionStorage.setItem("otp_email", fromQS); localStorage.setItem("otp_email", fromQS); } catch(_) {}
-  }
-
-  // 4) show a nice message if still missing
-  if(!otpEmail){
-    document.getElementById("msg").textContent = "missing_verified_otp";
-  }
+  var API = (localStorage.getItem("api_base_url") || "${api_base_url}");
 
   function http(path, method, obj){
-    return fetch(API+path,{
-      method,
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify(obj||{})
-    }).then(async r=>{
-      const data = await r.json().catch(()=> ({}));
-      if(!r.ok){ throw new Error((data && (data.error||data.message)) || ("http "+r.status)); }
-      return data;
-    });
+    return fetch(API + path, {method:method, headers:{"content-type":"application/json"}, body: JSON.stringify(obj||{})})
+      .then(async r=>{ const t=await r.text(); let d={}; try{d=t?JSON.parse(t):{};}catch(e){d={raw:t};}
+        if(!r.ok) throw new Error((d&&d.error)||t||("http "+r.status)); return d; });
   }
+  function $(id){ return document.getElementById(id); }
 
-  // expose signin globally
-  window.signin = function(){
-    const username = document.getElementById("u").value.trim();
-    const password = document.getElementById("p").value;
-    const msg = document.getElementById("msg");
-    msg.textContent = "";
+  function requireFreshOVT(){
+    var ovt = localStorage.getItem("ovt")||"";
+    var exp = parseInt(localStorage.getItem("ovt_exp")||"0",10);
+    if(!ovt || !exp || Date.now()>exp){ window.location.href="./"; }
+  }
+  requireFreshOVT();
 
-    // if OTP email is missing, bounce to OTP page
-    if(!otpEmail){
-      msg.textContent = "missing_verified_otp";
-      return;
-    }
-
-    http("/login","POST",{username,password,otp_email: otpEmail})
-      .then(res=>{
-        try{
-          localStorage.setItem("jwt", res.jwt);
-          localStorage.setItem("role", res.role||"");
-          localStorage.setItem("user", JSON.stringify({username, role:res.role||"", name:res.name||""}));
-        }catch(_){}
-        location.href = "/";
-      })
-      .catch(e=>{ msg.textContent = e.message || "invalid_password"; });
+  $("go").onclick = function(){
+    var u=$("u").value.trim(), p=$("p").value;
+    var ovt = localStorage.getItem("ovt")||"";
+    $("msg").textContent="";
+    http("/login","POST",{username:u,password:p,ovt:ovt}).then(function(res){
+      localStorage.removeItem("ovt"); localStorage.removeItem("ovt_exp");
+      localStorage.setItem("jwt", res.token);
+      localStorage.setItem("role", res.role);
+      localStorage.setItem("user", JSON.stringify(res.user));
+      window.location.href = "./";
+    }).catch(function(e){ $("msg").textContent=e.message; });
   };
-})();
 </script>
 </body>
 </html>
