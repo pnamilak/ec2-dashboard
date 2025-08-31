@@ -1,46 +1,87 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta http-equiv="x-ua-compatible" content="ie=edge" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EC2 Dashboard • Sign in</title>
+  <meta charset="utf-8">
+  <title>Sign in • EC2 Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root{--bg:#0b1220;--panel:#121b2e;--muted:#a9b4c6;--text:#e7eefc;--btn:linear-gradient(90deg,#5aa8ff,#79f8d6);--err:#ff6b6b}
-    html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,'Helvetica Neue',Arial}
-    .wrap{min-height:100%;display:grid;place-items:center;padding:24px}
-    .card{width:min(760px,92vw);background:rgba(18,27,46,.92);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.45);padding:28px 28px 24px}
-    h1{margin:0 0 14px;font-size:22px}
-    p.sub{margin:0 0 18px;color:var(--muted)}
-    label{display:block;margin:16px 0 8px;color:var(--muted);font-size:13px}
-    input{width:100%;height:44px;border-radius:10px;border:1px solid #1e2942;background:#0e1627;color:var(--text);padding:0 12px}
-    input:focus{border-color:#2f8fff;box-shadow:0 0 0 3px rgba(47,143,255,.15);outline:none}
-    .btn{height:46px;border:0;border-radius:10px;background:var(--btn);color:#081018;font-weight:700;width:100%;margin-top:16px;cursor:pointer}
-    .msg{min-height:22px;margin-top:10px;font-size:13px}
-    .err{color:var(--err)}
+    :root{ --bg:#0e1624; --panel:#121b2b; --ink:#e6e9ef; --mut:#9aa4b2; --ok:#2e9762; --bad:#b94a4a; --chip:#19243a }
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif;display:flex;align-items:center;justify-content:center}
+    .card{width:min(640px,92vw);background:var(--panel);border-radius:16px;padding:18px;box-shadow:0 0 0 1px #1c2840 inset}
+    input{width:100%;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px;margin-top:10px}
+    .btn{margin-top:14px;width:100%;padding:12px;border-radius:10px;background:linear-gradient(90deg,#6aa8ff,#7affe3);border:0;color:#0e1624;font-weight:700;cursor:pointer}
+    .mut{color:#9aa4b2;font-size:12px;margin-top:8px}
+    .err{color:#ffb3bf;font-size:12px;margin-top:8px}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <h1>Complete your sign-in</h1>
-      <p class="sub">Enter your EC2 Dashboard credentials.</p>
-
-      <label for="u">Username</label>
-      <input id="u" autocomplete="username" placeholder="username" />
-
-      <label for="p">Password</label>
-      <input id="p" type="password" autocomplete="current-password" placeholder="password" />
-
-      <button id="btn" class="btn" type="button">Sign in</button>
-      <div id="msg" class="msg"></div>
-
-      <p class="sub" style="margin-top:16px">
-        You’ve just verified your email OTP. If this page appeared without OTP, <a href="/">go back</a>.
-      </p>
-    </div>
+  <div class="card">
+    <div style="font-size:20px;font-weight:700">Complete your sign-in</div>
+    <input id="u" placeholder="username" autocomplete="username" />
+    <input id="p" placeholder="password" type="password" autocomplete="current-password" />
+    <button class="btn" onclick="signin()">Sign in</button>
+    <div id="msg" class="err"></div>
+    <div class="mut">You’ve just verified your email OTP. If this page appeared without OTP, <a href="/" style="color:#8bc5ff">go back</a>.</div>
   </div>
 
-  <script src="/login.js?v=1"></script>
+<script>
+(function(){
+  // 1) read API base from storage (set by index.html.tpl)
+  const API = localStorage.getItem("api_base_url") || "";
+
+  // 2) get verified email from URL 'e' OR from storage (session first, then local)
+  const qs = new URLSearchParams(location.search);
+  const fromQS = (qs.get("e")||"").trim().toLowerCase();
+  let otpEmail = fromQS || (sessionStorage.getItem("otp_email")||"").toLowerCase() || (localStorage.getItem("otp_email")||"").toLowerCase();
+
+  // 3) if we found it in the URL, persist it to BOTH storages (covers new CF domains/tabs)
+  if(fromQS){
+    try { sessionStorage.setItem("otp_email", fromQS); localStorage.setItem("otp_email", fromQS); } catch(_) {}
+  }
+
+  // 4) show a nice message if still missing
+  if(!otpEmail){
+    document.getElementById("msg").textContent = "missing_verified_otp";
+  }
+
+  function http(path, method, obj){
+    return fetch(API+path,{
+      method,
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify(obj||{})
+    }).then(async r=>{
+      const data = await r.json().catch(()=> ({}));
+      if(!r.ok){ throw new Error((data && (data.error||data.message)) || ("http "+r.status)); }
+      return data;
+    });
+  }
+
+  // expose signin globally
+  window.signin = function(){
+    const username = document.getElementById("u").value.trim();
+    const password = document.getElementById("p").value;
+    const msg = document.getElementById("msg");
+    msg.textContent = "";
+
+    // if OTP email is missing, bounce to OTP page
+    if(!otpEmail){
+      msg.textContent = "missing_verified_otp";
+      return;
+    }
+
+    http("/login","POST",{username,password,otp_email: otpEmail})
+      .then(res=>{
+        try{
+          localStorage.setItem("jwt", res.jwt);
+          localStorage.setItem("role", res.role||"");
+          localStorage.setItem("user", JSON.stringify({username, role:res.role||"", name:res.name||""}));
+        }catch(_){}
+        location.href = "/";
+      })
+      .catch(e=>{ msg.textContent = e.message || "invalid_password"; });
+  };
+})();
+</script>
 </body>
 </html>
