@@ -380,9 +380,16 @@ data "aws_instances" "stopped" {
 locals {
   running_ids = try(data.aws_instances.running.ids, [])
   stopped_ids = try(data.aws_instances.stopped.ids, [])
-  target_ids  = var.assign_profile_target == "running" ? local.running_ids :
-                var.assign_profile_target == "stopped" ? local.stopped_ids :
-                var.assign_profile_target == "both" ? distinct(concat(local.running_ids, local.stopped_ids)) : []
+  target_ids  = (
+    var.assign_profile_target == "running" ? local.running_ids :
+    (
+      var.assign_profile_target == "stopped" ? local.stopped_ids :
+      (
+        var.assign_profile_target == "both" ? distinct(concat(local.running_ids, local.stopped_ids)) :
+        []
+      )
+    )
+  )
 }
 
 resource "aws_iam_instance_profile_association" "attach" {
