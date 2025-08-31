@@ -84,7 +84,7 @@
 
 <script>
 const API = (localStorage.getItem("api_base_url") || "${api_base_url}");
-const ALLOWED_DOMAIN = "${allowed_email_domain}"; // templated by workflow
+const ALLOWED_DOMAIN = "${allowed_email_domain}";
 
 function http(path, method, obj){
   const hdr = {"content-type":"application/json"};
@@ -97,20 +97,44 @@ function http(path, method, obj){
 function $(id){ return document.getElementById(id); }
 function show(el, on){ el.style.display = on?"block":"none"; }
 
-function renderTabs(envs){
-  const tabs = Object.keys(envs);
+let currentEnv = null, lastData = null;
+
+function buildTabs(envs, active){
   const tabsEl = $("tabs"); tabsEl.innerHTML = "";
-  tabs.forEach((t,i)=>{
-    const b = document.createElement("div"); b.className='tab'+(i?"":" active"); b.textContent=t; b.onclick=()=>selectTab(t);
+  const names = Object.keys(envs);
+  names.forEach(t=>{
+    const b = document.createElement("div");
+    b.className = "tab" + (t===active ? " active" : "");
+    b.textContent = t;
+    b.onclick = () => { currentEnv = t; buildTabs(envs, currentEnv); renderCurrent(); };
     tabsEl.appendChild(b);
   });
-  selectTab(tabs[0]);
 }
 
-function selectTab(env){
-  const tabs = Array.from($("tabs").children);
-  tabs.forEach(x=>x.classList.toggle('active', x.textContent===env));
-  loadEnv(env);
+function renderCurrent(){
+  const d = lastData; if(!d) return;
+  const envData = (d.envs[currentEnv] || {DM:[],EA:[]});
+  const content = $("content"); content.innerHTML = '';
+  const grid = document.createElement('div'); grid.className='grid';
+
+  function blockUI(blockName, items){
+    const box = document.createElement('div'); box.className='block';
+    const h3 = document.createElement('h3'); h3.innerHTML = blockName +
+      `<span><button class="btn mono" id="start_${blockName}">Start all</button> <button class="btn mono" id="stop_${blockName}">Stop all</button></span>`;
+    const list = document.createElement('div'); list.className='list';
+    items.forEach(it=> list.appendChild(instanceRow(it)) );
+    box.appendChild(h3); box.appendChild(list); grid.appendChild(box);
+    setTimeout(()=>{
+      $("start_"+blockName).onclick = ()=> bulk(blockName==='Dream Mapper'?'DM':'EA','start');
+      $("stop_"+blockName).onclick  = ()=> bulk(blockName==='Dream Mapper'?'DM':'EA','stop');
+    });
+  }
+
+  blockUI('Dream Mapper', envData.DM||[]);
+  blockUI('Encore Anywhere', envData.EA||[]);
+  content.appendChild(grid);
+
+  $("summary").textContent = `Env: ${currentEnv} | Total: ${d.summary.total} • Running: ${d.summary.running} • Stopped: ${d.summary.stopped}`;
 }
 
 function instanceRow(it){
@@ -118,7 +142,7 @@ function instanceRow(it){
   const left = document.createElement("div"); left.textContent = it.name; const tag=document.createElement('span'); tag.className='tag'; tag.textContent = it.state; left.appendChild(tag);
   const actions = document.createElement("div");
   const btn = document.createElement("button"); btn.className='btn mono'; btn.textContent = (it.state==='running')? 'Stop':'Start';
-  btn.onclick = async ()=>{ btn.disabled=true; try{await http('/instance-action','POST',{id:it.id,action: it.state==='running'?'stop':'start'}); await loadEnv(currentEnv);} finally{btn.disabled=false;} };
+  btn.onclick = async ()=>{ btn.disabled=true; try{await http('/instance-action','POST',{id:it.id,action: it.state==='running'?'stop':'start'}); lastData=null; await refresh(currentEnv);} finally{btn.disabled=false;} };
   const svc = document.createElement("button"); svc.className='btn'; svc.style.marginLeft='8px'; svc.textContent='Services';
   svc.onclick = ()=> openServices(it);
   actions.appendChild(btn); actions.appendChild(svc);
@@ -126,37 +150,21 @@ function instanceRow(it){
   return row;
 }
 
-let currentEnv = null, lastData = null;
-
-async function loadEnv(env){
-  currentEnv = env;
-  const d = lastData || await http('/instances','GET'); lastData=d;
-  const envData = d.envs[env] || {DM:[],EA:[]};
-  const content = $("content"); content.innerHTML = '';
-  const grid = document.createElement('div'); grid.className='grid';
-  ['DM','EA'].forEach(block=>{
-    const box = document.createElement('div'); box.className='block';
-    const h3 = document.createElement('h3'); h3.innerHTML = (block==='DM'?'Dream Mapper':'Encore Anywhere')+
-      `<span><button class="btn mono" id="start_${block}">Start all</button> <button class="btn mono" id="stop_${block}">Stop all</button></span>`;
-    const list = document.createElement('div'); list.className='list';
-    (envData[block]||[]).forEach(it=> list.appendChild(instanceRow(it)) );
-    box.appendChild(h3); box.appendChild(list); grid.appendChild(box);
-    setTimeout(()=>{
-      $("start_"+block).onclick = ()=> bulk(block,'start');
-      $("stop_"+block).onclick  = ()=> bulk(block,'stop');
-    });
-  });
-  content.appendChild(grid);
-
-  $("summary").textContent = `Env: ${env} | Total: ${d.summary.total} • Running: ${d.summary.running} • Stopped: ${d.summary.stopped}`;
-}
-
 async function bulk(block, action){
   const envData = lastData.envs[currentEnv] || {DM:[],EA:[]};
   const ids = (envData[block]||[]).map(x=>x.id);
   if(!ids.length) return;
   await http('/bulk-action','POST',{ids, action});
-  lastData = null; await loadEnv(currentEnv);
+  lastData = null; await refresh(currentEnv);
+}
+
+async function refresh(desiredEnv){
+  if(!lastData) lastData = await http('/instances','GET');
+  const envs = lastData.envs;
+  if(!desiredEnv) desiredEnv = Object.keys(envs)[0] || 'NAQA1';
+  currentEnv = desiredEnv;
+  buildTabs(envs, currentEnv);
+  renderCurrent();
 }
 
 function openServices(it){
@@ -186,19 +194,16 @@ function openServices(it){
 
 function isLoggedIn(){ return !!localStorage.getItem('jwt'); }
 function logout(){ localStorage.removeItem('jwt'); localStorage.removeItem('role'); localStorage.removeItem('user'); location.reload(); }
-
 $("logout").onclick = logout;
 
-// --------------- OTP page logic ---------------
+// OTP page
 $("dom").textContent = ALLOWED_DOMAIN;
-
 async function sendOtp(){
   const email = $("email").value.trim().toLowerCase();
   if(!email.endsWith('@'+ALLOWED_DOMAIN)) { $("otpMsg").textContent='Only '+ALLOWED_DOMAIN+' allowed'; return; }
   $("otpMsg").textContent='Sending...';
   try{ await http('/request-otp','POST',{email}); $("otpMsg").textContent='OTP sent. Check your inbox.'; } catch(e){ $("otpMsg").textContent=e.message; }
 }
-
 async function verifyOtp(){
   const email = $("email").value.trim().toLowerCase();
   const code  = $("otp").value.trim();
@@ -210,13 +215,12 @@ async function verifyOtp(){
     window.location.href = 'login.html';
   }catch(e){ $("otpMsg").textContent = e.message; }
 }
-
 $("sendOtp").onclick = sendOtp;
 $("verifyOtp").onclick = verifyOtp;
 
-// --------------- Entry routing ---------------
-(function init(){
-  if(isLoggedIn()) { show($("dash"), true); loadEnv('NAQA1'); }
+// Entry routing
+(async function init(){
+  if(isLoggedIn()) { show($("dash"), true); await refresh('NAQA1'); }
   else { show($("otpCard"), true); }
 })();
 </script>
