@@ -164,6 +164,8 @@
       .then(()=>{$("otpMsg").textContent="OTP sent to "+em;})
       .catch(e=>{$("otpMsg").textContent=e.message;});
   }
+
+
   function verifyOtp(){
     const em = $("otpEmail").value.trim().toLowerCase();
     const cd = $("otpCode").value.trim();
@@ -171,11 +173,17 @@
     $("otpMsg").textContent="Verifying…";
     http("/verify-otp","POST",{email:em, code:cd})
       .then(()=>{
-        localStorage.setItem("otp_email", em);
-        window.location.href = "/login.html"; // to credentials page
+        // Save in BOTH storages for robustness across tabs & refreshes
+        try {
+          sessionStorage.setItem("otp_email", em);
+          localStorage.setItem("otp_email", em);
+        } catch(_) {}
+        window.location.href = "/login.html"; // go to credentials page
       })
       .catch(e=>{$("otpMsg").textContent=e.message;});
   }
+
+
 
   // ===== Dashboard =====
   function refresh(){
