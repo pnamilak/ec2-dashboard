@@ -1,205 +1,366 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>EC2 Dashboard</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#0b1220;color:#e6e6e6}
-  .wrap{max-width:1100px;margin:0 auto;padding:24px}
-  .card{background:#121a2a;border:1px solid #27314a;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 0 0 1px rgba(255,255,255,0.03) inset}
-  input,button,select{border-radius:10px;border:1px solid #3a4c6b;background:#0f1625;color:#e6e6e6;padding:10px}
-  button{cursor:pointer}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  .col{flex:1}
-  .tab{padding:8px 12px;border:1px solid #3a4c6b;border-bottom:none;border-radius:10px 10px 0 0;background:#0f1625;margin-right:6px;cursor:pointer}
-  .tab.active{background:#1b2740}
-  .block-title{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
-  .inst{display:flex;align-items:center;justify-content:space-between;border:1px solid #33425e;border-radius:10px;padding:8px;margin:6px 0;background:#0f1625}
-  .status.running{color:#3fd16f} .status.stopped{color:#ff8b8b}
-  .muted{opacity:.8}
-  .pill{padding:2px 8px;border-radius:999px;background:#22304d;border:1px solid #3a4c6b;margin-right:6px}
-  dialog{border:none;border-radius:16px;background:#0f1625;color:#e6e6e6;box-shadow:0 10px 40px rgba(0,0,0,.6);width:min(700px,90vw)}
-  .right{display:flex;gap:8px}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EC2 Dashboard</title>
+  <style>
+    :root{
+      --bg:#0e1624; --ink:#e6e9ef; --mut:#9aa4b2; --panel:#121b2b; --card:#162338;
+      --tab:#1a243b; --tabA:#2a395e;
+
+      /* mild summary colors */
+      --m-total-1:#bed3ff; --m-total-2:#97bdff; --m-total-text:#0e1a2e;
+      --m-run-1:#c9f2da;  --m-run-2:#9fe2bf;  --m-run-text:#0d281a;
+      --m-stop-1:#e9eef6; --m-stop-2:#ced8e7; --m-stop-text:#0e1a2e;
+    }
+    body{margin:0;background:radial-gradient(1100px 680px at 70% -240px,#263557 5%,#0e1624 58%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+
+    header{display:flex;align-items:center;justify-content:center;padding:26px 18px}
+    .brand{font-weight:900;font-size:34px;letter-spacing:.4px;text-shadow:0 4px 14px rgba(0,0,0,.45)}
+    #logout{position:absolute;right:18px;top:18px}
+
+    .wrap{max-width:1120px;margin:0 auto;padding:0 16px 40px}
+    .card{background:rgba(18,27,43,.96);border-radius:18px;padding:18px;box-shadow:0 12px 70px rgba(0,0,0,.45)}
+
+    label{font-size:12px;color:#bcd}
+    input,button{font:inherit}
+    input[type=text],input[type=password],input[type=email],input[type=number]{width:100%;margin-top:6px;margin-bottom:12px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
+
+    /* Buttons */
+    .btn{padding:10px 16px;border-radius:999px;border:0;font-weight:800;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease}
+    .btn:active{transform:translateY(2px)}
+    .btn.mono{background:#1a2a45;color:#cfe6ff;border:1px solid #2c3e64;box-shadow:0 4px 0 #12213a, 0 10px 20px rgba(0,0,0,.25)}
+    .btn-ghost{background:transparent;border:1px solid #31476f;color:#cfe6ff}
+    .btn-start{background:linear-gradient(180deg,#bff3d1,#93dfb7); color:#0e2a1b; box-shadow:0 6px 0 #0d7d57, 0 14px 22px rgba(0,0,0,.18)}
+    .btn-stop{background:linear-gradient(180deg,#ffd0c9,#ff8d80); color:#401212; box-shadow:0 6px 0 #a02323, 0 14px 22px rgba(0,0,0,.18)}
+    .btn-svc{background:linear-gradient(180deg,#fff1b3,#ffcc63); color:#3a2500; box-shadow:0 6px 0 #b47a1a, 0 14px 22px rgba(0,0,0,.16)}
+
+    .mut{color:var(--mut);font-size:12px}
+    .err{color:#ffaaaa;font-size:12px;min-height:16px;margin-top:6px}
+
+    .tabs{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+    .tab{padding:9px 14px;border-radius:12px;background:var(--tab);border:1px solid #223356;cursor:pointer}
+    .tab.active{background:var(--tabA)}
+    .tab:first-child{font-weight:800}
+
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .block{border:1px solid #2a3a62;border-radius:14px;background:var(--card)}
+    .block h3{margin:0;padding:12px 12px;border-bottom:1px solid #2a3a62;display:flex;align-items:center;justify-content:space-between}
+    .list{padding:10px 12px}
+    .row{display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px dashed #2b3d63}
+    .row:last-child{border-bottom:0}
+    .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,#2a3d6b,#2e415f);color:#bfe1ff;margin-left:6px}
+
+    dialog{background:#0f172a;color:#e6e9ef;border:1px solid #2a3a62;border-radius:12px;max-width:820px;width:92%}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #223356;padding:8px;text-align:left}
+    .chip{background:linear-gradient(90deg,#a4b8ff,#a4ffd4); color:#061a22; padding:4px 8px; border-radius:10px; display:inline-block}
+    .controls{display:flex; gap:8px; align-items:center}
+
+    /* Summary tiles — vertical list (mild) */
+    .vstats{display:flex;flex-direction:column;gap:12px}
+    .stat{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-radius:14px;border:1px solid #223356;box-shadow:0 8px 22px rgba(0,0,0,.20)}
+    .stat .label{font-weight:800;letter-spacing:.4px}
+    .stat .num{font-size:30px;font-weight:900}
+
+    .s-total{background:linear-gradient(180deg,var(--m-total-1),var(--m-total-2)); color:var(--m-total-text)}
+    .s-run{background:linear-gradient(180deg,var(--m-run-1),var(--m-run-2)); color:var(--m-run-text)}
+    .s-stop{background:linear-gradient(180deg,var(--m-stop-1),var(--m-stop-2)); color:var(--m-stop-text)}
+  </style>
 </head>
 <body>
+<header>
+  <div class="brand">EC2 Dashboard</div>
+  <button id="logout" class="btn mono">Logout</button>
+</header>
+
 <div class="wrap">
-  <h2>EC2 Dashboard</h2>
-
-  <!-- STEP 1: Email + OTP -->
-  <div id="step1" class="card">
-    <h3>Step 1: Email OTP (allowed domain: <span class="pill">@${allowed_email_domain}</span>)</h3>
-    <div class="row">
-      <div class="col"><input id="email" placeholder="you@${allowed_email_domain}" style="width:100%"/></div>
-      <div><button onclick="requestOtp()">Request OTP</button></div>
+  <!-- OTP card -->
+  <div id="otpCard" class="card" style="max-width:520px; margin:40px auto; display:none;">
+    <div style="font-weight:800;font-size:20px;margin-bottom:6px;text-align:center">Verify your email</div>
+    <div class="mut" style="margin-bottom:12px;text-align:center">Allowed domain: <b id="dom" style="margin-left:6px"></b></div>
+    <label>Email</label>
+    <input id="email" type="email" placeholder="you@gmail.com" autocomplete="email"/>
+    <div class="controls" style="justify-content:center">
+      <button id="sendOtp" class="btn btn-svc">Send OTP</button>
+      <input id="otp" type="text" inputmode="numeric" placeholder="Enter 6-digit OTP" style="max-width:180px" />
+      <button id="verifyOtp" class="btn btn-ghost">Verify</button>
     </div>
-    <div class="row">
-      <div class="col"><input id="otp" placeholder="Enter 6-digit OTP" style="width:100%"/></div>
-      <div><button onclick="verifyOtp()">Verify OTP</button></div>
-    </div>
-    <div id="msg1" class="muted"></div>
+    <div id="otpMsg" class="err" style="text-align:center"></div>
   </div>
 
-  <!-- STEP 2: Username/Password -->
-  <div id="step2" class="card" style="display:none">
-    <h3>Step 2: Login</h3>
-    <div class="row">
-      <input id="username" placeholder="Username"/>
-      <input id="password" type="password" placeholder="Password"/>
-      <button onclick="login()">Login</button>
-    </div>
-    <div id="msg2" class="muted"></div>
-  </div>
-
-  <!-- STEP 3: Dashboard -->
+  <!-- Dashboard -->
   <div id="dash" style="display:none">
-    <div class="card">
-      <div id="summary"></div>
+    <div class="card" style="margin:14px 0; display:flex; align-items:center; justify-content:space-between;">
+      <div id="summary" class="mut">Loading summary…</div>
+      <div class="controls"><button id="btnRefreshTop" class="btn btn-ghost">Refresh</button></div>
     </div>
-    <div class="row" id="env-tabs"></div>
-    <div id="env-panels"></div>
+
+    <div id="tabs" class="tabs"></div>
+    <div id="content"></div>
   </div>
 </div>
 
 <dialog id="svcDlg">
-  <div style="padding:16px">
-    <h3>Services on <span id="svcInstName"></span></h3>
-    <div class="row">
-      <input id="svcFilter" placeholder="Type to filter (for SVC/WEB)"/>
-      <button onclick="loadServices()">Refresh</button>
-      <button onclick="iisReset()">IIS Reset</button>
-      <button onclick="closeSvc()">Close</button>
+  <form method="dialog">
+    <h3 style="margin:6px 0 12px">Services – <span id="svcInst"></span></h3>
+    <div class="controls" id="svcControls" style="margin-bottom:10px">
+      <input id="svcFilter" placeholder="Type 2+ letters (SVC/WEB only)"/>
+      <button id="btnFilter" class="btn btn-svc">List</button>
+      <button id="btnIIS" class="btn mono">IIS reset</button>
     </div>
-    <div id="svcList" style="margin-top:12px"></div>
-  </div>
+    <div style="max-height:60vh; overflow:auto">
+      <table>
+        <thead><tr><th>Name</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="svcBody"></tbody>
+      </table>
+    </div>
+    <div id="svcMsg" class="mut" style="margin-top:8px"></div>
+    <div style="text-align:right;margin-top:12px"><button class="btn mono">Close</button></div>
+  </form>
 </dialog>
 
 <script>
-const API = "${api_base_url}";
-const ENV_NAMES = "${env_names}".split(",").filter(Boolean);
-let TOKEN = localStorage.getItem("token") || null;
-let CURRENT_ENV = null;
-let SVC_CTX = { id:null, name:null };
+const API = (localStorage.getItem("api_base_url") || "${api_base_url}");
+const ALLOWED_DOMAIN = "${allowed_email_domain}";
+const ENV_LABEL_MAP = { "DEV": "DevMini" };
 
-function el(id){ return document.getElementById(id); }
-function msg(id, t){ el(id).textContent = t; }
-
-async function requestOtp(){
-  const email = el('email').value.trim();
-  const r = await fetch(`$${API}/request-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
-  const j = await r.json();
-  msg('msg1', r.ok ? 'OTP sent. Check your email.' : (j.error || 'Failed'));
+function labelFor(envKey){ const k=(envKey||"").toUpperCase(); return ENV_LABEL_MAP[k] || envKey; }
+function http(path, method, obj){
+  const hdr = {"content-type":"application/json"};
+  const jwt = localStorage.getItem("jwt");
+  if(jwt) hdr["authorization"] = "Bearer "+jwt;
+  return fetch(API + path, {method, headers:hdr, body: method==="GET"?undefined:JSON.stringify(obj||{})})
+    .then(async r=>{ const t=await r.text(); let d={}; try{d=t?JSON.parse(t):{};}catch(e){d={raw:t};}
+      if(!r.ok) throw new Error((d&&d.error)||t||("http "+r.status)); return d; });
 }
-async function verifyOtp(){
-  const email = el('email').value.trim();
-  const code  = el('otp').value.trim();
-  const r = await fetch(`$${API}/verify-otp`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, code})});
-  const j = await r.json();
-  if(r.ok){ el('step2').style.display='block'; msg('msg1','OTP verified. Proceed to login.'); } else { msg('msg1', j.error || 'Failed'); }
-}
-async function login(){
-  const username = el('username').value.trim();
-  const password = el('password').value.trim();
-  const r = await fetch(`$${API}/login`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username,password})});
-  const j = await r.json();
-  if(r.ok){ TOKEN = j.token; localStorage.setItem('token', TOKEN); el('step1').style.display='none'; el('step2').style.display='none'; el('dash').style.display='block'; await loadDashboard(); }
-  else { msg('msg2', j.error || 'Login failed'); }
-}
+function $(id){ return document.getElementById(id); }
+function show(el, on){ el.style.display = on?"block":"none"; }
 
-function auth(){ return TOKEN ? {'Authorization':'Bearer '+TOKEN} : {}; }
+let currentTab = "Summary", lastData = null;
 
-async function loadDashboard(){
-  const r = await fetch(`$${API}/instances`, {headers: auth()});
-  const j = await r.json();
-  if(!r.ok){ alert(j.error||'Auth failed'); return; }
-  el('summary').innerHTML = `<span class="pill">Total: $${j.summary.total}</span>
-  <span class="pill">Running: $${j.summary.running}</span>
-  <span class="pill">Stopped: $${j.summary.stopped}</span>`;
-  renderEnvTabs(j.envs);
+function buildTabs(envs){
+  const tabsEl = $("tabs"); tabsEl.innerHTML = "";
+  const mk = (key, active)=> {
+    const b = document.createElement("div");
+    b.className = "tab" + (active ? " active" : "");
+    b.textContent = key === "Summary" ? "Summary" : labelFor(key);
+    b.onclick = () => { currentTab = key; render(); };
+    tabsEl.appendChild(b);
+  };
+  mk("Summary", currentTab === "Summary");
+  Object.keys(envs).forEach(t => mk(t, currentTab===t));
 }
 
-function renderEnvTabs(envs){
-  const tabs = el('env-tabs'); tabs.innerHTML = '';
-  ENV_NAMES.forEach((e,i)=>{
-    const t = document.createElement('div');
-    t.className = 'tab'+(i===0?' active':'');
-    t.textContent = e;
-    t.onclick = ()=>{ [...tabs.children].forEach(c=>c.classList.remove('active')); t.classList.add('active'); CURRENT_ENV=e; renderEnvPanel(envs,e); };
-    tabs.appendChild(t);
-  });
-  CURRENT_ENV = ENV_NAMES[0]; renderEnvPanel(envs, CURRENT_ENV);
+function instanceRow(it){
+  const row = document.createElement("div"); row.className='row';
+  const left = document.createElement("div"); left.textContent = it.name; const tag=document.createElement('span'); tag.className='tag'; tag.textContent = it.state; left.appendChild(tag);
+  const actions = document.createElement("div");
+  const btn = document.createElement("button"); btn.className = it.state==='running' ? 'btn btn-stop' : 'btn btn-start'; btn.textContent = (it.state==='running')? 'Stop':'Start';
+  btn.onclick = async ()=>{ btn.disabled=true; try{await http('/instance-action','POST',{id:it.id,action: it.state==='running'?'stop':'start'}); await refresh(); } finally{btn.disabled=false;} };
+  const svc = document.createElement("button"); svc.className='btn btn-svc'; svc.style.marginLeft='8px'; svc.textContent='Services';
+  svc.onclick = ()=> openServices(it);
+  actions.appendChild(btn); actions.appendChild(svc);
+  row.appendChild(left); row.appendChild(actions);
+  return row;
 }
 
-function renderEnvPanel(envs, env){
-  const p = el('env-panels'); const data = envs[env];
-  p.innerHTML = '';
-  ["DM","EA"].forEach(block=>{
-    const blockName = block==="DM" ? "Dream Mapper" : "Encore Anywhere";
-    const card = document.createElement('div'); card.className='card';
-    card.innerHTML = `<div class="block-title"><h3>$${blockName}</h3>
-      <div class="right">
-        <button onclick="groupAction('$${env}','$${block}','start')">Start All</button>
-        <button onclick="groupAction('$${env}','$${block}','stop')">Stop All</button>
-      </div></div>
-      <div id="list-$${env}-$${block}"></div>`;
-    p.appendChild(card);
-    const c = card.querySelector(`#list-$${env}-$${block}`);
-    (data[block]||[]).forEach(inst=>{
-      const div = document.createElement('div'); div.className='inst';
-      div.innerHTML = `<div><strong>$${inst.name}</strong> <span class="muted">($${inst.id})</span></div>
-        <div class="right">
-          <span class="status $${inst.state}">$${inst.state}</span>
-          $${inst.state==='running'
-            ? `<button onclick="act('$${inst.id}','stop')">Stop</button>`
-            : `<button onclick="act('$${inst.id}','start')">Start</button>`}
-          <button onclick="openServices('$${inst.id}','$${inst.name.replaceAll('"','&quot;')}')">Services</button>
-        </div>`;
-      c.appendChild(div);
+async function bulk(block, action){
+  const envData = lastData.envs[currentTab] || {DM:[],EA:[]};
+  const ids = (envData[block]||[]).map(x=>x.id);
+  if(!ids.length) return;
+  await http('/bulk-action','POST',{ids, action});
+  await refresh();
+}
+
+/* -------- Summary + Env renders -------- */
+function computeEnvTotals(envKey){
+  const e = lastData.envs[envKey] || {DM:[],EA:[]};
+  const items = [...(e.DM||[]), ...(e.EA||[])];
+  const by = {total:items.length, running:0, stopped:0};
+  items.forEach(x=>{ if(x.state==='running') by.running++; if(x.state==='stopped') by.stopped++; });
+  return by;
+}
+
+function statRow(cls, label, num){
+  const div = document.createElement('div');
+  div.className = `stat ${cls}`;
+  div.innerHTML = `<div class="label">${label}</div><div class="num">${num}</div>`;
+  return div;
+}
+
+function renderSummary(){
+  const d = lastData; if(!d) return;
+  const content = $("content"); content.innerHTML = '';
+  const card = document.createElement('div'); card.className='card';
+  const box = document.createElement('div'); box.className='vstats';
+
+  box.appendChild(statRow('s-total', 'Total',   d.summary.total ?? 0));
+  box.appendChild(statRow('s-run',   'Running', d.summary.running ?? 0));
+  box.appendChild(statRow('s-stop',  'Stopped', d.summary.stopped ?? 0));
+
+  card.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="font-size:20px;font-weight:900">Summary</div>
+      <div class="controls"><button id="btnRefresh" class="btn btn-ghost">Refresh</button></div>
+    </div>`;
+  card.appendChild(box);
+  content.appendChild(card);
+  $("btnRefresh").onclick = refresh;
+
+  $("summary").textContent = `Summary • Total: ${d.summary.total ?? 0} • Running: ${d.summary.running ?? 0} • Stopped: ${d.summary.stopped ?? 0}`;
+}
+
+function renderEnv(){
+  const d = lastData; if(!d) return;
+  const envTotals = computeEnvTotals(currentTab);
+  $("summary").textContent = `Env: ${labelFor(currentTab)} • Total: ${envTotals.total} • Running: ${envTotals.running} • Stopped: ${envTotals.stopped}`;
+
+  const envData = (d.envs[currentTab] || {DM:[],EA:[]});
+  const content = $("content"); content.innerHTML = '';
+  const grid = document.createElement('div'); grid.className='grid';
+
+  function blockUI(blockKey, title, items){
+    const box = document.createElement('div'); box.className='block';
+    const h3 = document.createElement('h3'); h3.innerHTML = `<span>${title}</span>
+      <span class="controls">
+        <button class="btn btn-ghost" id="envRefresh_${blockKey}">Refresh</button>
+        <button class="btn mono" id="start_${blockKey}">Start all</button>
+        <button class="btn mono" id="stop_${blockKey}">Stop all</button>
+      </span>`;
+    const list = document.createElement('div'); list.className='list';
+    items.forEach(it=> list.appendChild(instanceRow(it)) );
+    box.appendChild(h3); box.appendChild(list); grid.appendChild(box);
+    setTimeout(()=>{
+      $("start_"+blockKey).onclick = ()=> bulk(blockKey,'start');
+      $("stop_"+blockKey).onclick  = ()=> bulk(blockKey,'stop');
+      $("envRefresh_"+blockKey).onclick  = refresh;
     });
-  });
+  }
+
+  blockUI('DM','Dream Mapper', envData.DM||[]);
+  blockUI('EA','Encore Anywhere', envData.EA||[]);
+  content.appendChild(grid);
 }
 
-async function act(id, action){
-  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id, action})});
-  setTimeout(loadDashboard, 1500);
+function render(){
+  if(!lastData) return;
+  buildTabs(lastData.envs);
+  if(currentTab === "Summary") renderSummary();
+  else renderEnv();
 }
 
-async function groupAction(env, block, action){
-  await fetch(`$${API}/instance-action`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({env, block, action})});
-  setTimeout(loadDashboard, 2000);
+async function refresh(){
+  lastData = await http('/instances','GET');
+  if(currentTab !== "Summary" && !(currentTab in lastData.envs)) currentTab = "Summary";
+  render();
+}
+$("btnRefreshTop").onclick = refresh;
+
+/* -------- Services modal -------- */
+function openServices(it){
+  const dlg = $("svcDlg");
+  $("svcInst").textContent = it.name + ' ('+it.id+')';
+  const nm = (it.name||"").toLowerCase();
+
+  // Looser detection so names like "naqa6dmweb01" are picked up
+  const type =
+    nm.includes('sql')   ? 'sql'   :
+    nm.includes('redis') ? 'redis' :
+    (nm.includes('svc') || nm.includes('web')) ? 'svcweb' : 'generic';
+
+  // Show filter + IIS reset only for SVC/WEB
+  const controls = $("svcControls");
+  controls.style.display = (type === 'svcweb') ? 'flex' : 'none';
+  $("btnIIS").style.display = (type === 'svcweb') ? 'inline-block' : 'none';
+  $("svcBody").innerHTML = '';
+  $("svcMsg").textContent = '';
+
+  async function list(){
+    let payload = { id: it.id, mode:'list', instanceName: it.name, kind:type };
+    if (type === 'svcweb') {
+      const pat = $("svcFilter").value.trim();
+      if (pat.length < 2) {
+        $("svcBody").innerHTML = "";
+        $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
+        return;
+      }
+      payload.pattern = pat;
+    }
+    try{
+      const r = await http('/services','POST', payload);
+      const items = r.services || [];
+      const body = $("svcBody"); body.innerHTML='';
+      if (!items.length){
+        $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
+        return;
+      }
+      $("svcMsg").textContent = '';
+      items.forEach(s=>{
+        const tr=document.createElement('tr');
+        const disp = `<span class="chip">${s.DisplayName||''}</span>`;
+        tr.innerHTML = `<td>${s.Name||''}</td><td>${disp}</td><td>${s.Status||''}</td>`;
+        const td=document.createElement('td');
+        const a=document.createElement('button');
+        a.className = (s.Status==='Running'?'btn btn-stop':'btn btn-start');
+        a.textContent = (s.Status==='Running'?'Stop':'Start');
+        a.onclick = async ()=>{ a.disabled=true;
+          try{
+            await http('/services','POST',{
+              id:it.id, mode:(s.Status==='Running'?'stop':'start'),
+              service:s.Name, instanceName: it.name
+            });
+            await list();
+          } finally{ a.disabled=false; }
+        };
+        td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
+      });
+    }catch(e){
+      $("svcBody").innerHTML = "";
+      $("svcMsg").textContent = "Error: " + e.message;
+    }
+  }
+
+  $("btnFilter").onclick = (e)=>{ e.preventDefault(); list(); };
+  $("btnIIS").onclick    = async (e)=>{ e.preventDefault();
+    try { await http('/services','POST',{ id:it.id, mode:'iisreset', instanceName: it.name}); $("svcMsg").textContent="IIS reset sent."; }
+    catch(err){ $("svcMsg").textContent = "IIS reset error: " + err.message; }
+  };
+
+  // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
+  if (type==='sql' || type==='redis') list();
+
+  dlg.showModal();
 }
 
-function openServices(id, name){
-  SVC_CTX.id = id; SVC_CTX.name=name;
-  el('svcInstName').textContent = name;
-  el('svcDlg').showModal();
-  loadServices();
-}
-function closeSvc(){ el('svcDlg').close(); }
+/* -------- session / login -------- */
+function isLoggedIn(){ return !!localStorage.getItem('jwt'); }
+function logout(){ localStorage.removeItem('jwt'); localStorage.removeItem('role'); localStorage.removeItem('user'); location.reload(); }
+$("logout").onclick = logout;
 
-async function loadServices(){
-  const pattern = el('svcFilter').value.trim();
-  const r = await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, instanceName:SVC_CTX.name, mode:'list', pattern})});
-  const j = await r.json();
-  const list = el('svcList'); list.innerHTML = '';
-  (j.services||[]).forEach(s=>{
-    const d = document.createElement('div'); d.className='inst';
-    d.innerHTML = `<div>$${s.Name || s.name} <span class="pill">$${s.Status || s.status}</span></div>
-      <div class="right">
-        <button onclick="svc('$${s.Name || s.name}','start')">Start</button>
-        <button onclick="svc('$${s.Name || s.name}','stop')">Stop</button>
-      </div>`;
-    list.appendChild(d);
-  });
-}
-async function svc(name, action){
-  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, service:name, mode:action})});
-  setTimeout(loadServices, 1200);
-}
-async function iisReset(){
-  await fetch(`$${API}/services`, {method:'POST', headers:{'Content-Type':'application/json', ...auth()}, body: JSON.stringify({id:SVC_CTX.id, mode:'iisreset'})});
-}
+$("dom").textContent = ALLOWED_DOMAIN;
+$("sendOtp").onclick = async function(){
+  const email = $("email").value.trim().toLowerCase();
+  if(!email.endsWith('@'+ALLOWED_DOMAIN)) { $("otpMsg").textContent='Only '+ALLOWED_DOMAIN+' allowed'; return; }
+  $("otpMsg").textContent='Sending...';
+  try{ await http('/request-otp','POST',{email}); $("otpMsg").textContent='OTP sent. Check your inbox.'; } catch(e){ $("otpMsg").textContent=e.message; }
+};
+$("verifyOtp").onclick = async function(){
+  const email = $("email").value.trim().toLowerCase();
+  const code  = $("otp").value.trim();
+  if(!email || !code) { $("otpMsg").textContent='Enter email and OTP'; return; }
+  try{
+    const r = await http('/verify-otp','POST',{email,code});
+    localStorage.setItem('ovt', r.ovt);
+    localStorage.setItem('ovt_exp', String(Date.now()+ 5*60*1000));
+    window.location.href = 'login.html';
+  }catch(e){ $("otpMsg").textContent = e.message; }
+};
+
+(async function init(){
+  if(isLoggedIn()) { show($("dash"), true); await refresh(); }
+  else { show($("otpCard"), true); }
+})();
 </script>
 </body>
 </html>

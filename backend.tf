@@ -13,9 +13,13 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 
-  # Backend configuration is passed from the workflow via -backend-config flags.
+  # Backend configuration is injected by the workflow via -backend-config flags.
   backend "s3" {}
 }
 

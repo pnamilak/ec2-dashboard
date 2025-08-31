@@ -1,38 +1,38 @@
-import os, json, base64, hmac, hashlib, boto3, time
+import os, json, base64, hmac, hashlib, time, boto3
 
-region    = os.environ.get("REGION")
-jwt_param = os.environ.get("JWT_PARAM")
-ssm = boto3.client("ssm", region_name=region)
+REGION    = os.environ.get("REGION","us-east-2")
+JWT_PARAM = os.environ["JWT_PARAM"]
+ssm = boto3.client("ssm", region_name=REGION)
 
-def _read_secret():
-    p = ssm.get_parameter(Name=jwt_param, WithDecryption=True)
-    return p["Parameter"]["Value"].encode()
+def _b64pad(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "===")
 
-def _verify(token: str):
+def verify_jwt(token: str):
     try:
-        body_b64, sig_b64 = token.split(".")
-        body = base64.urlsafe_b64decode(body_b64 + "==")
-        sig  = base64.urlsafe_b64decode(sig_b64 + "==")
-        secret = _read_secret()
-        good = hmac.compare_digest(sig, hmac.new(secret, body, hashlib.sha256).digest())
-        if not good: return None
-        payload = json.loads(body)
-        if payload.get("exp",0) < time.time():
-            return None
+        h, p, s = token.split(".")
+        secret = ssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
+        exp_sig = base64.urlsafe_b64encode(hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()).rstrip(b"=")
+        if exp_sig.decode() != s: return None
+        payload = json.loads(_b64pad(p))
+        if int(time.time()) >= int(payload.get("exp",0)): return None
         return payload
     except Exception:
         return None
 
-def lambda_handler(event, context):
-    # HTTP API "simple response" authorizer
-    token = (event.get("headers") or {}).get("authorization") or (event.get("headers") or {}).get("Authorization")
-    if token and token.lower().startswith("bearer "):
-        token = token.split(" ",1)[1]
-    else:
-        token = None
+def allow(principal_id, ctx):
+    return {
+        "isAuthorized": True,
+        "context": ctx
+    }
 
-    payload = _verify(token) if token else None
-    if payload:
-        return {"isAuthorized": True, "context": {"sub": payload.get("sub","")}}
-    else:
-        return {"isAuthorized": False}
+def deny():
+    return {"isAuthorized": False}
+
+def lambda_handler(event, _context):
+    headers = event.get("headers") or {}
+    auth = headers.get("authorization") or headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        return deny()
+    payload = verify_jwt(auth.split(" ",1)[1])
+    if not payload: return deny()
+    return allow(payload.get("sub","user"), {"role": payload.get("role","read")})
