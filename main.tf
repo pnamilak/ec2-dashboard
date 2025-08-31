@@ -336,7 +336,7 @@ resource "aws_lambda_permission" "apigw_invoke_auth" {
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
 
-# ----------------------- SSM Instance Profile (optional attachment) -----------------------
+# ----------------------- SSM Instance Profile (optional) -----------------------
 resource "aws_iam_role" "ec2_ssm_role" {
   name = "${var.project_name}-ec2-ssm-role"
 
@@ -392,9 +392,33 @@ locals {
   )
 }
 
-resource "aws_iam_instance_profile_association" "attach" {
-  for_each             = { for id in local.target_ids : id => id }
-  instance_id          = each.value
-  iam_instance_profile = aws_iam_instance_profile.ec2_ssm_profile.name
-  replace_existing     = true
+# Attach/replace profile using AWS CLI (idempotent)
+resource "null_resource" "attach_profile" {
+  for_each = { for id in local.target_ids : id => id }
+
+  triggers = {
+    instance_id  = each.value
+    profile_name = aws_iam_instance_profile.ec2_ssm_profile.name
+  }
+
+  provisioner "local-exec" {
+    when    = create
+    command = <<-EOT
+      set -e
+      IID="${each.value}"
+      PROFILE="${aws_iam_instance_profile.ec2_ssm_profile.name}"
+
+      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values=$IID \
+        --query "IamInstanceProfileAssociations[0].AssociationId" \
+        --output text || true)
+
+      if [ "$ASSOC_ID" = "None" ] || [ -z "$ASSOC_ID" ]; then
+        aws ec2 associate-iam-instance-profile --instance-id "$IID" --iam-instance-profile Name="$PROFILE" >/dev/null
+      else
+        aws ec2 replace-iam-instance-profile-association --association-id "$ASSOC_ID" --iam-instance-profile Name="$PROFILE" >/dev/null
+      fi
+    EOT
+    interpreter = ["/bin/bash","-lc"]
+  }
 }
