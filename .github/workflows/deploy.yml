@@ -28,7 +28,7 @@ on:
       SES_SENDER_EMAIL:
         description: "SES verified sender address (deploy only)"
         required: false
-        default: "noreply@example.com"
+        default: "noreplyzingamazigle@gmail.com"
       TF_BACKEND_BUCKET:
         description: "(Optional) Pre-existing S3 bucket for TF state. Leave blank to auto-create."
         required: false
@@ -40,7 +40,7 @@ on:
 
 jobs:
   run:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     environment: ${{ inputs.ENVIRONMENT }}
 
     steps:
