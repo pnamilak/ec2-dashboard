@@ -278,9 +278,11 @@ def _ssm_is_online(iid: str) -> bool:
     except Exception:
         return False
 
-def _run_ssm_ps(instance_id: str, commands: list[str], timeout=60):
-    """Run PowerShell on the instance. Returns (ok, data|error_text)."""
-    # fast fail when the target is not online in SSM
+def _run_ssm_ps(instance_id: str, commands: list[str], timeout=120):
+    """
+    Run PowerShell on the instance. Returns (ok, data|error_text).
+    Longer timeout to handle slow SQL stops.
+    """
     if not _ssm_is_online(instance_id):
         return False, "not_connected"
 
@@ -300,85 +302,114 @@ def _run_ssm_ps(instance_id: str, commands: list[str], timeout=60):
         return False, msg
 
     cmd_id = resp["Command"]["CommandId"]
-    end_by = time.time() + timeout
-    while time.time() < end_by:
-        out = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            out = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+        except Exception as e:
+            # transient – keep polling
+            time.sleep(1.0)
+            continue
+
         st = out.get("Status")
         if st in ("Success", "Cancelled", "Failed", "TimedOut"):
             if st != "Success":
-                return False, (out.get("StandardErrorContent") or out.get("StandardOutputContent") or st)
-            return True, out.get("StandardOutputContent") or "[]"
-        time.sleep(1.0)
+                err = out.get("StandardErrorContent") or out.get("StandardOutputContent") or st
+                return False, (err or "").strip()
+            return True, (out.get("StandardOutputContent") or "[]")
+        time.sleep(1.2)
+
     return False, "timeout"
 
 def _ps_json_list_sql():
     # emit lowercase keys + lowercase status
-    return [r'''
+    return [rf"""
 $names = @('MSSQL*','SQLSERVERAGENT*','SQLBrowser','SQL*')
 $svcs = Get-Service -Name $names -ErrorAction SilentlyContinue |
-  Select-Object @{n='name';e={$_.Name}},
-                @{n='display';e={$_.DisplayName}},
-                @{n='status';e={$_.Status.ToString().ToLower()}}
+  Select-Object @{{n='name';e={{$_.Name}}}},
+                @{{n='display';e={{$_.DisplayName}}}},
+                @{{n='status';e={{$_.Status.ToString().ToLower()}}}}
 $svcs | ConvertTo-Json -Compress
-''']
+"""]
+
 
 def _ps_json_list_redis():
-    return [r'''
+    return [rf"""
 $svcs = Get-Service -Name 'Redis*' -ErrorAction SilentlyContinue |
-  Select-Object @{n='name';e={$_.Name}},
-                @{n='display';e={$_.DisplayName}},
-                @{n='status';e={$_.Status.ToString().ToLower()}}
+  Select-Object @{{n='name';e={{$_.Name}}}},
+                @{{n='display';e={{$_.DisplayName}}}},
+                @{{n='status';e={{$_.Status.ToString().ToLower()}}}}
 $svcs | ConvertTo-Json -Compress
-''']
+"""]
 
-def _ps_json_list_pattern(pattern:str):
+
+def _ps_json_list_pattern(pattern: str):
     p = re.sub(r"'", "''", pattern)
-    return [rf'''
+    # NOTE: all PowerShell curly braces are doubled to escape inside f-strings.
+    return [rf"""
 $pat = '{p}'
 $svcs = Get-Service | Where-Object {{ $_.Name -match $pat -or $_.DisplayName -match $pat }} |
-  Select-Object @{n='name';e={{$_.Name}}},
-                @{n='display';e={{$_.DisplayName}}},
-                @{n='status';e={{$_.Status.ToString().ToLower()}}}
+  Select-Object @{{n='name';e={{$_.Name}}}},
+                @{{n='display';e={{$_.DisplayName}}}},
+                @{{n='status';e={{$_.Status.ToString().ToLower()}}}}
 $svcs | ConvertTo-Json -Compress
-''']
+"""]
 
-def _ps_start(name:str):
+
+def _ps_start(name: str):
     n = name.replace("'", "''")
-    return [rf'''
+    # Wait ~40s for Running (SQL may take a while)
+    return [rf"""
+$ErrorActionPreference = 'Stop'
 try {{
-  $s = Get-Service -Name '{n}' -ErrorAction Stop
-  if ($s.Status -ne 'Running') {{
+  $svc = Get-Service -Name '{n}'
+  if ($svc.Status -ne 'Running') {{
     Start-Service -Name '{n}'
-    (Get-Service -Name '{n}').WaitForStatus('Running','00:00:20')
+    $svc = Get-Service -Name '{n}'
+    $svc.WaitForStatus('Running','00:00:40')
   }}
-  $s = Get-Service -Name '{n}'
-  [pscustomobject]@{{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }} |
+  Start-Sleep -Seconds 1
+  $svc = Get-Service -Name '{n}'
+  [pscustomobject]@{{ name=$svc.Name; display=$svc.DisplayName; status=$svc.Status.ToString().ToLower() }} |
     ConvertTo-Json -Compress
 }} catch {{
-  [pscustomobject]@{{ name='{n}'; display='{n}'; status='error' }} | ConvertTo-Json -Compress
+  [pscustomobject]@{{ name='{n}'; display='{n}'; status='error'; error=$_.Exception.Message }} |
+    ConvertTo-Json -Compress
 }}
-''']
+"""]
 
-def _ps_stop(name:str):
+def _ps_stop(name: str):
     n = name.replace("'", "''")
-    return [rf'''
+    # Wait up to ~80s for Stopped (SQL often needs longer)
+    return [rf"""
+$ErrorActionPreference = 'Stop'
 try {{
-  $s = Get-Service -Name '{n}' -ErrorAction Stop
-  if ($s.Status -ne 'Stopped') {{
+  $svc = Get-Service -Name '{n}'
+  if ($svc.Status -ne 'Stopped') {{
     Stop-Service -Name '{n}' -Force
-    (Get-Service -Name '{n}').WaitForStatus('Stopped','00:00:20')
+    $svc = Get-Service -Name '{n}'
+    $svc.WaitForStatus('Stopped','00:01:20')
   }}
-  $s = Get-Service -Name '{n}'
-  [pscustomobject]@{{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }} |
+  Start-Sleep -Seconds 1
+  $svc = Get-Service -Name '{n}'
+  [pscustomobject]@{{ name=$svc.Name; display=$svc.DisplayName; status=$svc.Status.ToString().ToLower() }} |
     ConvertTo-Json -Compress
 }} catch {{
-  [pscustomobject]@{{ name='{n}'; display='{n}'; status='error' }} | ConvertTo-Json -Compress
+  [pscustomobject]@{{ name='{n}'; display='{n}'; status='error'; error=$_.Exception.Message }} |
+    ConvertTo-Json -Compress
 }}
-''']
+"""]
 
 def _ps_iis_reset():
-    # we don't need JSON here; caller just returns a message
-    return [r"iisreset /noforce"]
+    return [r"""
+$ErrorActionPreference = 'Stop'
+try {
+  iisreset /noforce
+  @{ ok = $true; message = 'IIS reset issued' } | ConvertTo-Json -Compress
+} catch {
+  @{ ok = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}
+"""]
 
 def _normalize_services(arr):
     """Return list of items containing BOTH key styles the UI might expect."""
@@ -387,7 +418,7 @@ def _normalize_services(arr):
         name = s.get("name") or s.get("Name")
         display = s.get("display") or s.get("DisplayName")
         status = (s.get("status") or s.get("Status") or "").lower()
-        out.append({
+        item = {
             "name": name,
             "display": display,
             "status": status,
@@ -395,7 +426,11 @@ def _normalize_services(arr):
             "Name": name,
             "DisplayName": display,
             "Status": status,
-        })
+        }
+        # carry error through if present
+        if "error" in s:
+            item["error"] = s["error"]
+        out.append(item)
     return out
 
 def handle_services(body: dict):
@@ -413,8 +448,10 @@ def handle_services(body: dict):
 
     # Derive kind from name if not provided by UI
     if not kind:
-        kind = "svcweb" if ("svc" in inst_name or "web" in inst_name) else \
-               ("sql" if "sql" in inst_name else ("redis" if "redis" in inst_name else "generic"))
+        kind = (
+            "svcweb" if ("svc" in inst_name or "web" in inst_name)
+            else ("sql" if "sql" in inst_name else ("redis" if "redis" in inst_name else "generic"))
+        )
 
     try:
         if mode == "list":
@@ -441,7 +478,7 @@ def handle_services(body: dict):
             except Exception:
                 return _json(200, {"services": [], "error": "parse_error"})
 
-        elif mode in ("start","stop"):
+        elif mode in ("start", "stop"):
             svc = (body.get("service") or "").strip()
             if not svc:
                 return _json(400, {"error": "missing_service"})
@@ -460,8 +497,11 @@ def handle_services(body: dict):
             ok, out = _run_ssm_ps(iid, _ps_iis_reset())
             if not ok:
                 return _json(200, {"services": [], "error": out})
-            msg = (out or "").strip() or "IIS reset issued"
-            return _json(200, {"ok": True, "message": msg})
+            try:
+                payload = json.loads(out) if out else {"ok": True}
+            except Exception:
+                payload = {"ok": True}
+            return _json(200, payload)
 
         else:
             return _json(400, {"error": "bad_mode"})
@@ -494,4 +534,9 @@ def lambda_handler(event, context):
         return handle_instances()
     if path == "/instance-action" and method == "POST":
         return handle_instance_action(body)
-    if path == "/bulk-action" and method
+    if path == "/bulk-action" and method == "POST":
+        return handle_bulk(body)
+    if path == "/services" and method == "POST":
+        return handle_services(body)
+
+    return _json(404, {"error": "not_found", "path": path, "method": method})
