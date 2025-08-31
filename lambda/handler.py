@@ -19,7 +19,7 @@ ssm = boto3.client("ssm", region_name=REGION)
 ses = boto3.client("ses", region_name=REGION)
 ddb = boto3.resource("dynamodb", region_name=REGION)
 table = ddb.Table(OTP_TABLE)
-pssm = boto3.client("ssm", region_name=REGION)  # param store, send commands too
+pssm = boto3.client("ssm", region_name=REGION)  # param store + sendCommand
 
 # ----------- JWT helpers -----------
 def _b64url(b: bytes) -> str:
@@ -91,8 +91,7 @@ def _load_user(username: str):
         p = pssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
     except pssm.exceptions.ParameterNotFound:
         return None
-    # "password,role,email,name"
-    parts = [x.strip() for x in p.split(",")]
+    parts = [x.strip() for x in p.split(",")]  # password,role,email,name
     return {
         "password": parts[0] if len(parts)>0 else "",
         "role":     (parts[1].lower() if len(parts)>1 and parts[1] else "read"),
@@ -192,7 +191,25 @@ def bulk_action(event, _ctx):
         return _bad(400, e.response.get("Error",{}).get("Message","ec2_error"))
     return _ok({"ok": True})
 
-# ----------- SSM Services ----------
+# ----------- SSM helpers ----------
+def _ssm_check(instance_id: str):
+    """
+    Returns (status, ping) where status in {'ok','not_managed','offline','error'}.
+    ping is SSM PingStatus when available.
+    """
+    try:
+        resp = ssm.describe_instance_information(
+            Filters=[{"Key":"InstanceIds","Values":[instance_id]}]
+        )
+        lst = resp.get("InstanceInformationList", [])
+        if not lst:
+            return ("not_managed", "")
+        ping = lst[0].get("PingStatus", "Unknown")
+        return ("ok", ping) if ping == "Online" else ("offline", ping)
+    except ClientError as e:
+        log.exception("SSM describe_instance_information failed")
+        return ("error", e.response.get("Error",{}).get("Message",""))
+
 def _run_powershell(instance_id: str, script: str, timeout=150):
     try:
         cmd = ssm.send_command(
@@ -204,7 +221,6 @@ def _run_powershell(instance_id: str, script: str, timeout=150):
     except ClientError as e:
         return (False, "", f"send_command_failed: {e.response.get('Error',{}).get('Message','')}")
     cid = cmd["Command"]["CommandId"]
-    # poll
     for _ in range(int(timeout/2)):
         time.sleep(2)
         try:
@@ -244,11 +260,17 @@ def services(event, _ctx):
     pattern   = (b.get("pattern") or "").strip()
     typ = "generic"
     nm = inst_name.lower()
-    if "sql" in nm:    typ = "sql"
-    elif "redis" in nm: typ = "redis"
+    if "sql" in nm:      typ = "sql"
+    elif "redis" in nm:  typ = "redis"
     elif re.search(r"\bsvc\b|\bweb\b", nm): typ = "svcweb"
 
     if not iid: return _bad(400,"missing_instance")
+
+    # Ensure SSM is connected
+    st, ping = _ssm_check(iid)
+    if st != "ok":
+        msg = "ssm_not_managed" if st=="not_managed" else ("ssm_offline" if st=="offline" else "ssm_error")
+        return _ok({"services": [], "type": typ, "error": f"{msg} ({ping})"})
 
     if mode == "list":
         if typ == "sql":
@@ -297,7 +319,7 @@ Get-Service -Name '{name}' | Select-Object Name,DisplayName,Status | ConvertTo-J
         return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
     if mode == "iisreset":
-        if typ != "svcweb":
+        if not re.search(r"\bsvc\b|\bweb\b", nm):
             return _bad(400,"iisreset_only_for_svcweb")
         ps = "iisreset /restart"
         ok,out,err = _run_powershell(iid, ps)
