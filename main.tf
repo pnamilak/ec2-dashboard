@@ -254,12 +254,22 @@ resource "aws_apigatewayv2_integration" "api_lm" {
 
 # Authorizer (REQUEST w/ Authorization header)
 resource "aws_apigatewayv2_authorizer" "auth" {
-  api_id           = aws_apigatewayv2_api.api.id
-  authorizer_type  = "REQUEST"
-  name             = "jwt-req-auth"
-  authorizer_uri   = aws_lambda_function.authorizer.invoke_arn
-  identity_sources = ["$request.header.Authorization"]
+  api_id                              = aws_apigatewayv2_api.api.id
+  authorizer_type                     = "REQUEST"
+  name                                = "jwt-req-auth"
+
+  # Required for HTTP API REQUEST authorizers
+  authorizer_payload_format_version   = "2.0"
+  enable_simple_responses             = true
+  authorizer_result_ttl_in_seconds    = 300
+
+  # Lambda authorizer
+  authorizer_uri                      = aws_lambda_function.authorizer.invoke_arn
+
+  # Identity source (Authorization header)
+  identity_sources                    = ["$request.header.Authorization"]
 }
+
 
 # Routes (public)
 resource "aws_apigatewayv2_route" "r_request_otp" {
