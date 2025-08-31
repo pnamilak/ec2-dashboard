@@ -57,7 +57,7 @@ def request_otp(body):
                 "Body":{"Text":{"Data":f"Your one-time code is {code}. It expires in 10 minutes."}}
             }
         )
-    except ClientError as e:
+    except ClientError:
         log.exception("SES send failed")
         return _bad(500, "otp_send_failed")
     return _ok({"sent": True})
@@ -118,7 +118,7 @@ def login(body):
     token = _jwt_for(username, u["role"])
     return _ok({"token": token, "role": u["role"], "user": {"username":username, "name":u["name"], "email": u["email"]}})
 
-# ----------- Auth (for protected routes) -----------
+# ----------- Auth -----------
 def _auth(event):
     h = event.get("headers") or {}
     auth = h.get("authorization") or h.get("Authorization") or ""
@@ -137,7 +137,6 @@ def _auth(event):
 
 # ----------- EC2 helpers -----------
 def _is_env(name: str) -> str|None:
-    """Return env token if any of ENV_NAMES is contained in 'name'."""
     nl = name.upper()
     for e in ENV_NAMES:
         if e.upper() in nl:
@@ -151,7 +150,6 @@ def _block(name: str) -> str:
     return "DM"
 
 def instances(_event, _ctx):
-    # find instances with a Name tag that includes any ENV token
     filters = [{"Name": "tag:Name", "Values": [f"*{e}*" for e in ENV_NAMES]}]
     r = ec2.describe_instances(Filters=filters)
     envs = {}
@@ -195,23 +193,30 @@ def bulk_action(event, _ctx):
     return _ok({"ok": True})
 
 # ----------- SSM Services ----------
-def _run_powershell(instance_id: str, script: str, timeout=120):
-    cmd = ssm.send_command(
-        InstanceIds=[instance_id],
-        DocumentName="AWS-RunPowerShellScript",
-        Parameters={"commands": [script]},
-        CloudWatchOutputConfig={"CloudWatchLogGroupName":"__ec2_dashboard__", "CloudWatchOutputEnabled": False},
-    )
+def _run_powershell(instance_id: str, script: str, timeout=150):
+    try:
+        cmd = ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunPowerShellScript",
+            Parameters={"commands": [script]},
+            CloudWatchOutputConfig={"CloudWatchLogGroupName":"__ec2_dashboard__", "CloudWatchOutputEnabled": False},
+        )
+    except ClientError as e:
+        return (False, "", f"send_command_failed: {e.response.get('Error',{}).get('Message','')}")
     cid = cmd["Command"]["CommandId"]
     # poll
     for _ in range(int(timeout/2)):
         time.sleep(2)
-        inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
+        try:
+            inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
+        except ClientError as e:
+            return (False, "", f"get_command_invocation_failed: {e.response.get('Error',{}).get('Message','')}")
         st = inv.get("Status")
         if st in ("Success","Failed","Cancelled","TimedOut"):
             out = (inv.get("StandardOutputContent") or "").strip()
             err = (inv.get("StandardErrorContent") or "").strip()
-            return (st=="Success", out, err)
+            ok = (st=="Success")
+            return (ok, out, err if err else (None if ok else st))
     return (False, "", "timeout")
 
 def _json_services(out: str):
@@ -219,7 +224,6 @@ def _json_services(out: str):
     try:
         data = json.loads(out)
         if isinstance(data, dict): data = [data]
-        # normalize
         items=[]
         for s in data:
             items.append({
@@ -251,36 +255,33 @@ def services(event, _ctx):
             ps = r"""
 $sv = Get-Service | Where-Object { $_.Name -match '^(MSSQL|SQLAgent|SQLBrowser|SQLWriter)' } |
   Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json
+$sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": (None if ok else err)})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
         if typ == "redis":
             ps = r"""
 $sv = Get-Service | Where-Object { $_.Name -match 'redis' -or $_.DisplayName -match 'redis' } |
   Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json
+$sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": (None if ok else err)})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
-        # SVC/WEB requires a pattern (2-5+ letters)
         if typ == "svcweb":
             if not pattern or len(pattern) < 2:
                 return _ok({"services": [], "type": typ, "hint": "enter 2+ letters to filter"})
-            # escape regex
             esc = re.sub(r"[^A-Za-z0-9_\-\.\s]", ".", pattern)
             ps = rf"""
 $re = '{esc}'
 $sv = Get-Service | Where-Object {{ $_.Name -match $re -or $_.DisplayName -match $re }} |
   Select-Object Name,DisplayName,Status
-$sv | ConvertTo-Json
+$sv | ConvertTo-Json -Depth 4 -Compress
 """.strip()
             ok,out,err = _run_powershell(iid, ps)
-            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": (None if ok else err)})
+            return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
-        # generic / unknown
         return _ok({"services": [], "type": typ})
 
     if mode in ("start","stop"):
@@ -290,17 +291,17 @@ $sv | ConvertTo-Json
 try {{
   {action} -Name '{name}' -ErrorAction Stop
 }} catch {{}}
-Get-Service -Name '{name}' | Select-Object Name,DisplayName,Status | ConvertTo-Json
+Get-Service -Name '{name}' | Select-Object Name,DisplayName,Status | ConvertTo-Json -Depth 3 -Compress
 """.strip()
         ok,out,err = _run_powershell(iid, ps)
-        return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": (None if ok else err)})
+        return _ok({"services": _json_services(out) if ok else [], "type": typ, "error": err})
 
     if mode == "iisreset":
         if typ != "svcweb":
             return _bad(400,"iisreset_only_for_svcweb")
         ps = "iisreset /restart"
         ok,out,err = _run_powershell(iid, ps)
-        return _ok({"ok": ok, "type": typ, "error": (None if ok else err)})
+        return _ok({"ok": ok, "type": typ, "error": err})
 
     return _bad(400,"bad_mode")
 
