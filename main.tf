@@ -14,7 +14,9 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -40,8 +42,8 @@ resource "aws_cloudfront_distribution" "site" {
   default_root_object = "index.html"
 
   origin {
-    domain_name = aws_s3_bucket.website.bucket_regional_domain_name
-    origin_id   = "s3-origin"
+    domain_name              = aws_s3_bucket.website.bucket_regional_domain_name
+    origin_id                = "s3-origin"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
   }
 
@@ -54,29 +56,36 @@ resource "aws_cloudfront_distribution" "site" {
       query_string = false
       headers      = ["Origin"]
     }
+
     viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
     default_ttl            = 3600
     max_ttl                = 86400
   }
 
-  restrictions { geo_restriction { restriction_type = "none" } }
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
 
-  viewer_certificate { cloudfront_default_certificate = true }
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 }
 
 # Allow CloudFront OAC to read the bucket
 resource "aws_s3_bucket_policy" "site" {
   bucket = aws_s3_bucket.website.id
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [
       {
-        Sid       = "AllowCloudFrontServicePrincipal"
-        Effect    = "Allow"
-        Principal = { Service = "cloudfront.amazonaws.com" }
-        Action    = ["s3:GetObject"]
-        Resource  = ["${aws_s3_bucket.website.arn}/*"]
+        Sid       = "AllowCloudFrontServicePrincipal",
+        Effect    = "Allow",
+        Principal = { Service = "cloudfront.amazonaws.com" },
+        Action    = ["s3:GetObject"],
+        Resource  = ["${aws_s3_bucket.website.arn}/*"],
         Condition = {
           StringEquals = {
             "AWS:SourceArn" = aws_cloudfront_distribution.site.arn
@@ -94,7 +103,10 @@ resource "aws_dynamodb_table" "otp" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "email"
 
-  attribute { name = "email" type = "S" }
+  attribute {
+    name = "email"
+    type = "S"
+  }
 }
 
 # ----------------------- SSM Params -----------------------
@@ -142,22 +154,34 @@ resource "aws_iam_role_policy" "lambda_policy" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      { Effect = "Allow", Action = [
-          "logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"
-        ], Resource = "*" },
-      { Effect = "Allow", Action = [
-          "ses:SendEmail","ses:SendRawEmail"
-        ], Resource = "*" },
-      { Effect = "Allow", Action = [
+      {
+        Effect = "Allow",
+        Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = ["ses:SendEmail","ses:SendRawEmail"],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
           "ssm:GetParameter","ssm:GetParameters","ssm:DescribeParameters",
           "ssm:SendCommand","ssm:GetCommandInvocation","ssm:DescribeInstanceInformation"
-        ], Resource = "*" },
-      { Effect = "Allow", Action = [
-          "dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"
-        ], Resource = aws_dynamodb_table.otp.arn },
-      { Effect = "Allow", Action = [
-          "ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"
-        ], Resource = "*" }
+        ],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"],
+        Resource = aws_dynamodb_table.otp.arn
+      },
+      {
+        Effect = "Allow",
+        Action = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"],
+        Resource = "*"
+      }
     ]
   })
 }
@@ -225,10 +249,10 @@ resource "aws_apigatewayv2_integration" "api_lm" {
 
 # Authorizer (REQUEST w/ Authorization header)
 resource "aws_apigatewayv2_authorizer" "auth" {
-  api_id          = aws_apigatewayv2_api.api.id
-  authorizer_type = "REQUEST"
-  name            = "jwt-req-auth"
-  authorizer_uri  = aws_lambda_function.authorizer.invoke_arn
+  api_id           = aws_apigatewayv2_api.api.id
+  authorizer_type  = "REQUEST"
+  name             = "jwt-req-auth"
+  authorizer_uri   = aws_lambda_function.authorizer.invoke_arn
   identity_sources = ["$request.header.Authorization"]
 }
 
@@ -251,32 +275,32 @@ resource "aws_apigatewayv2_route" "r_login" {
 
 # Routes (protected)
 resource "aws_apigatewayv2_route" "r_instances" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "GET /instances"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
-  authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+  api_id              = aws_apigatewayv2_api.api.id
+  route_key           = "GET /instances"
+  target              = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type  = "CUSTOM"
+  authorizer_id       = aws_apigatewayv2_authorizer.auth.id
 }
 resource "aws_apigatewayv2_route" "r_instance_action" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /instance-action"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
-  authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+  api_id              = aws_apigatewayv2_api.api.id
+  route_key           = "POST /instance-action"
+  target              = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type  = "CUSTOM"
+  authorizer_id       = aws_apigatewayv2_authorizer.auth.id
 }
 resource "aws_apigatewayv2_route" "r_bulk" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /bulk-action"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
-  authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+  api_id              = aws_apigatewayv2_api.api.id
+  route_key           = "POST /bulk-action"
+  target              = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type  = "CUSTOM"
+  authorizer_id       = aws_apigatewayv2_authorizer.auth.id
 }
 resource "aws_apigatewayv2_route" "r_services" {
-  api_id    = aws_apigatewayv2_api.api.id
-  route_key = "POST /services"
-  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
-  authorization_type = "CUSTOM"
-  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+  api_id              = aws_apigatewayv2_api.api.id
+  route_key           = "POST /services"
+  target              = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type  = "CUSTOM"
+  authorizer_id       = aws_apigatewayv2_authorizer.auth.id
 }
 
 resource "aws_apigatewayv2_stage" "default" {
