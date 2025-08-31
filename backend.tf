@@ -15,7 +15,7 @@ terraform {
     }
   }
 
-  # Backend configuration is passed from the workflow via -backend-config flags.
+  # Backend is configured by the workflow via -backend-config flags
   backend "s3" {}
 }
 

@@ -1,4 +1,4 @@
-import os, json, base64, hmac, hashlib, time, boto3
+import os, json, base64, hmac, hashlib, boto3
 
 REGION    = os.environ.get("REGION","us-east-2")
 JWT_PARAM = os.environ.get("JWT_PARAM")

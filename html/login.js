@@ -7,7 +7,6 @@
 
   function setMsg(t, cls) { msg.className = "msg " + (cls || ""); msg.textContent = t || ""; }
 
-  // rehydrate last OTP (up to 10 minutes) if a new tab opened login.html directly
   function ensureOtpInSession() {
     const token = sessionStorage.getItem("otp_token");
     const email = sessionStorage.getItem("otp_email");
@@ -38,7 +37,7 @@
     return data;
   }
 
-  btn.onclick = async () => {
+  btn && (btn.onclick = async () => {
     setMsg("");
 
     if (needOtp()) { setMsg("missing_verified_otp", "err"); return; }
@@ -71,5 +70,5 @@
     } finally {
       btn.disabled = false;
     }
-  };
+  });
 })();

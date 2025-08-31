@@ -9,7 +9,7 @@ output "cloudfront_domain" {
 }
 
 output "website_bucket" {
-  value       = aws_s3_bucket.website.id
+  value = aws_s3_bucket.website.id
 }
 
 output "lambda_api_name" {
@@ -29,7 +29,6 @@ output "cloudfront_id" {
   description = "CloudFront distribution ID"
   value       = aws_cloudfront_distribution.site.id
 }
-
 
 output "api_base_url" {
   description = "HTTP API base URL"

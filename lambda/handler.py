@@ -32,8 +32,15 @@ ssm   = boto3.client("ssm", region_name=REGION)      # Fleet + RunCommand
 ec2   = boto3.client("ec2", region_name=REGION)
 table = ddb.Table(OTP_TABLE)
 
-def ok(b):   return {"statusCode":200,"headers":{"content-type":"application/json"},"body":json.dumps(b)}
-def bad(c,m): return {"statusCode":c,"headers":{"content-type":"application/json"},"body":json.dumps({"error":m})}
+CORS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization,content-type",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+}
+
+def ok(b):   return {"statusCode":200,"headers":{**{"content-type":"application/json"},**CORS},"body":json.dumps(b)}
+
+def bad(c,m): return {"statusCode":c,"headers":{**{"content-type":"application/json"},**CORS},"body":json.dumps({"error":m})}
 
 # ---------- OTP ----------
 def request_otp(data):
@@ -86,7 +93,7 @@ def _consume_ovt(ovt: str) -> str | None:
     r = table.get_item(Key={"email":k})
     item = r.get("Item")
     if not item: return None
-    if int(time.time()) > int(item.get("expiresAt",0)): 
+    if int(time.time()) > int(item.get("expiresAt",0)):
         table.delete_item(Key={"email":k})
         return None
     email = item.get("code")
@@ -108,7 +115,7 @@ def login(data):
     if user.get("password") != p:
         return bad(401, "invalid_password")
 
-    # server-side OTP enforcement: OVT must exist and match user's email (if configured)
+    # server-side OTP enforcement
     email_verified = _consume_ovt(ovt)
     if not email_verified:
         return bad(401, "otp_expired")
@@ -121,12 +128,7 @@ def login(data):
     token = _jwt_for(u, role, param, JWT_PARAM, ttl_seconds=3600)
     return {
         "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "authorization,content-type",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        },
+        "headers": {"Content-Type": "application/json", **CORS},
         "body": json.dumps({"token":token,"role":role,"user":{"username":u,"role":role,"name":user.get("name") or u}}),
     }
 
@@ -172,6 +174,20 @@ def instance_action(event, _):
         code=e.response["Error"]["Code"]
         return ok({"error":"ec2_"+code, "reason": e.response["Error"].get("Message","")})
 
+def bulk_action(event, _):
+    body=json.loads(event.get("body") or "{}")
+    ids=body.get("ids") or []
+    action=(body.get("action") or "").lower()
+    if not ids or action not in ("start","stop"):
+        return bad(400,"bad_request")
+    try:
+        if action=="start": ec2.start_instances(InstanceIds=ids)
+        else:               ec2.stop_instances(InstanceIds=ids)
+        return ok({"ok":True,"count":len(ids)})
+    except ClientError as e:
+        code=e.response["Error"]["Code"]
+        return ok({"error":"ec2_"+code, "reason": e.response["Error"].get("Message",""), "count":len(ids)})
+
 # ---------- SSM helpers ----------
 def ssm_online(instance_id):
     try:
@@ -213,7 +229,7 @@ $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue |
 if ($null -eq $svc) { Write-Output "{}" } else { $svc | ConvertTo-Json -Depth 4 -Compress }
 """
 
-POWERSHELL_IISRESET = _PREAMBLE + r"iisreset /noforce | Out-Null; Write-Output '{""ok"":true}'"
+POWERSHELL_IISRESET = _PREAMBLE + r"iisreset /noforce | Out-Null; Write-Output '{\"ok\":true}'"
 
 def _run_ps(instance_id, script, timeout=45):
     try:
@@ -305,6 +321,7 @@ def lambda_handler(event, ctx):
 
     if path.endswith("/instances")        and method=="GET":  return instances(event, ctx)
     if path.endswith("/instance-action")  and method=="POST": return instance_action(event, ctx)
+    if path.endswith("/bulk-action")      and method=="POST": return bulk_action(event, ctx)
     if path.endswith("/services")         and method=="POST": return services(event, ctx)
 
     return bad(404,"not_found")
