@@ -3,7 +3,9 @@ locals {
   name_filters     = [for e in var.env_names : "*${e}*"]
 }
 
-resource "random_id" "site" { byte_length = 3 }
+resource "random_id" "site" {
+  byte_length = 3
+}
 
 # ----------------------- S3 Website -----------------------
 resource "aws_s3_bucket" "website" {
@@ -13,7 +15,9 @@ resource "aws_s3_bucket" "website" {
 
 resource "aws_s3_bucket_ownership_controls" "site" {
   bucket = aws_s3_bucket.website.id
-  rule { object_ownership = "BucketOwnerEnforced" }
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -48,8 +52,8 @@ resource "aws_cloudfront_distribution" "site" {
   }
 
   default_cache_behavior {
-    allowed_methods        = ["GET","HEAD","OPTIONS"]
-    cached_methods         = ["GET","HEAD"]
+    allowed_methods        = ["GET", "HEAD", "OPTIONS"]
+    cached_methods         = ["GET", "HEAD"]
     target_origin_id       = "s3-origin"
     viewer_protocol_policy = "redirect-to-https"
     min_ttl                = 0
@@ -60,12 +64,22 @@ resource "aws_cloudfront_distribution" "site" {
     forwarded_values {
       query_string = false
       headers      = ["Origin"]
-      cookies { forward = "none" }
+
+      cookies {
+        forward = "none"
+      }
     }
   }
 
-  restrictions { geo_restriction { restriction_type = "none" } }
-  viewer_certificate { cloudfront_default_certificate = true }
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
 }
 
 resource "aws_s3_bucket_policy" "site" {
@@ -78,7 +92,11 @@ resource "aws_s3_bucket_policy" "site" {
       Principal = { Service = "cloudfront.amazonaws.com" },
       Action    = ["s3:GetObject"],
       Resource  = ["${aws_s3_bucket.website.arn}/*"],
-      Condition = { StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.site.arn } }
+      Condition = {
+        StringEquals = {
+          "AWS:SourceArn" = aws_cloudfront_distribution.site.arn
+        }
+      }
     }]
   })
   depends_on = [aws_cloudfront_distribution.site]
@@ -89,11 +107,19 @@ resource "aws_dynamodb_table" "otp" {
   name         = "${var.project_name}-otp"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "email"
-  attribute { name = "email" type = "S" }
+
+  attribute {
+    name = "email"
+    type = "S"
+  }
 }
 
 # ----------------------- SSM Params -----------------------
-resource "random_password" "jwt" { length = 32 special = false }
+resource "random_password" "jwt" {
+  length  = 32
+  special = false
+}
+
 resource "aws_ssm_parameter" "jwt_secret" {
   name  = "/${var.project_name}/jwt-secret"
   type  = "SecureString"
@@ -107,23 +133,29 @@ resource "aws_ssm_parameter" "user_params" {
   value    = each.value
 }
 
-# ----------------------- Lambda: API -----------------------
+# ----------------------- Lambda packages -----------------------
 data "archive_file" "api_zip" {
   type        = "zip"
   source_file = "lambda/handler.py"
   output_path = "lambda/handler.zip"
 }
+
 data "archive_file" "auth_zip" {
   type        = "zip"
   source_file = "lambda/authorizer.py"
   output_path = "lambda/authorizer.zip"
 }
 
+# ----------------------- Lambda Role -----------------------
 resource "aws_iam_role" "lambda_exec" {
-  name               = "${var.project_name}-lambda-exec"
+  name = "${var.project_name}-lambda-exec"
+
   assume_role_policy = jsonencode({
-    Version = "2012-10-17", Statement = [{
-      Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole"
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action   = "sts:AssumeRole"
     }]
   })
 }
@@ -131,21 +163,43 @@ resource "aws_iam_role" "lambda_exec" {
 resource "aws_iam_role_policy" "lambda_policy" {
   name = "${var.project_name}-policy"
   role = aws_iam_role.lambda_exec.id
+
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      { Effect="Allow", Action=["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], Resource="*" },
-      { Effect="Allow", Action=["ses:SendEmail","ses:SendRawEmail"], Resource="*" },
-      { Effect="Allow", Action=[
+      {
+        Effect   = "Allow",
+        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["ses:SendEmail","ses:SendRawEmail"],
+        Resource = "*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
           "ssm:GetParameter","ssm:GetParameters","ssm:DescribeParameters",
           "ssm:SendCommand","ssm:GetCommandInvocation","ssm:DescribeInstanceInformation"
-        ], Resource="*" },
-      { Effect="Allow", Action=["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"], Resource=aws_dynamodb_table.otp.arn },
-      { Effect="Allow", Action=["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"], Resource="*" }
+        ],
+        Resource = "*"
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"],
+        Resource = aws_dynamodb_table.otp.arn
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"],
+        Resource = "*"
+      }
     ]
   })
 }
 
+# ----------------------- Lambdas -----------------------
 resource "aws_lambda_function" "api" {
   function_name = "${var.project_name}-api"
   role          = aws_iam_role.lambda_exec.arn
@@ -153,6 +207,7 @@ resource "aws_lambda_function" "api" {
   handler       = "handler.lambda_handler"
   filename      = data.archive_file.api_zip.output_path
   timeout       = 30
+
   environment {
     variables = {
       REGION            = var.aws_region
@@ -173,17 +228,24 @@ resource "aws_lambda_function" "authorizer" {
   handler       = "authorizer.lambda_handler"
   filename      = data.archive_file.auth_zip.output_path
   timeout       = 10
-  environment { variables = { REGION = var.aws_region, JWT_PARAM = aws_ssm_parameter.jwt_secret.name } }
+
+  environment {
+    variables = {
+      REGION    = var.aws_region
+      JWT_PARAM = aws_ssm_parameter.jwt_secret.name
+    }
+  }
 }
 
 # ----------------------- API Gateway -----------------------
 resource "aws_apigatewayv2_api" "api" {
   name          = "${var.project_name}-http"
   protocol_type = "HTTP"
+
   cors_configuration {
     allow_origins = ["*"]
-    allow_headers = ["authorization","content-type"]
-    allow_methods = ["GET","POST","OPTIONS"]
+    allow_headers = ["authorization", "content-type"]
+    allow_methods = ["GET", "POST", "OPTIONS"]
   }
 }
 
@@ -195,56 +257,124 @@ resource "aws_apigatewayv2_integration" "api_lm" {
 }
 
 resource "aws_apigatewayv2_authorizer" "auth" {
-  api_id                             = aws_apigatewayv2_api.api.id
-  authorizer_type                    = "REQUEST"
-  name                               = "jwt-req-auth"
-  authorizer_uri                     = aws_lambda_function.authorizer.invoke_arn
-  identity_sources                   = ["$request.header.Authorization"]
-  authorizer_payload_format_version  = "2.0"
-  enable_simple_responses            = true
-  authorizer_result_ttl_in_seconds   = 300
+  api_id                            = aws_apigatewayv2_api.api.id
+  authorizer_type                   = "REQUEST"
+  name                              = "jwt-req-auth"
+  authorizer_uri                    = aws_lambda_function.authorizer.invoke_arn
+  identity_sources                  = ["$request.header.Authorization"]
+  authorizer_payload_format_version = "2.0"
+  enable_simple_responses           = true
+  authorizer_result_ttl_in_seconds  = 300
 }
 
 # Public routes
-resource "aws_apigatewayv2_route" "r_request_otp" { api_id=aws_apigatewayv2_api.api.id route_key="POST /request-otp" target="integrations/${aws_apigatewayv2_integration.api_lm.id}" }
-resource "aws_apigatewayv2_route" "r_verify_otp"  { api_id=aws_apigatewayv2_api.api.id route_key="POST /verify-otp"  target="integrations/${aws_apigatewayv2_integration.api_lm.id}" }
-resource "aws_apigatewayv2_route" "r_login"       { api_id=aws_apigatewayv2_api.api.id route_key="POST /login"       target="integrations/${aws_apigatewayv2_integration.api_lm.id}" }
+resource "aws_apigatewayv2_route" "r_request_otp" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /request-otp"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+}
+resource "aws_apigatewayv2_route" "r_verify_otp" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /verify-otp"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+}
+resource "aws_apigatewayv2_route" "r_login" {
+  api_id    = aws_apigatewayv2_api.api.id
+  route_key = "POST /login"
+  target    = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+}
 
 # Protected routes
-resource "aws_apigatewayv2_route" "r_instances"       { api_id=aws_apigatewayv2_api.api.id route_key="GET /instances"        target="integrations/${aws_apigatewayv2_integration.api_lm.id}" authorization_type="CUSTOM" authorizer_id=aws_apigatewayv2_authorizer.auth.id }
-resource "aws_apigatewayv2_route" "r_instance_action" { api_id=aws_apigatewayv2_api.api.id route_key="POST /instance-action"  target="integrations/${aws_apigatewayv2_integration.api_lm.id}" authorization_type="CUSTOM" authorizer_id=aws_apigatewayv2_authorizer.auth.id }
-resource "aws_apigatewayv2_route" "r_bulk"            { api_id=aws_apigatewayv2_api.api.id route_key="POST /bulk-action"     target="integrations/${aws_apigatewayv2_integration.api_lm.id}" authorization_type="CUSTOM" authorizer_id=aws_apigatewayv2_authorizer.auth.id }
-resource "aws_apigatewayv2_route" "r_services"        { api_id=aws_apigatewayv2_api.api.id route_key="POST /services"        target="integrations/${aws_apigatewayv2_integration.api_lm.id}" authorization_type="CUSTOM" authorizer_id=aws_apigatewayv2_authorizer.auth.id }
+resource "aws_apigatewayv2_route" "r_instances" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "GET /instances"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+resource "aws_apigatewayv2_route" "r_instance_action" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /instance-action"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+resource "aws_apigatewayv2_route" "r_bulk" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /bulk-action"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
+resource "aws_apigatewayv2_route" "r_services" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /services"
+  target             = "integrations/${aws_apigatewayv2_integration.api_lm.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
+}
 
-resource "aws_apigatewayv2_stage" "default" { api_id = aws_apigatewayv2_api.api.id name="$default" auto_deploy=true }
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.api.id
+  name        = "$default"
+  auto_deploy = true
+}
 
-resource "aws_lambda_permission" "apigw_invoke_api"  { statement_id="AllowAPIGInvoke"     action="lambda:InvokeFunction" function_name=aws_lambda_function.api.function_name        principal="apigateway.amazonaws.com" source_arn="${aws_apigatewayv2_api.api.execution_arn}/*/*" }
-resource "aws_lambda_permission" "apigw_invoke_auth" { statement_id="AllowAPIGInvokeAuth" action="lambda:InvokeFunction" function_name=aws_lambda_function.authorizer.function_name principal="apigateway.amazonaws.com" source_arn="${aws_apigatewayv2_api.api.execution_arn}/*/*" }
+resource "aws_lambda_permission" "apigw_invoke_api" {
+  statement_id  = "AllowAPIGInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "apigw_invoke_auth" {
+  statement_id  = "AllowAPIGInvokeAuth"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}
 
 # ----------------------- SSM Instance Profile (optional attachment) -----------------------
 resource "aws_iam_role" "ec2_ssm_role" {
   name = "${var.project_name}-ec2-ssm-role"
+
   assume_role_policy = jsonencode({
-    Version="2012-10-17", Statement=[{ Effect="Allow", Principal={ Service="ec2.amazonaws.com" }, Action="sts:AssumeRole" }]
+    Version   = "2012-10-17",
+    Statement = [{
+      Effect    = "Allow",
+      Principal = { Service = "ec2.amazonaws.com" },
+      Action    = "sts:AssumeRole"
+    }]
   })
 }
+
 resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   role       = aws_iam_role.ec2_ssm_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
+
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "${var.project_name}-ec2-ssm-profile"
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# Discover instances by env token + state
+# Find instances by env tokens + state
 data "aws_instances" "running" {
   instance_state_names = ["running"]
-  filter { name = "tag:Name" values = local.name_filters }
+  filter {
+    name   = "tag:Name"
+    values = local.name_filters
+  }
 }
+
 data "aws_instances" "stopped" {
   instance_state_names = ["stopped"]
-  filter { name = "tag:Name" values = local.name_filters }
+  filter {
+    name   = "tag:Name"
+    values = local.name_filters
+  }
 }
 
 locals {
@@ -256,8 +386,8 @@ locals {
 }
 
 resource "aws_iam_instance_profile_association" "attach" {
-  for_each            = { for id in local.target_ids : id => id }
-  instance_id         = each.value
+  for_each             = { for id in local.target_ids : id => id }
+  instance_id          = each.value
   iam_instance_profile = aws_iam_instance_profile.ec2_ssm_profile.name
   replace_existing     = true
 }

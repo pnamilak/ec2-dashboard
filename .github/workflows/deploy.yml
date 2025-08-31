@@ -29,6 +29,12 @@ on:
         description: "SES verified sender address (deploy only)"
         required: false
         default: "noreplyzingamazigle@gmail.com"
+      ASSIGN_PROFILE_TARGET:
+        description: "Attach SSM instance profile to which EC2s?"
+        required: true
+        default: "none"
+        type: choice
+        options: [none, running, stopped, both]
       TF_BACKEND_BUCKET:
         description: "(Optional) Pre-existing S3 bucket for TF state. Leave blank to auto-create."
         required: false
@@ -49,7 +55,6 @@ jobs:
 
       - name: Configure AWS credentials (from environment secrets)
         run: |
-          echo "Configuring AWS credentials from environment secrets"
           mkdir -p ~/.aws
           cat > ~/.aws/credentials <<EOF
           [default]
@@ -62,31 +67,24 @@ jobs:
           output=json
           EOF
 
-      # ---------- BOOTSTRAP BACKEND: create S3 state bucket + DynamoDB lock table if missing ----------
       - name: Bootstrap Terraform backend (S3 + DynamoDB)
         id: backend
         shell: bash
         run: |
           set -euo pipefail
-
           REGION="${{ inputs.AWS_REGION }}"
           ENVNAME="${{ inputs.ENVIRONMENT }}"
           USER_BUCKET="${{ inputs.TF_BACKEND_BUCKET }}"
           USER_TABLE="${{ inputs.TF_LOCK_TABLE }}"
-
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
           sanitize_bucket() {
             local raw="$1"
-            # lowercase and keep only a-z 0-9 and hyphen, using printf (no newline)
             local s
             s="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
-            # collapse multiple hyphens, trim leading/trailing hyphens
             s="$(printf '%s' "$s" | sed -E 's/-{2,}/-/g; s/^-+//; s/-+$//')"
-            # limit length to 63 and ensure it doesn't end with a hyphen
             s="${s:0:63}"
             s="$(printf '%s' "$s" | sed -E 's/-+$//')"
-            # ensure length >= 3; fall back to a safe pattern
             if [ ${#s} -lt 3 ]; then
               s="tfstate-${ACCOUNT_ID}-${REGION}"
               s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
@@ -94,7 +92,6 @@ jobs:
               s="${s:0:63}"
               s="$(printf '%s' "$s" | sed -E 's/-+$//')"
             fi
-            # ensure last char is alphanumeric; if not, drop it
             if ! [[ "${s: -1}" =~ [a-z0-9] ]]; then
               s="$(printf '%s' "${s%?}")"
             fi
@@ -117,11 +114,9 @@ jobs:
           echo "Using backend bucket: $BUCKET"
           echo "Using lock table   : $TABLE"
 
-          # Create S3 bucket if it doesn't exist
           if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
-            echo "Bucket exists: $BUCKET"
+            echo "Bucket exists"
           else
-            echo "Creating bucket: $BUCKET (region: $REGION)"
             if [ "$REGION" = "us-east-1" ]; then
               aws s3api create-bucket --bucket "$BUCKET"
             else
@@ -129,7 +124,6 @@ jobs:
             fi
           fi
 
-          # Recommended settings: versioning, encryption, public access block
           aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
           aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration '{
             "Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]
@@ -138,11 +132,9 @@ jobs:
             "BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true
           }'
 
-          # Create DynamoDB table if it doesn't exist
           if aws dynamodb describe-table --table-name "$TABLE" >/dev/null 2>&1; then
-            echo "DynamoDB table exists: $TABLE"
+            echo "Table exists"
           else
-            echo "Creating DynamoDB table: $TABLE"
             aws dynamodb create-table \
               --table-name "$TABLE" \
               --attribute-definitions AttributeName=LockID,AttributeType=S \
@@ -168,14 +160,15 @@ jobs:
             -backend-config="region=${{ inputs.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ steps.backend.outputs.table }}"
 
-      # -------------------- DEPLOY PATH --------------------
-      - name: Terraform Apply (deploy)
+      # -------------------- DEPLOY --------------------
+      - name: Terraform Apply
         if: ${{ inputs.ACTION == 'deploy' }}
         env:
           TF_VAR_aws_region: ${{ inputs.AWS_REGION }}
           TF_VAR_allowed_email_domain: ${{ inputs.ALLOWED_EMAIL_DOMAIN }}
           TF_VAR_ses_sender_email: ${{ inputs.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ inputs.WEBSITE_BUCKET_NAME }}
+          TF_VAR_assign_profile_target: ${{ inputs.ASSIGN_PROFILE_TARGET }}
         run: terraform apply -auto-approve
 
       - name: Capture outputs (deploy)
@@ -193,13 +186,13 @@ jobs:
           echo "site=$(cat .site.txt|| true)"   >> $GITHUB_OUTPUT
           echo "cfid=$(cat .cfid.txt|| true)"   >> $GITHUB_OUTPUT
 
-      - name: Build site (template API + domain) (deploy)
+      - name: Build site (inject API + domain)
         if: ${{ inputs.ACTION == 'deploy' }}
         run: |
           mkdir -p dist
           cp -r html/* dist/
           sed -i "s|\${api_base_url}|${{ steps.out.outputs.api }}|g" dist/index.html.tpl
-          sed -i "s|\${api_base_url}|${{ steps.out.outputs.api }}|g" dist/login.html
+          sed -i "s|\${api_base_url}|${{ steps.out.outputs.api }}|g" dist/login.html || true
           sed -i "s|\${allowed_email_domain}|${{ inputs.ALLOWED_EMAIL_DOMAIN }}|g" dist/index.html.tpl
           mv dist/index.html.tpl dist/index.html
 
@@ -211,38 +204,15 @@ jobs:
         if: ${{ inputs.ACTION == 'deploy' && steps.out.outputs.cfid != '' }}
         run: aws cloudfront create-invalidation --distribution-id "${{ steps.out.outputs.cfid }}" --paths "/*"
 
-      - name: Summary (deploy)
-        if: ${{ inputs.ACTION == 'deploy' }}
-        run: |
-          echo "CloudFront URL: https://${{ steps.out.outputs.cf }}"
-          echo "API Base URL:  ${{ steps.out.outputs.api }}"
-          echo "Site Bucket:   ${{ steps.out.outputs.site }}"
-          echo "TF State Bucket: ${{ steps.backend.outputs.bucket }}"
-          echo "TF Lock Table:   ${{ steps.backend.outputs.table }}"
-
-      # -------------------- DESTROY PATH --------------------
-      - name: Try to capture outputs (destroy)
+      # -------------------- DESTROY --------------------
+      - name: Empty website bucket (destroy – optional)
         if: ${{ inputs.ACTION == 'destroy' }}
-        id: destroy_out
         continue-on-error: true
         run: |
-          set +e
-          terraform output -raw site_bucket   > .site.txt 2>/dev/null || true
-          terraform output -raw cloudfront_id > .cfid.txt 2>/dev/null || true
-          terraform output -raw api_endpoint  > .api.txt  2>/dev/null || true
-          terraform output -raw cloudfront_domain > .cf.txt 2>/dev/null || true
-          set -e
-          echo "site=$(cat .site.txt  || true)"  >> $GITHUB_OUTPUT
-          echo "cfid=$(cat .cfid.txt  || true)"  >> $GITHUB_OUTPUT
-          echo "api=$(cat .api.txt    || true)"  >> $GITHUB_OUTPUT
-          echo "cf=$(cat .cf.txt      || true)"  >> $GITHUB_OUTPUT
-
-      - name: Empty website bucket (destroy – safe/optional)
-        if: ${{ inputs.ACTION == 'destroy' && steps.destroy_out.outputs.site != '' }}
-        continue-on-error: true
-        run: |
-          echo "Emptying bucket s3://${{ steps.destroy_out.outputs.site }} if it exists..."
-          aws s3 rm s3://${{ steps.destroy_out.outputs.site }} --recursive || true
+          SITE=$(terraform output -raw site_bucket 2>/dev/null || true)
+          if [ -n "$SITE" ]; then
+            aws s3 rm s3://$SITE --recursive || true
+          fi
 
       - name: Terraform Destroy
         if: ${{ inputs.ACTION == 'destroy' }}
@@ -251,12 +221,5 @@ jobs:
           TF_VAR_allowed_email_domain: ${{ inputs.ALLOWED_EMAIL_DOMAIN }}
           TF_VAR_ses_sender_email: ${{ inputs.SES_SENDER_EMAIL }}
           TF_VAR_website_bucket_name: ${{ inputs.WEBSITE_BUCKET_NAME }}
+          TF_VAR_assign_profile_target: ${{ inputs.ASSIGN_PROFILE_TARGET }}
         run: terraform destroy -auto-approve
-
-      - name: Summary (destroy)
-        if: ${{ inputs.ACTION == 'destroy' }}
-        run: |
-          echo "Destroy completed (or attempted)."
-          echo "Backend kept:"
-          echo "  TF State Bucket: ${{ steps.backend.outputs.bucket }}"
-          echo "  TF Lock Table:   ${{ steps.backend.outputs.table }}"
