@@ -375,13 +375,27 @@ resource "aws_s3_bucket_policy" "site" {
 
 # index.html (rendered from template)
 resource "aws_s3_object" "index" {
-  bucket        = aws_s3_bucket.website.id
-  key           = "index.html"
-  content_type  = "text/html"
-  content       = local.index_html_rendered
-  etag          = md5(local.index_html_rendered)
+  bucket       = aws_s3_bucket.website.id
+  key          = "index.html"
+  content_type = "text/html"
   cache_control = "no-store, no-cache, must-revalidate, max-age=0"
+
+  content = templatefile("${path.module}/html/index.html.tpl", {
+    api_base_url         = aws_apigatewayv2_api.api.api_endpoint
+    allowed_email_domain = var.allowed_email_domain
+    env_names            = jsonencode(var.env_names) # ← safer format for the template
+  })
+
+  # Optional: force new ETag when template variables change
+  etag = md5(
+    templatefile("${path.module}/html/index.html.tpl", {
+      api_base_url         = aws_apigatewayv2_api.api.api_endpoint
+      allowed_email_domain = var.allowed_email_domain
+      env_names            = jsonencode(var.env_names)
+    })
+  )
 }
+
 
 # login.html – always push if file changes (etag = md5(file))
 resource "aws_s3_object" "login_html" {
