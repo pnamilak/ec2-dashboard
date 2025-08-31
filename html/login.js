@@ -7,14 +7,29 @@
 
   function setMsg(t, cls) { msg.className = "msg " + (cls || ""); msg.textContent = t || ""; }
 
-  function needOtp() {
+  // Rehydrate sessionStorage from a 10-minute localStorage backup, if present
+  function ensureOtpInSession() {
     const token = sessionStorage.getItem("otp_token");
     const email = sessionStorage.getItem("otp_email");
     const ts    = Number(sessionStorage.getItem("otp_ts") || 0);
-    if (!token || !email) return true;
-    // Optional: 10-min freshness window
-    if (ts && (Math.floor(Date.now()/1000) - ts) > 600) return true;
-    return false;
+    if (token && email && ts) return true;
+
+    try {
+      const raw = localStorage.getItem("otp_bundle");
+      if (!raw) return false;
+      const { t, e, ts:lsTs } = JSON.parse(raw);
+      if (!t || !e || !lsTs) return false;
+      if ((Math.floor(Date.now()/1000) - Number(lsTs)) > 600) return false; // expired
+      sessionStorage.setItem("otp_token", t);
+      sessionStorage.setItem("otp_email", e);
+      sessionStorage.setItem("otp_ts", String(lsTs));
+      return true;
+    } catch { return false; }
+  }
+
+  function needOtp() {
+    if (ensureOtpInSession()) return false;
+    return true;
   }
 
   async function post(path, body) {
@@ -45,15 +60,15 @@
 
       const res = await post("/login", { username, password, otp_token, otp_email });
 
-      // Save JWT for the app and go home
       localStorage.setItem("jwt", res.token);
       localStorage.setItem("role", res.role||"read");
       localStorage.setItem("user", JSON.stringify(res.user||{}));
 
-      // OTP is single-use; clear to force new OTP next time
+      // Clean up both storages
       sessionStorage.removeItem("otp_token");
       sessionStorage.removeItem("otp_email");
       sessionStorage.removeItem("otp_ts");
+      localStorage.removeItem("otp_bundle");
 
       location.href = "/";
     } catch (e) {
