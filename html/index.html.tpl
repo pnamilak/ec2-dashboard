@@ -14,19 +14,14 @@
       --tab:#1a243b; --tabA:#2a395e;
     }
     body{margin:0;background:radial-gradient(1100px 680px at 70% -240px,#263557 5%,#0e1624 58%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
-
     header{display:flex;align-items:center;justify-content:center;padding:26px 18px}
     .brand{font-weight:900;font-size:34px;letter-spacing:.4px;text-shadow:0 4px 14px rgba(0,0,0,.45)}
     #logout{position:absolute;right:18px;top:18px}
-
     .wrap{max-width:1120px;margin:0 auto;padding:0 16px 40px}
     .card{background:rgba(18,27,43,.96);border-radius:18px;padding:18px;box-shadow:0 12px 70px rgba(0,0,0,.45)}
-
     label{font-size:12px;color:#bcd}
     input,button{font:inherit}
     input[type=text],input[type=password],input[type=email],input[type=number]{width:100%;margin-top:6px;margin-bottom:12px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
-
-    /* 3D buttons */
     .btn{padding:10px 16px;border-radius:999px;border:0;font-weight:800;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease}
     .btn:active{transform:translateY(2px)}
     .btn.mono{background:#1a2a45;color:#cfe6ff;border:1px solid #2c3e64;box-shadow:0 4px 0 #12213a, 0 10px 20px rgba(0,0,0,.25)}
@@ -34,15 +29,10 @@
     .btn-start{background:linear-gradient(180deg,var(--emerald1),var(--emerald2)); color:#07291c; box-shadow:0 6px 0 var(--emeraldShadow), 0 14px 22px rgba(0,0,0,.3)}
     .btn-stop{background:linear-gradient(180deg,var(--rose1),var(--rose2)); color:#3e0b0b; box-shadow:0 6px 0 var(--roseShadow), 0 14px 22px rgba(0,0,0,.3)}
     .btn-svc{background:linear-gradient(180deg,var(--amber1),var(--amber2)); color:#3a2500; box-shadow:0 6px 0 var(--amberShadow), 0 14px 22px rgba(0,0,0,.25)}
-
     .mut{color:var(--mut);font-size:12px}
-    .err{color:#ffaaaa;font-size:12px;min-height:16px;margin-top:6px}
-
     .tabs{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
     .tab{padding:9px 14px;border-radius:12px;background:var(--tab);border:1px solid #223356;cursor:pointer}
     .tab.active{background:var(--tabA)}
-    .tab:first-child{font-weight:800}
-
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .block{border:1px solid #2a3a62;border-radius:14px;background:var(--card)}
     .block h3{margin:0;padding:12px 12px;border-bottom:1px solid #2a3a62;display:flex;align-items:center;justify-content:space-between}
@@ -50,7 +40,6 @@
     .row{display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px dashed #2b3d63}
     .row:last-child{border-bottom:0}
     .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,var(--chip1),var(--chip2));color:#bfe1ff;margin-left:6px}
-
     dialog{background:#0f172a;color:#e6e9ef;border:1px solid #2a3a62;border-radius:12px;max-width:820px;width:92%}
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #223356;padding:8px;text-align:left}
@@ -58,7 +47,6 @@
     .controls{display:flex; gap:8px; align-items:center}
     .summary-badges{display:flex;gap:10px;flex-wrap:wrap}
     .badge{padding:8px 12px;border-radius:12px;background:#1a2a45;border:1px solid #2c3e64}
-    .right{position:absolute;right:18px;top:18px}
   </style>
 </head>
 <body>
@@ -79,7 +67,7 @@
       <input id="otp" type="text" inputmode="numeric" placeholder="Enter 6-digit OTP" style="max-width:180px" />
       <button id="verifyOtp" class="btn btn-ghost">Verify</button>
     </div>
-    <div id="otpMsg" class="err" style="text-align:center"></div>
+    <div id="otpMsg" class="mut" style="text-align:center;margin-top:6px"></div>
   </div>
 
   <!-- Dashboard -->
@@ -166,7 +154,6 @@ async function bulk(block, action){
   await refresh();
 }
 
-/* -------- Summary + Env renders -------- */
 function computeEnvTotals(envKey){
   const e = lastData.envs[envKey] || {DM:[],EA:[]};
   const items = [...(e.DM||[]), ...(e.EA||[])];
@@ -194,16 +181,14 @@ function renderSummary(){
     ${badges}`;
   content.appendChild(card);
   $("btnRefresh").onclick = refresh;
-
   $("summary").textContent = `Summary • Total: ${d.summary.total} • Running: ${d.summary.running} • Stopped: ${d.summary.stopped}`;
 }
 
 function renderEnv(){
-  const d = lastData; if(!d) return;
-  const envTotals = computeEnvTotals(currentTab);
-  $("summary").textContent = `Env: ${labelFor(currentTab)} • Total: ${envTotals.total} • Running: ${envTotals.running} • Stopped: ${envTotals.stopped}`;
+  const totals = computeEnvTotals(currentTab);
+  $("summary").textContent = `Env: ${labelFor(currentTab)} • Total: ${totals.total} • Running: ${totals.running} • Stopped: ${totals.stopped}`;
 
-  const envData = (d.envs[currentTab] || {DM:[],EA:[]});
+  const envData = (lastData.envs[currentTab] || {DM:[],EA:[]});
   const content = $("content"); content.innerHTML = '';
   const grid = document.createElement('div'); grid.className='grid';
 
@@ -249,12 +234,18 @@ function openServices(it){
   const dlg = $("svcDlg");
   $("svcInst").textContent = it.name + ' ('+it.id+')';
   const nm = it.name.toLowerCase();
-  const type = nm.includes('sql') ? 'sql' : (nm.includes('redis') ? 'redis' : ((/\bsvc\b|\bweb\b/.test(nm)) ? 'svcweb' : 'generic'));
+
+  // substring-based detection so 'dmsvc01' / 'dmweb01' work
+  let type = 'generic';
+  if (nm.includes('sql')) type = 'sql';
+  else if (nm.includes('redis')) type = 'redis';
+  else if (nm.includes('svc') || nm.includes('web')) type = 'svcweb';
 
   const controls = $("svcControls");
   controls.style.display = (type === 'svcweb') ? 'flex' : 'none';
   $("btnIIS").style.display = (type === 'svcweb') ? 'inline-block' : 'none';
   $("svcMsg").textContent = '';
+  $("svcBody").innerHTML = '';
 
   async function list(){
     let payload = { id: it.id, mode:'list', instanceName: it.name };
@@ -292,7 +283,7 @@ function openServices(it){
   $("btnFilter").onclick = (e)=>{ e.preventDefault(); list(); };
   $("btnIIS").onclick    = async (e)=>{ e.preventDefault(); await http('/services','POST',{id:it.id, mode:'iisreset', instanceName: it.name}); };
 
-  if (type==='sql' || type==='redis') list(); else { $("svcBody").innerHTML=''; $("svcMsg").textContent=''; }
+  if (type==='sql' || type==='redis') list();
   dlg.showModal();
 }
 
@@ -321,8 +312,8 @@ $("verifyOtp").onclick = async function(){
 };
 
 (async function init(){
-  if(isLoggedIn()) { show($("dash"), true); await refresh(); }
-  else { show($("otpCard"), true); }
+  if(isLoggedIn()) { document.getElementById("dash").style.display='block'; await refresh(); }
+  else { document.getElementById("otpCard").style.display='block'; }
 })();
 </script>
 </body>
