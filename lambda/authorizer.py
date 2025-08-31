@@ -1,8 +1,7 @@
-import os, json, base64, hmac, hashlib, boto3
+import os, json, base64, hmac, hashlib, time, boto3
 
 REGION    = os.environ.get("REGION","us-east-2")
-JWT_PARAM = os.environ.get("JWT_PARAM")
-
+JWT_PARAM = os.environ["JWT_PARAM"]
 ssm = boto3.client("ssm", region_name=REGION)
 
 def _b64pad(s: str) -> bytes:
@@ -13,9 +12,9 @@ def verify_jwt(token: str):
         h, p, s = token.split(".")
         secret = ssm.get_parameter(Name=JWT_PARAM, WithDecryption=True)["Parameter"]["Value"].encode()
         exp_sig = base64.urlsafe_b64encode(hmac.new(secret, f"{h}.{p}".encode(), hashlib.sha256).digest()).rstrip(b"=")
-        if exp_sig.decode() != s:
-            return None
+        if exp_sig.decode() != s: return None
         payload = json.loads(_b64pad(p))
+        if int(time.time()) >= int(payload.get("exp",0)): return None
         return payload
     except Exception:
         return None
@@ -30,10 +29,10 @@ def deny():
     return {"isAuthorized": False}
 
 def lambda_handler(event, _context):
-    auth = (event.get("headers",{}) or {}).get("authorization") or event.get("headers",{}).get("Authorization")
+    headers = event.get("headers") or {}
+    auth = headers.get("authorization") or headers.get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         return deny()
     payload = verify_jwt(auth.split(" ",1)[1])
-    if not payload:
-        return deny()
+    if not payload: return deny()
     return allow(payload.get("sub","user"), {"role": payload.get("role","read")})
