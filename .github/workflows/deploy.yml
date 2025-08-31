@@ -30,25 +30,31 @@ on:
       SES_SENDER_EMAIL:
         description: "SES verified sender address (deploy only)"
         required: false
-        default: "noreplyzingamazigle@gmail.com"
+        default: "noreply@example.com"
 
 jobs:
   run:
     runs-on: ubuntu-latest
     environment: ${{ inputs.ENVIRONMENT }}
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ inputs.AWS_REGION }}
+      - name: Configure AWS credentials (from environment secrets)
+        run: |
+          echo "Configuring AWS credentials from environment secrets"
+          mkdir -p ~/.aws
+          cat > ~/.aws/credentials <<EOF
+          [default]
+          aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EOF
+          cat > ~/.aws/config <<EOF
+          [default]
+          region=${{ inputs.AWS_REGION }}
+          output=json
+          EOF
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -77,17 +83,16 @@ jobs:
         if: ${{ inputs.ACTION == 'deploy' }}
         id: out
         run: |
-          # Some outputs may not exist yet on the first run; ignore errors safely
           set +e
-          terraform output -raw api_endpoint     > .api.txt     2>/dev/null || true
-          terraform output -raw cloudfront_domain> .cf.txt      2>/dev/null || true
-          terraform output -raw site_bucket      > .site.txt    2>/dev/null || true
-          terraform output -raw cloudfront_id    > .cfid.txt    2>/dev/null || true
+          terraform output -raw api_endpoint      > .api.txt   2>/dev/null || true
+          terraform output -raw cloudfront_domain > .cf.txt    2>/dev/null || true
+          terraform output -raw site_bucket       > .site.txt  2>/dev/null || true
+          terraform output -raw cloudfront_id     > .cfid.txt  2>/dev/null || true
           set -e
           echo "api=$(cat .api.txt  || true)"   >> $GITHUB_OUTPUT
-          echo "cf=$(cat .cf.txt    || true)"   >> $GITHUB_OUTPUT
-          echo "site=$(cat .site.txt|| true)"   >> $GITHUB_OUTPUT
-          echo "cfid=$(cat .cfid.txt|| true)"   >> $GITHUB_OUTPUT
+          echo "cf=$(cat .cf.txt   || true)"   >> $GITHUB_OUTPUT
+          echo "site=$(cat .site.txt|| true)"  >> $GITHUB_OUTPUT
+          echo "cfid=$(cat .cfid.txt|| true)"  >> $GITHUB_OUTPUT
 
       - name: Build site (template API + domain) (deploy)
         if: ${{ inputs.ACTION == 'deploy' }}
@@ -138,9 +143,6 @@ jobs:
           echo "Emptying bucket s3://${{ steps.destroy_out.outputs.site }} if it exists..."
           aws s3 rm s3://${{ steps.destroy_out.outputs.site }} --recursive || true
 
-      # Note: You don't need to disable CF manually; Terraform will handle deletion order.
-      # If you kept any out-of-band objects or policies, removing them above avoids blockers.
-
       - name: Terraform Destroy
         if: ${{ inputs.ACTION == 'destroy' }}
         env:
@@ -155,5 +157,5 @@ jobs:
         run: |
           echo "Destroy requested. If you see errors, check:"
           echo "1) S3 bucket emptied (done above)"
-          echo "2) SES identities (these are external to TF if you created them manually)"
-          echo "3) State backend (left intact by design)"
+          echo "2) SES identities (manual cleanup if created outside TF)"
+          echo "3) State backend (intact by design)"
