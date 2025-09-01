@@ -238,30 +238,30 @@ $svcs = Get-Service | Where-Object {
     $_.Name -ieq 'SQLBrowser' -or
     $_.DisplayName -match 'SQL Server'
 }
-$svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
 PS_LIST_REDIS = r"""
 $svcs = Get-Service | Where-Object { $_.Name -like 'Redis*' -or $_.DisplayName -like 'Redis*' }
-$svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
 # NOTE: This version EXPECTS $Pattern to be defined before invocation.
 PS_LIST_FILTER = r"""
 $svcs = Get-Service | Where-Object { $_.Name -match $Pattern -or $_.DisplayName -match $Pattern }
-$svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
 PS_START = r"""
 param([string]$Name)
 Start-Service -Name $Name -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, Status | ConvertTo-Json
+Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
 PS_STOP = r"""
 param([string]$Name)
 Stop-Service -Name $Name -Force -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, Status | ConvertTo-Json
+Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
 PS_IISRESET = r"""
@@ -358,7 +358,7 @@ def handle_services(body):
             elif mode == "filter":
                 if not query:
                     # Empty query → list all services (trim to common/interesting)
-                    script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, Status | ConvertTo-Json"""
+                    script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json"""
                     status, out, err = _send_ps(iid, script)
                 else:
                     # Inline $Pattern safely and use the filter script (no custom SSM params)

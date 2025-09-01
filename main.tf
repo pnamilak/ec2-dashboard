@@ -11,6 +11,26 @@ resource "random_id" "site" {
   byte_length = 3
 }
 
+# ----------------------- Ensure SSM service-linked role exists (idempotent) -----------------------
+# We deliberately use a CLI-based guard to "create if missing".
+# If it already exists, AWS returns EntityAlreadyExists and we ignore it.
+resource "null_resource" "ensure_ssm_slr" {
+  triggers = {
+    region = var.aws_region
+  }
+
+  provisioner "local-exec" {
+    when        = create
+    interpreter = ["/bin/bash", "-lc"]
+    command     = <<-EOT
+      set -euo pipefail
+      aws iam get-role --role-name AWSServiceRoleForAmazonSSM >/dev/null 2>&1 || \
+      aws iam create-service-linked-role --aws-service-name ssm.amazonaws.com >/dev/null
+      echo "SSM service-linked role is present."
+    EOT
+  }
+}
+
 # ----------------------- S3 Website -----------------------
 resource "aws_s3_bucket" "website" {
   bucket        = local.site_bucket_name
@@ -406,7 +426,10 @@ resource "null_resource" "attach_ssm_profile" {
     region       = var.aws_region
   }
 
-  depends_on = [aws_iam_instance_profile.ec2_ssm_profile]
+  depends_on = [
+    aws_iam_instance_profile.ec2_ssm_profile,
+    null_resource.ensure_ssm_slr
+  ]
 
   # Create/Update
   provisioner "local-exec" {
