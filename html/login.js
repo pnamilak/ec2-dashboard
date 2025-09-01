@@ -1,203 +1,218 @@
-/* login.js – dashboard interactions (services fixed) */
+// website/login.js
+// -----------------------------------------------------------------------------
+// Front-end glue for OTP login + instance list + actions + Services modal.
+// Works with the Lambda above. Sends the new payload shape, but the backend
+// also supports legacy shapes for safety.
+// -----------------------------------------------------------------------------
 
-const API_BASE = window.__API_BASE__; // set by index.html.tpl from Terraform output
-let jwt = localStorage.getItem("jwt") || "";
+(function () {
+  const API_BASE =
+    window.__API_BASE__ ||
+    (document.querySelector("meta[name=api-base]")?.content || "").trim() ||
+    ""; // e.g., "https://u5gyqkfkc3.execute-api.us-east-2.amazonaws.com"
 
-function api(path, method = "GET", body) {
-  const headers = { "Content-Type": "application/json" };
-  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-  return fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  }).then(async (r) => {
-    const txt = await r.text();
-    let data = {};
-    try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-    if (!r.ok) throw new Error(data.error || r.statusText);
-    return data;
+  if (!API_BASE) {
+    console.warn("API base not configured; set window.__API_BASE__ or <meta name='api-base'>");
+  }
+
+  // ------------- tiny helpers -------------
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+  async function api(path, method = "GET", body) {
+    const opt = { method, headers: { "Content-Type": "application/json" } };
+    if (body) opt.body = JSON.stringify(body);
+    const r = await fetch(API_BASE + path, opt);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return j;
+  }
+
+  // ------------- OTP flow -------------
+  const emailInput = $("#email");
+  const otpInput = $("#otp");
+  const btnReq = $("#btn-request-otp");
+  const btnVerify = $("#btn-verify-otp");
+  const btnLogin = $("#btn-login");
+  const tokenSpan = $("#token");
+
+  btnReq?.addEventListener("click", async () => {
+    const email = emailInput.value.trim();
+    if (!email) return alert("Enter email");
+    const res = await api("/request-otp", "POST", { email });
+    alert(res.ok ? "OTP sent (check email). Dev: " + (res.code || "") : "Failed: " + res.error);
   });
-}
 
-/* ---------- Services Modal ---------- */
+  btnVerify?.addEventListener("click", async () => {
+    const email = emailInput.value.trim();
+    const code = otpInput.value.trim();
+    const res = await api("/verify-otp", "POST", { email, code });
+    alert(res.ok ? "OTP is valid" : "Invalid OTP");
+  });
 
-const svcModal = {
-  el: null,
-  tbody: null,
-  titleEl: null,
-  filterWrap: null,
-  filterInput: null,
-  listBtn: null,
-  iisBtn: null,
-  instanceId: null,
-  mode: "filter", // 'sql' | 'redis' | 'filter'
-};
+  btnLogin?.addEventListener("click", async () => {
+    const email = emailInput.value.trim();
+    const code = otpInput.value.trim();
+    const res = await api("/login", "POST", { email, code });
+    if (!res.ok) return alert("Login failed: " + res.error);
+    localStorage.setItem("jwt", res.token);
+    tokenSpan.textContent = res.token.slice(0, 24) + "…";
+    await refreshInstances();
+  });
 
-function ensureModal() {
-  if (svcModal.el) return;
-  const modal = document.createElement("div");
-  modal.id = "svc-modal";
-  modal.innerHTML = `
-    <div class="modal-backdrop"></div>
-    <div class="modal">
-      <div class="modal-header">
-        <h3 id="svc-title">Services</h3>
-        <button id="svc-close" class="btn btn-ghost">Close</button>
-      </div>
-      <div class="modal-body">
-        <div id="svc-filter-wrap" class="row" style="display:none;gap:8px;margin-bottom:10px;">
-          <input id="svc-filter" type="text" placeholder="Type 2-5 letters (SVC/WEB)" class="input" />
-          <button id="svc-list" class="btn btn-primary">List</button>
-          <button id="svc-iis" class="btn btn-soft">IIS reset</button>
-        </div>
-        <table class="table">
-          <thead>
-            <tr><th>Name</th><th>Display Name</th><th>Status</th><th>Action</th></tr>
-          </thead>
-          <tbody id="svc-body"></tbody>
-        </table>
-        <div id="svc-note" class="muted" style="margin-top:8px;"></div>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
+  // ------------- Instances -------------
+  const tbl = $("#instances");
+  const btnRefresh = $("#btn-refresh");
+  const btnStartAll = $("#btn-start-all");
+  const btnStopAll = $("#btn-stop-all");
 
-  svcModal.el = modal;
-  svcModal.tbody = modal.querySelector("#svc-body");
-  svcModal.titleEl = modal.querySelector("#svc-title");
-  svcModal.filterWrap = modal.querySelector("#svc-filter-wrap");
-  svcModal.filterInput = modal.querySelector("#svc-filter");
-  svcModal.listBtn = modal.querySelector("#svc-list");
-  svcModal.iisBtn = modal.querySelector("#svc-iis");
-
-  modal.querySelector("#svc-close").onclick = () => modal.classList.remove("open");
-  svcModal.listBtn.onclick = () => doList();
-  svcModal.iisBtn.onclick = () => doIisReset();
-}
-
-function openServicesModal(instance) {
-  ensureModal();
-  svcModal.instanceId = instance.id;
-  svcModal.titleEl.textContent = `Services – ${instance.name} (${instance.id})`;
-
-  // decide mode by instance name
-  const n = (instance.name || "").toLowerCase();
-  if (n.includes("sql")) {
-    svcModal.mode = "sql";
-    svcModal.filterWrap.style.display = "none";
-    doList();
-  } else if (n.includes("redis")) {
-    svcModal.mode = "redis";
-    svcModal.filterWrap.style.display = "none";
-    doList();
-  } else if (n.includes("svc") || n.includes("web")) {
-    svcModal.mode = "filter";
-    svcModal.filterWrap.style.display = "flex";
-    svcModal.filterInput.value = "";
-    svcModal.tbody.innerHTML = "";
-    modalNote("Type 2-5 letters and click List.");
-  } else {
-    // default to filter mode
-    svcModal.mode = "filter";
-    svcModal.filterWrap.style.display = "flex";
-    svcModal.filterInput.value = "";
-    svcModal.tbody.innerHTML = "";
-    modalNote("Type 2-5 letters and click List.");
+  async function refreshInstances() {
+    const res = await api("/instances", "GET");
+    if (!res.ok) return alert("Failed to list instances");
+    renderInstances(res.instances || []);
   }
 
-  svcModal.el.classList.add("open");
-}
-
-function modalNote(text) {
-  const el = svcModal.el.querySelector("#svc-note");
-  el.textContent = text || "";
-}
-
-function doList() {
-  modalNote("Listing...");
-  const payload = {
-    instanceId: svcModal.instanceId,
-    op: "list",
-    mode: svcModal.mode
-  };
-  if (svcModal.mode === "filter") {
-    payload.query = (svcModal.filterInput.value || "").trim();
+  function renderInstances(items) {
+    const rows = items
+      .map((x) => {
+        const id = x.id, name = x.name || id, state = x.state || "";
+        const svcBtn = `<button class="btn btn-svc" data-id="${id}" data-name="${name}">Services</button>`;
+        const startBtn = `<button class="btn btn-start" data-id="${id}">Start</button>`;
+        const stopBtn = `<button class="btn btn-stop" data-id="${id}">Stop</button>`;
+        const rebootBtn = `<button class="btn btn-reboot" data-id="${id}">Reboot</button>`;
+        return `<tr>
+          <td>${name}</td>
+          <td>${id}</td>
+          <td>${state}</td>
+          <td>${startBtn} ${stopBtn} ${rebootBtn} ${svcBtn}</td>
+        </tr>`;
+      })
+      .join("");
+    tbl.querySelector("tbody").innerHTML = rows || `<tr><td colspan="4">No instances</td></tr>`;
   }
-  api("/services", "POST", payload)
-    .then((res) => {
-      svcModal.tbody.innerHTML = "";
-      if (res.note === "not_connected") {
-        modalNote("No services (SSM: not connected).");
-        return;
-      }
-      if (!res.ok) {
-        modalNote(res.error || "Error");
-        return;
-      }
-      const items = res.services || [];
-      if (!items.length) {
-        modalNote("No matching services.");
-        return;
-      }
-      modalNote("");
-      for (const s of items) {
-        const tr = document.createElement("tr");
-        const status = (s.status || "").toLowerCase();
-        const isRunning = status === "running";
-        tr.innerHTML = `
-          <td>${s.name || ""}</td>
-          <td>${s.display || ""}</td>
-          <td><span class="pill ${isRunning ? "ok" : "warn"}">${status}</span></td>
-          <td>
-            <button class="btn ${isRunning ? "btn-stop" : "btn-start"}"
-                    data-svc="${s.name}"
-                    data-op="${isRunning ? "stop" : "start"}">
-              ${isRunning ? "Stop" : "Start"}
-            </button>
-          </td>`;
-        svcModal.tbody.appendChild(tr);
-      }
-      // wire actions
-      svcModal.tbody.querySelectorAll("button[data-svc]").forEach((b) => {
-        b.onclick = () => doControl(b.dataset.svc, b.dataset.op);
-      });
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
-}
 
-function doControl(serviceName, op) {
-  modalNote(`${op} ${serviceName}...`);
-  api("/services", "POST", {
-    instanceId: svcModal.instanceId,
-    op,
-    serviceName
-  })
-    .then((res) => {
-      if (res.note === "not_connected") {
-        modalNote("SSM: not connected.");
-        return;
-      }
-      if (!res.ok) {
-        modalNote(res.error || "Error");
-        return;
-      }
-      doList(); // refresh list
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
-}
+  btnRefresh?.addEventListener("click", refreshInstances);
 
-function doIisReset() {
-  modalNote("Issuing IIS reset...");
-  api("/services", "POST", {
-    instanceId: svcModal.instanceId,
-    op: "iisreset",
-  })
-    .then((res) => {
-      modalNote(res.ok ? (res.message || "IIS reset sent.") : (res.error || "IIS reset failed"));
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
-}
+  tbl?.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    const id = b.dataset.id;
+    if (b.classList.contains("btn-start")) {
+      await api("/instance-action", "POST", { instanceId: id, op: "start" });
+      return refreshInstances();
+    }
+    if (b.classList.contains("btn-stop")) {
+      await api("/instance-action", "POST", { instanceId: id, op: "stop" });
+      return refreshInstances();
+    }
+    if (b.classList.contains("btn-reboot")) {
+      await api("/instance-action", "POST", { instanceId: id, op: "reboot" });
+      return refreshInstances();
+    }
+    if (b.classList.contains("btn-svc")) {
+      openServicesModal({ instanceId: id, instanceName: b.dataset.name || "" });
+    }
+  });
 
-/* ---------- existing dashboard wiring ---------- */
-/* Your existing code should call openServicesModal(instance)
-   when the per-instance “Services” button is clicked. */
-window.openServicesModal = openServicesModal;
+  btnStartAll?.addEventListener("click", async () => {
+    const ids = $$("tbody tr td:nth-child(2)").map((td) => td.textContent.trim()).filter(Boolean);
+    if (!ids.length) return;
+    await api("/bulk-action", "POST", { instanceIds: ids, op: "start" });
+    refreshInstances();
+  });
+
+  btnStopAll?.addEventListener("click", async () => {
+    const ids = $$("tbody tr td:nth-child(2)").map((td) => td.textContent.trim()).filter(Boolean);
+    if (!ids.length) return;
+    await api("/bulk-action", "POST", { instanceIds: ids, op: "stop" });
+    refreshInstances();
+  });
+
+  // ------------- Services Modal -------------
+  const modal = $("#svc-modal");
+  const modalTitle = $("#svc-title");
+  const listBody = $("#svc-list");
+  const selMode = $("#svc-mode");
+  const inpFilter = $("#svc-filter");
+  const btnList = $("#svc-list-btn");
+  const btnIISReset = $("#svc-iisreset");
+  let currentSvcContext = null;
+
+  function openServicesModal(ctx) {
+    currentSvcContext = { ...ctx, mode: guessModeFromName(ctx.instanceName) };
+    selMode.value = currentSvcContext.mode;
+    modalTitle.textContent = `Services — ${ctx.instanceName} (${ctx.instanceId})`;
+    listBody.innerHTML = `<tr><td colspan="4">Click "List"</td></tr>`;
+    modal.style.display = "block";
+  }
+
+  $("#svc-close")?.addEventListener("click", () => (modal.style.display = "none"));
+
+  selMode?.addEventListener("change", () => {
+    if (currentSvcContext) currentSvcContext.mode = selMode.value;
+  });
+
+  btnList?.addEventListener("click", async () => {
+    if (!currentSvcContext) return;
+    const mode = selMode.value;
+    const query = inpFilter.value.trim();
+    const payload = { instanceId: currentSvcContext.instanceId, op: "list", mode };
+    if (mode === "filter" && query) payload.query = query;
+
+    const res = await api("/services", "POST", payload);
+    if (!res.ok) {
+      const msg = res.error === "ssm_not_connected" ? "SSM: not connected" :
+                  res.error === "unsupported" ? "Unsupported mode" :
+                  "Error: " + res.error;
+      listBody.innerHTML = `<tr><td colspan="4">${msg}</td></tr>`;
+      return;
+    }
+    const rows = (res.services || []).map(s => {
+      const n = s.name || "", d = s.displayName || "", st = s.status || "";
+      const startBtn = `<button class="svc-start" data-name="${n}">Start</button>`;
+      const stopBtn  = `<button class="svc-stop" data-name="${n}">Stop</button>`;
+      return `<tr><td>${n}</td><td>${d}</td><td>${st}</td><td>${startBtn} ${stopBtn}</td></tr>`;
+    }).join("");
+    listBody.innerHTML = rows || `<tr><td colspan="4">No services</td></tr>`;
+  });
+
+  listBody?.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b || !currentSvcContext) return;
+    const serviceName = b.dataset.name;
+    const op = b.classList.contains("svc-start") ? "start" : "stop";
+    const res = await api("/services", "POST", {
+      instanceId: currentSvcContext.instanceId,
+      op,
+      mode: selMode.value,
+      serviceName
+    });
+    if (res.ok) {
+      // Update row status
+      await btnList.click();
+    } else {
+      alert("Service action failed: " + res.error);
+    }
+  });
+
+  btnIISReset?.addEventListener("click", async () => {
+    if (!currentSvcContext) return;
+    const res = await api("/services", "POST", {
+      instanceId: currentSvcContext.instanceId,
+      op: "iisreset",
+      mode: "filter"
+    });
+    alert(res.ok ? "IIS reset sent" : "IIS reset failed: " + res.error);
+  });
+
+  function guessModeFromName(name) {
+    const n = (name || "").toLowerCase();
+    if (n.includes("sql")) return "sql";
+    if (n.includes("redis")) return "redis";
+    if (n.includes("svc") || n.includes("web")) return "filter";
+    return "filter";
+  }
+
+  // Auto-load instances if table exists on page
+  if (tbl) refreshInstances();
+})();
