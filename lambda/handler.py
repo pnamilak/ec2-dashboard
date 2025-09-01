@@ -1,8 +1,7 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API (single Lambda) – OTP, login, instances, actions, services.
-# This version includes the full SSM Services implementation (SQL / Redis /
-# SVC+WEB filter + IIS reset) and keeps the rest of the endpoints intact.
+# Includes SSM Services (SQL / Redis / SVC+WEB filter + IIS reset).
 # -----------------------------------------------------------------------------
 
 import os
@@ -197,11 +196,7 @@ def _shape_instance(i: dict) -> dict:
 
 def handle_instances():
     """
-    Response:
-    {
-      summary: { total, running, stopped },
-      envs: { <ENV> : { DM:[...], EA:[...] }, ... }
-    }
+    Response: { summary:{total,running,stopped}, envs:{ ENV:{DM:[...],EA:[...]}, ... } }
     """
     res = ec2.describe_instances(
         Filters=[
@@ -219,14 +214,11 @@ def handle_instances():
             nl = it["name"].lower()
             hits = _env_hit(nl)
             if not hits:
-                # put under a "DevMini" tab if "dev" in name
                 if "dev" in nl:
                     hits = ["DevMini"]
                 else:
                     continue
-            # DM vs EA blocks by name token
             block = "DM" if "dm" in nl else ("EA" if "ea" in nl else "DM")
-
             for env in hits:
                 envs.setdefault(env, {"DM": [], "EA": []})
                 envs[env][block].append(it)
@@ -306,8 +298,7 @@ def _run_ssm_ps(instance_id: str, commands: list[str], timeout=120):
     while time.time() - start < timeout:
         try:
             out = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
-        except Exception as e:
-            # transient – keep polling
+        except Exception:
             time.sleep(1.0)
             continue
 
@@ -332,7 +323,6 @@ $svcs = Get-Service -Name $names -ErrorAction SilentlyContinue |
 $svcs | ConvertTo-Json -Compress
 """]
 
-
 def _ps_json_list_redis():
     return [rf"""
 $svcs = Get-Service -Name 'Redis*' -ErrorAction SilentlyContinue |
@@ -342,10 +332,8 @@ $svcs = Get-Service -Name 'Redis*' -ErrorAction SilentlyContinue |
 $svcs | ConvertTo-Json -Compress
 """]
 
-
 def _ps_json_list_pattern(pattern: str):
     p = re.sub(r"'", "''", pattern)
-    # NOTE: all PowerShell curly braces are doubled to escape inside f-strings.
     return [rf"""
 $pat = '{p}'
 $svcs = Get-Service | Where-Object {{ $_.Name -match $pat -or $_.DisplayName -match $pat }} |
@@ -355,10 +343,8 @@ $svcs = Get-Service | Where-Object {{ $_.Name -match $pat -or $_.DisplayName -ma
 $svcs | ConvertTo-Json -Compress
 """]
 
-
 def _ps_start(name: str):
     n = name.replace("'", "''")
-    # Wait ~40s for Running (SQL may take a while)
     return [rf"""
 $ErrorActionPreference = 'Stop'
 try {{
@@ -380,7 +366,6 @@ try {{
 
 def _ps_stop(name: str):
     n = name.replace("'", "''")
-    # Wait up to ~80s for Stopped (SQL often needs longer)
     return [rf"""
 $ErrorActionPreference = 'Stop'
 try {{
@@ -422,12 +407,10 @@ def _normalize_services(arr):
             "name": name,
             "display": display,
             "status": status,
-            # legacy/camel variants to be safe with the front-end
             "Name": name,
             "DisplayName": display,
             "Status": status,
         }
-        # carry error through if present
         if "error" in s:
             item["error"] = s["error"]
         out.append(item)
@@ -435,79 +418,92 @@ def _normalize_services(arr):
 
 def handle_services(body: dict):
     """
-    body: { id, mode: list|start|stop|iisreset, service?, instanceName?, kind?, pattern? }
+    UI contract (login.js):
+      { instanceId, op: 'list'|'start'|'stop'|'iisreset', mode?: 'sql'|'redis'|'filter', query?, serviceName? }
+
+    Backward compatible with old shape:
+      { id, mode: 'list'|'start'|'stop'|'iisreset', pattern?, service?, instanceName?, kind? }
     """
-    iid = (body.get("id") or "").strip()
-    mode = (body.get("mode") or "list").lower()
-    inst_name = (body.get("instanceName") or "").lower()
-    kind = (body.get("kind") or "").lower()
-    pattern = (body.get("pattern") or "").strip()
+    iid = (body.get("instanceId") or body.get("id") or "").strip()
+    op  = (body.get("op") or body.get("mode") or "list").lower()  # operation
+    # "mode" in the UI means list kind; accept several synonyms
+    list_kind = (body.get("mode") or body.get("kind") or "").lower()
+    instance_name = (body.get("instanceName") or "").lower()
+    pattern = (body.get("query") or body.get("pattern") or "").strip()
+    service = (body.get("serviceName") or body.get("service") or "").strip()
 
     if not iid:
-        return _json(400, {"error": "missing_instance_id"})
+        return _json(200, {"ok": False, "error": "missing_instance_id"})
 
-    # Derive kind from name if not provided by UI
-    if not kind:
-        kind = (
-            "svcweb" if ("svc" in inst_name or "web" in inst_name)
-            else ("sql" if "sql" in inst_name else ("redis" if "redis" in inst_name else "generic"))
+    # derive list_kind if not provided
+    if not list_kind:
+        list_kind = (
+            "filter" if ("svc" in instance_name or "web" in instance_name)
+            else ("sql" if "sql" in instance_name else ("redis" if "redis" in instance_name else "generic"))
         )
 
     try:
-        if mode == "list":
-            if kind == "sql":
+        if op == "list":
+            if list_kind == "sql":
                 commands = _ps_json_list_sql()
-            elif kind == "redis":
+            elif list_kind == "redis":
                 commands = _ps_json_list_redis()
-            elif kind == "svcweb":
+            elif list_kind in ("filter", "svcweb"):
                 if len(pattern) < 2:
-                    return _json(200, {"services": [], "error": "enter_filter"})
+                    return _json(200, {"ok": False, "error": "enter_filter", "services": []})
                 commands = _ps_json_list_pattern(pattern)
             else:
-                return _json(200, {"services": [], "error": "unsupported"})
+                return _json(200, {"ok": False, "error": "unsupported", "services": []})
 
             ok, out = _run_ssm_ps(iid, commands)
             if not ok:
-                return _json(200, {"services": [], "error": out})
+                if out == "not_connected":
+                    return _json(200, {"ok": False, "note": "not_connected", "services": []})
+                return _json(200, {"ok": False, "error": out, "services": []})
 
             try:
                 arr = json.loads(out) if out else []
                 if isinstance(arr, dict):
                     arr = [arr]
-                return _json(200, {"services": _normalize_services(arr)})
+                return _json(200, {"ok": True, "services": _normalize_services(arr)})
             except Exception:
-                return _json(200, {"services": [], "error": "parse_error"})
+                return _json(200, {"ok": False, "error": "parse_error", "services": []})
 
-        elif mode in ("start", "stop"):
-            svc = (body.get("service") or "").strip()
-            if not svc:
-                return _json(400, {"error": "missing_service"})
-            commands = _ps_start(svc) if mode == "start" else _ps_stop(svc)
+        elif op in ("start", "stop"):
+            if not service:
+                return _json(200, {"ok": False, "error": "missing_service", "services": []})
+            commands = _ps_start(service) if op == "start" else _ps_stop(service)
             ok, out = _run_ssm_ps(iid, commands)
             if not ok:
-                return _json(200, {"services": [], "error": out})
+                if out == "not_connected":
+                    return _json(200, {"ok": False, "note": "not_connected", "services": []})
+                return _json(200, {"ok": False, "error": out, "services": []})
             try:
                 obj = json.loads(out) if out else {}
                 arr = [obj] if isinstance(obj, dict) else (obj or [])
-                return _json(200, {"services": _normalize_services(arr)})
+                return _json(200, {"ok": True, "services": _normalize_services(arr)})
             except Exception:
-                return _json(200, {"services": [], "error": "parse_error"})
+                return _json(200, {"ok": False, "error": "parse_error", "services": []})
 
-        elif mode == "iisreset":
+        elif op == "iisreset":
             ok, out = _run_ssm_ps(iid, _ps_iis_reset())
             if not ok:
-                return _json(200, {"services": [], "error": out})
+                if out == "not_connected":
+                    return _json(200, {"ok": False, "note": "not_connected"})
+                return _json(200, {"ok": False, "error": out})
             try:
                 payload = json.loads(out) if out else {"ok": True}
+                if "ok" not in payload:
+                    payload["ok"] = True
+                return _json(200, payload)
             except Exception:
-                payload = {"ok": True}
-            return _json(200, payload)
+                return _json(200, {"ok": True, "message": "IIS reset issued"})
 
         else:
-            return _json(400, {"error": "bad_mode"})
+            return _json(200, {"ok": False, "error": "bad_mode"})
 
     except Exception as e:
-        return _json(500, {"error": str(e)})
+        return _json(200, {"ok": False, "error": str(e)})
 
 # ---------- Router ----------
 def lambda_handler(event, context):

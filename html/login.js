@@ -172,6 +172,10 @@ function doControl(serviceName, op) {
     serviceName
   })
     .then((res) => {
+      if (res.note === "not_connected") {
+        modalNote("SSM: not connected.");
+        return;
+      }
       if (!res.ok) {
         modalNote(res.error || "Error");
         return;
