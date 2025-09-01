@@ -233,7 +233,10 @@ def handle_bulk(body):
 # ---------- SSM Services (list / start / stop / IIS reset) ----------
 PS_LIST_SQL = r"""
 $svcs = Get-Service | Where-Object {
-    $_.Name -like 'MSSQL*' -or $_.Name -like 'SQLSERVERAGENT*' -or $_.Name -like 'SQLBrowser' -or $_.Name -like 'SQL*'
+    $_.Name -like 'MSSQL*' -or
+    $_.Name -like 'SQLSERVERAGENT*' -or
+    $_.Name -ieq 'SQLBrowser' -or
+    $_.DisplayName -match 'SQL Server'
 }
 $svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
 """
@@ -243,8 +246,8 @@ $svcs = Get-Service | Where-Object { $_.Name -like 'Redis*' -or $_.DisplayName -
 $svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
 """
 
+# NOTE: This version EXPECTS $Pattern to be defined before invocation.
 PS_LIST_FILTER = r"""
-param([string]$Pattern)
 $svcs = Get-Service | Where-Object { $_.Name -match $Pattern -or $_.DisplayName -match $Pattern }
 $svcs | Select-Object Name, DisplayName, Status | ConvertTo-Json
 """
@@ -267,11 +270,16 @@ iisreset /restart
 """
 
 def _send_ps(instance_id: str, script: str, params=None, timeout=60):
+    """
+    Invoke AWS-RunPowerShellScript using ONLY the 'commands' parameter.
+    (We keep the 'params' argument for compatibility with your call sites,
+    but it is intentionally ignored to avoid unsupported SSM params.)
+    """
     try:
         resp = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName="AWS-RunPowerShellScript",
-            Parameters={"commands": [script], **({} if not params else params)},
+            Parameters={"commands": [script]},
             TimeoutSeconds=timeout,
         )
     except ClientError as e:
@@ -303,13 +311,19 @@ def _normalize_services_payload(body):
       { id, mode:'list'|'start'|'stop'|'iisreset', pattern?, service?, instanceName?, kind? }
     """
     iid = (body.get("instanceId") or body.get("id") or "").strip()
-    op  = (body.get("op") or body.get("mode") or "list").lower()
-    mode = (body.get("mode") or body.get("kind") or "").lower()
+
+    raw_op = (body.get("op") or "").lower().strip()
+    raw_mode = (body.get("mode") or body.get("kind") or "").lower().strip()
+
+    # Ensure op is valid; default to 'list' (prevents legacy mode strings becoming op)
+    op = raw_op if raw_op in ("list", "start", "stop", "iisreset") else "list"
+
     instance_name = (body.get("instanceName") or "").lower()
     query = (body.get("query") or body.get("pattern") or "").strip()
     service = (body.get("serviceName") or body.get("service") or "").strip()
 
     # Back-compat: if mode is '' or 'list' or generic, infer from name/query
+    mode = raw_mode
     if mode in ("", "list", "services", "service", "generic"):
         if query:
             mode = "filter"
@@ -347,11 +361,10 @@ def handle_services(body):
                     script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, Status | ConvertTo-Json"""
                     status, out, err = _send_ps(iid, script)
                 else:
-                    status, out, err = _send_ps(iid, PS_LIST_FILTER, params={"executionTimeout": ["3600"], "commands": [PS_LIST_FILTER], "param.PPattern": [query]})
-                    # Above param wiring differs across accounts; safe path:
-                    if status == "Success" and not out.strip():
-                        # Try explicit param binding
-                        status, out, err = _send_ps(iid, PS_LIST_FILTER + f'\n#\n$Pattern="{query}"\n' + PS_LIST_FILTER)
+                    # Inline $Pattern safely and use the filter script (no custom SSM params)
+                    pat = (query or "").replace('"', '`"')
+                    script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
+                    status, out, err = _send_ps(iid, script)
             else:
                 return _json(200, _err("unsupported", details={"mode": mode}))
 
@@ -378,7 +391,10 @@ def handle_services(body):
             if not service:
                 return _json(200, _err("missing_service_name"))
             ps = PS_START if op == "start" else PS_STOP
-            status, out, err = _send_ps(iid, ps + f'\n#\n$Name="{service}"\n' + ps)
+            # Inline $Name safely (no custom SSM params)
+            name_esc = service.replace('"', '`"')
+            script = f'$Name = "{name_esc}";\n{ps}'
+            status, out, err = _send_ps(iid, script)
             if status != "Success":
                 return _json(200, _err("ssm_error", status=status, stderr=err))
             try:
