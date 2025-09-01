@@ -1,12 +1,13 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API (single Lambda) – OTP, login, instances, actions, services.
-# This version includes a tolerant Services API (SQL / Redis / SVC+WEB filter
-# + IIS reset) that accepts both the new and legacy request shapes.
-# It also supports two login modes without UI changes:
-#   A) OTP login:       { email, code }  -> returns {ok, token, role, user}
-#   B) Cred login:      { username, password, ovt? } backed by SSM
-# OVT (one-time validator) is issued by /verify-otp and validated by /login.
+# This version includes:
+# - Tolerant Services API (SQL / Redis / SVC+WEB filter + IIS reset)
+# - Dual login:
+#     A) OTP login:       { email, code }  -> {ok, token, role, user}
+#     B) Cred login:      { username, password, ovt? } via SSM
+# - OVT (one-time validator) issued by /verify-otp and validated by /login
+# - SSM user record may include "email"; if present, it must match the OVT email
 # -----------------------------------------------------------------------------
 
 import os
@@ -21,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
-from boto3.dynamodb.conditions import Attr  # NEW
+from boto3.dynamodb.conditions import Attr
 
 # ---------- Environment ----------
 REGION            = os.environ.get("REGION", "us-east-2")
@@ -42,7 +43,7 @@ ssm_param = boto3.client("ssm", region_name=REGION)
 
 # ---------- Globals ----------
 JWT_SECRET_CACHE = None
-USERS_CACHE = {}  # NEW: in-memory cache for SSM user records
+USERS_CACHE = {}  # in-memory cache for SSM user records
 
 
 # ---------- Helpers ----------
@@ -96,18 +97,19 @@ def _err(code, **extra):
     return {"ok": False, "error": code, **extra}
 
 
-# ---------- SSM-backed users (NEW) ----------
+# ---------- SSM-backed users ----------
 def _ssm_get(name, decrypt=True):
     return ssm_param.get_parameter(Name=name, WithDecryption=decrypt)["Parameter"]["Value"]
 
 def _get_user_record(username: str):
     """
-    Loads credentials/role from SSM in either shape:
+    Loads credentials/role/email from SSM in either shape:
       A) SecureString JSON at {PARAM_USER_PREFIX}/{username}, e.g.:
-         {"password":"plain:Secret123" | "sha256:<hex>", "role":"admin"}
+         {"password":"plain:Secret123" | "sha256:<hex>", "role":"admin", "email":"user@domain.com"}
       B) Split params:
-         {PARAM_USER_PREFIX}/{username}/password  (SecureString)
-         {PARAM_USER_PREFIX}/{username}/role      (String, optional)
+         {base}/password  (SecureString)
+         {base}/role      (String, optional)
+         {base}/email     (String, optional)
     """
     if not username:
         return None
@@ -121,13 +123,14 @@ def _get_user_record(username: str):
         try:
             obj = json.loads(raw)
             if isinstance(obj, dict) and ("password" in obj or "hash" in obj):
-                pwd = obj.get("password") or obj.get("hash")
-                role = (obj.get("role") or "user").strip() or "user"
-                rec = {"username": username, "password": pwd, "role": role}
+                pwd   = obj.get("password") or obj.get("hash")
+                role  = (obj.get("role") or "user").strip() or "user"
+                email = (obj.get("email") or "").strip().lower() or None
+                rec = {"username": username, "password": pwd, "role": role, "email": email}
             else:
-                rec = {"username": username, "password": raw, "role": "user"}
+                rec = {"username": username, "password": raw, "role": "user", "email": None}
         except Exception:
-            rec = {"username": username, "password": raw, "role": "user"}
+            rec = {"username": username, "password": raw, "role": "user", "email": None}
     except ClientError:
         # Try split params
         try:
@@ -136,7 +139,11 @@ def _get_user_record(username: str):
                 role = _ssm_get(f"{base}/role", decrypt=False) or "user"
             except ClientError:
                 role = "user"
-            rec = {"username": username, "password": pwd, "role": role}
+            try:
+                email = (_ssm_get(f"{base}/email", decrypt=False) or "").strip().lower() or None
+            except ClientError:
+                email = None
+            rec = {"username": username, "password": pwd, "role": role, "email": email}
         except ClientError:
             rec = None
 
@@ -163,6 +170,8 @@ def _verify_password(stored: str, provided: str) -> bool:
         return provided == s.split(":", 1)[1]
     return provided == s
 
+
+# ---------- OVT helpers ----------
 def _issue_ovt_for_email(email: str):
     """Create a one-time validator after OTP success and store with the OTP item."""
     if not OTP_TABLE_NAME:
@@ -178,7 +187,7 @@ def _issue_ovt_for_email(email: str):
     return ovt, exp_ms
 
 def _validate_ovt(ovt: str) -> bool:
-    """Check OTP table for a valid (unexpired) OVT token."""
+    """Quick validity check for OVT token."""
     if not (OTP_TABLE_NAME and ovt):
         return False
     tbl = dynamodb.Table(OTP_TABLE_NAME)
@@ -189,6 +198,19 @@ def _validate_ovt(ovt: str) -> bool:
         if int(it.get("ovt_exp_ms", 0)) > now_ms:
             return True
     return False
+
+def _ovt_get_email(ovt: str) -> str | None:
+    """Return the email bound to this OVT if valid (unexpired), else None."""
+    if not (OTP_TABLE_NAME and ovt):
+        return None
+    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    scan = tbl.scan(FilterExpression=Attr("ovt").eq(ovt))
+    items = scan.get("Items", [])
+    now_ms = int(time.time() * 1000)
+    for it in items:
+        if int(it.get("ovt_exp_ms", 0)) > now_ms:
+            return (it.get("email") or "").strip().lower() or None
+    return None
 
 
 # ---------- OTP + Login ----------
@@ -208,7 +230,7 @@ def handle_request_otp(body):
     tbl = dynamodb.Table(OTP_TABLE_NAME)
     tbl.put_item(Item={"email": email, "code": code, "expires": expires_at})
 
-    # Send email via SES
+    # Send email via SES (optional)
     if SES_SENDER:
         try:
             ses.send_email(
@@ -220,6 +242,7 @@ def handle_request_otp(body):
                 },
             )
         except ClientError:
+            # For dev, return code
             return _json(200, _ok(dev=True, code=code))
 
     # In non-SES environments, return OTP for dev use (comment this out in prod)
@@ -242,7 +265,7 @@ def handle_verify_otp(body):
     if res.get("code") != code:
         return _json(200, _err("invalid_code"))
 
-    # NEW: issue OVT for the password step so the UI can proceed
+    # Issue OVT for the password step so the UI can proceed
     ovt, ovt_exp_ms = _issue_ovt_for_email(email)
     return _json(200, _ok(ovt=ovt, ovt_exp=ovt_exp_ms))
 
@@ -269,17 +292,23 @@ def handle_login(body):
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "")
     ovt      = (body.get("ovt") or "").strip()
-
     if not (username and password):
         return _json(200, _err("invalid_login"))
 
-    # If UI provided OVT, require it to be valid (proves OTP step)
-    if ovt and not _validate_ovt(ovt):
-        return _json(200, _err("ovt_invalid"))
+    # If OVT is provided, require it and bind to user email (if user has one)
+    ovt_email = None
+    if ovt:
+        ovt_email = _ovt_get_email(ovt)
+        if not ovt_email:
+            return _json(200, _err("ovt_invalid"))
 
     rec = _get_user_record(username)
     if not rec or not _verify_password(rec.get("password", ""), password):
         return _json(200, _err("invalid_login"))
+
+    assigned_email = (rec.get("email") or "").strip().lower() if rec else None
+    if assigned_email and ovt_email and assigned_email != ovt_email:
+        return _json(200, _err("email_mismatch", message="Assigned email does not match OTP email"))
 
     role = rec.get("role", "user")
     token = _sign_jwt({"sub": username, "role": role})
@@ -297,7 +326,6 @@ def handle_instances():
     # Optionally filter by env tokens if provided in ENV_NAMES
     filters = [{"Name": "instance-state-name", "Values": ["running", "stopped", "pending", "stopping"]}]
     if ENV_TOKENS:
-        # Match env in Name tag, e.g., NAQA6, NAQA3, etc.
         name_filters = [{"Name": "tag:Name", "Values": [f"*{tok}*" for tok in ENV_TOKENS]}]
         filters.extend(name_filters)
 
@@ -314,7 +342,6 @@ def handle_instances():
                 "privateIp": i.get("PrivateIpAddress"),
                 "platform": "windows" if i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows") else "linux",
             })
-    # Sort by name, then id
     items.sort(key=lambda x: (x["name"] or "", x["id"]))
     return _json(200, _ok(instances=items))
 
@@ -344,7 +371,6 @@ def handle_bulk(body):
     op  = (body.get("op") or "").lower()
     if not ids or not op:
         return _json(200, _err("missing_params"))
-
     try:
         if op == "start":
             ec2.start_instances(InstanceIds=ids)
@@ -374,7 +400,6 @@ $svcs = Get-Service | Where-Object { $_.Name -like 'Redis*' -or $_.DisplayName -
 $svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
-# NOTE: This version EXPECTS $Pattern to be defined before invocation.
 PS_LIST_FILTER = r"""
 $svcs = Get-Service | Where-Object { $_.Name -match $Pattern -or $_.DisplayName -match $Pattern }
 $svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
@@ -398,11 +423,7 @@ iisreset /restart
 """
 
 def _send_ps(instance_id: str, script: str, params=None, timeout=60):
-    """
-    Invoke AWS-RunPowerShellScript using ONLY the 'commands' parameter.
-    (We keep the 'params' argument for compatibility with your call sites,
-    but it is intentionally ignored to avoid unsupported SSM params.)
-    """
+    """Invoke AWS-RunPowerShellScript using ONLY the 'commands' parameter."""
     try:
         resp = ssm.send_command(
             InstanceIds=[instance_id],
@@ -411,7 +432,6 @@ def _send_ps(instance_id: str, script: str, params=None, timeout=60):
             TimeoutSeconds=timeout,
         )
     except ClientError as e:
-        # Target might not be connected or not managed
         if "InvalidInstanceId" in str(e) or "TargetNotConnected" in str(e):
             raise RuntimeError("ssm_not_connected")
         raise
@@ -443,14 +463,12 @@ def _normalize_services_payload(body):
     raw_op = (body.get("op") or "").lower().strip()
     raw_mode = (body.get("mode") or body.get("kind") or "").lower().strip()
 
-    # Ensure op is valid; default to 'list' (prevents legacy mode strings becoming op)
     op = raw_op if raw_op in ("list", "start", "stop", "iisreset") else "list"
 
     instance_name = (body.get("instanceName") or "").lower()
     query = (body.get("query") or body.get("pattern") or "").strip()
     service = (body.get("serviceName") or body.get("service") or "").strip()
 
-    # Back-compat: if mode is '' or 'list' or generic, infer from name/query
     mode = raw_mode
     if mode in ("", "list", "services", "service", "generic"):
         if query:
@@ -460,9 +478,9 @@ def _normalize_services_payload(body):
         elif "redis" in instance_name:
             mode = "redis"
         elif ("svc" in instance_name) or ("web" in instance_name):
-            mode = "filter"   # typical app/IIS svc hosts
+            mode = "filter"
         else:
-            mode = "filter"   # safe default
+            mode = "filter"
 
     return iid, op, mode, query, service
 
@@ -485,11 +503,9 @@ def handle_services(body):
                 status, out, err = _send_ps(iid, PS_LIST_REDIS)
             elif mode == "filter":
                 if not query:
-                    # Empty query → list all services (trim to common/interesting)
                     script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json"""
                     status, out, err = _send_ps(iid, script)
                 else:
-                    # Inline $Pattern safely and use the filter script (no custom SSM params)
                     pat = (query or "").replace('"', '`"')
                     script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
                     status, out, err = _send_ps(iid, script)
@@ -503,7 +519,6 @@ def handle_services(body):
                 arr = json.loads(out) if out else []
             except Exception:
                 arr = []
-            # Normalize to array of {name, displayName, status}
             result = []
             if isinstance(arr, dict):
                 arr = [arr]
@@ -511,7 +526,7 @@ def handle_services(body):
                 result.append({
                     "name": s.get("Name") or s.get("name"),
                     "displayName": s.get("DisplayName") or s.get("displayName"),
-                    "status": s.get("Status") or s.get("status"),
+                    "status": s.get("Status") or "Unknown",
                 })
             return _json(200, _ok(services=result, mode=mode))
 
@@ -519,7 +534,6 @@ def handle_services(body):
             if not service:
                 return _json(200, _err("missing_service_name"))
             ps = PS_START if op == "start" else PS_STOP
-            # Inline $Name safely (no custom SSM params)
             name_esc = service.replace('"', '`"')
             script = f'$Name = "{name_esc}";\n{ps}'
             status, out, err = _send_ps(iid, script)
