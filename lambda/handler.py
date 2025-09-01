@@ -3,6 +3,10 @@
 # EC2 Dashboard API (single Lambda) – OTP, login, instances, actions, services.
 # This version includes a tolerant Services API (SQL / Redis / SVC+WEB filter
 # + IIS reset) that accepts both the new and legacy request shapes.
+# It also supports two login modes without UI changes:
+#   A) OTP login:       { email, code }  -> returns {ok, token, role, user}
+#   B) Cred login:      { username, password, ovt? } backed by SSM
+# OVT (one-time validator) is issued by /verify-otp and validated by /login.
 # -----------------------------------------------------------------------------
 
 import os
@@ -17,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
+from boto3.dynamodb.conditions import Attr  # NEW
 
 # ---------- Environment ----------
 REGION            = os.environ.get("REGION", "us-east-2")
@@ -37,6 +42,7 @@ ssm_param = boto3.client("ssm", region_name=REGION)
 
 # ---------- Globals ----------
 JWT_SECRET_CACHE = None
+USERS_CACHE = {}  # NEW: in-memory cache for SSM user records
 
 
 # ---------- Helpers ----------
@@ -90,6 +96,101 @@ def _err(code, **extra):
     return {"ok": False, "error": code, **extra}
 
 
+# ---------- SSM-backed users (NEW) ----------
+def _ssm_get(name, decrypt=True):
+    return ssm_param.get_parameter(Name=name, WithDecryption=decrypt)["Parameter"]["Value"]
+
+def _get_user_record(username: str):
+    """
+    Loads credentials/role from SSM in either shape:
+      A) SecureString JSON at {PARAM_USER_PREFIX}/{username}, e.g.:
+         {"password":"plain:Secret123" | "sha256:<hex>", "role":"admin"}
+      B) Split params:
+         {PARAM_USER_PREFIX}/{username}/password  (SecureString)
+         {PARAM_USER_PREFIX}/{username}/role      (String, optional)
+    """
+    if not username:
+        return None
+    if username in USERS_CACHE:
+        return USERS_CACHE[username]
+
+    base = f"{PARAM_USER_PREFIX}/{username}"
+    rec = None
+    try:
+        raw = _ssm_get(base, decrypt=True)
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict) and ("password" in obj or "hash" in obj):
+                pwd = obj.get("password") or obj.get("hash")
+                role = (obj.get("role") or "user").strip() or "user"
+                rec = {"username": username, "password": pwd, "role": role}
+            else:
+                rec = {"username": username, "password": raw, "role": "user"}
+        except Exception:
+            rec = {"username": username, "password": raw, "role": "user"}
+    except ClientError:
+        # Try split params
+        try:
+            pwd = _ssm_get(f"{base}/password", decrypt=True)
+            try:
+                role = _ssm_get(f"{base}/role", decrypt=False) or "user"
+            except ClientError:
+                role = "user"
+            rec = {"username": username, "password": pwd, "role": role}
+        except ClientError:
+            rec = None
+
+    if rec:
+        rec["role"] = (rec.get("role") or "user").strip() or "user"
+        USERS_CACHE[username] = rec
+    return rec
+
+def _verify_password(stored: str, provided: str) -> bool:
+    """
+    Supports:
+      - "sha256:<hex>"  → compare SHA256(provided)
+      - "plain:<text>"  → literal
+      - "<text>"        → literal (back-compat)
+    """
+    if not isinstance(stored, str):
+        return False
+    s = stored.strip()
+    if s.lower().startswith("sha256:"):
+        want = s.split(":", 1)[1].strip().lower()
+        got = hashlib.sha256(provided.encode()).hexdigest()
+        return got == want
+    if s.lower().startswith("plain:"):
+        return provided == s.split(":", 1)[1]
+    return provided == s
+
+def _issue_ovt_for_email(email: str):
+    """Create a one-time validator after OTP success and store with the OTP item."""
+    if not OTP_TABLE_NAME:
+        return None, None
+    ovt = base64.urlsafe_b64encode(os.urandom(24)).rstrip(b"=").decode()
+    exp_ms = int(time.time() * 1000) + 10 * 60 * 1000  # 10 minutes
+    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    tbl.update_item(
+        Key={"email": email},
+        UpdateExpression="SET ovt=:o, ovt_exp_ms=:e",
+        ExpressionAttributeValues={":o": ovt, ":e": exp_ms},
+    )
+    return ovt, exp_ms
+
+def _validate_ovt(ovt: str) -> bool:
+    """Check OTP table for a valid (unexpired) OVT token."""
+    if not (OTP_TABLE_NAME and ovt):
+        return False
+    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    scan = tbl.scan(FilterExpression=Attr("ovt").eq(ovt))
+    items = scan.get("Items", [])
+    now_ms = int(time.time() * 1000)
+    for it in items:
+        if int(it.get("ovt_exp_ms", 0)) > now_ms:
+            return True
+    return False
+
+
 # ---------- OTP + Login ----------
 def handle_request_otp(body):
     email = (body.get("email") or "").strip().lower()
@@ -118,8 +219,7 @@ def handle_request_otp(body):
                     "Body": {"Text": {"Data": f"Your OTP is {code}. It expires in 10 minutes."}},
                 },
             )
-        except ClientError as e:
-            # Fall through; for dev, return code in response
+        except ClientError:
             return _json(200, _ok(dev=True, code=code))
 
     # In non-SES environments, return OTP for dev use (comment this out in prod)
@@ -142,19 +242,48 @@ def handle_verify_otp(body):
     if res.get("code") != code:
         return _json(200, _err("invalid_code"))
 
-    return _json(200, _ok())
+    # NEW: issue OVT for the password step so the UI can proceed
+    ovt, ovt_exp_ms = _issue_ovt_for_email(email)
+    return _json(200, _ok(ovt=ovt, ovt_exp=ovt_exp_ms))
 
 def handle_login(body):
+    """
+    Dual-mode:
+      A) OTP login:       { email, code }
+      B) Cred login:      { username, password, ovt? } (requires SSM-stored user)
+    Returns consistent shape: {ok, token, role, user}
+    """
+    # --- Mode A: OTP login ---
     email = (body.get("email") or "").strip().lower()
     code  = (body.get("code") or "").strip()
-    # Optionally re-verify inline:
-    tbl = dynamodb.Table(OTP_TABLE_NAME)
-    res = tbl.get_item(Key={"email": email}).get("Item")
-    if not res or res.get("code") != code or int(res.get("expires", 0)) < int(time.time()):
+    if email and code:
+        tbl = dynamodb.Table(OTP_TABLE_NAME)
+        res = tbl.get_item(Key={"email": email}).get("Item")
+        if not res or res.get("code") != code or int(res.get("expires", 0)) < int(time.time()):
+            return _json(200, _err("invalid_login"))
+        role = "user"
+        token = _sign_jwt({"sub": email, "role": role})
+        return _json(200, _ok(token=token, role=role, user={"username": email}))
+
+    # --- Mode B: Username/password (+ optional OVT) ---
+    username = (body.get("username") or "").strip()
+    password = (body.get("password") or "")
+    ovt      = (body.get("ovt") or "").strip()
+
+    if not (username and password):
         return _json(200, _err("invalid_login"))
 
-    token = _sign_jwt({"sub": email})
-    return _json(200, _ok(token=token))
+    # If UI provided OVT, require it to be valid (proves OTP step)
+    if ovt and not _validate_ovt(ovt):
+        return _json(200, _err("ovt_invalid"))
+
+    rec = _get_user_record(username)
+    if not rec or not _verify_password(rec.get("password", ""), password):
+        return _json(200, _err("invalid_login"))
+
+    role = rec.get("role", "user")
+    token = _sign_jwt({"sub": username, "role": role})
+    return _json(200, _ok(token=token, role=role, user={"username": username}))
 
 
 # ---------- EC2: list + actions ----------
@@ -235,7 +364,6 @@ PS_LIST_SQL = r"""
 $svcs = Get-Service | Where-Object {
     $_.Name -like 'MSSQL*' -or
     $_.Name -like 'SQLSERVERAGENT*' -or
-    $_.Name -ieq 'SQLBrowser' -or
     $_.DisplayName -match 'SQL Server'
 }
 $svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
