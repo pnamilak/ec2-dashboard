@@ -215,59 +215,75 @@ def _ovt_get_email(ovt: str) -> str | None:
 
 # ---------- OTP + Login ----------
 def handle_request_otp(body):
-    email = (body.get("email") or "").strip().lower()
-    if not email or "@" not in email:
-        return _json(200, _err("invalid_email"))
-    if ALLOWED_DOMAIN and not email.endswith("@" + ALLOWED_DOMAIN):
-        return _json(200, _err("domain_not_allowed"))
+    try:
+        email = (body.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            return _json(200, _err("invalid_email"))
+        if ALLOWED_DOMAIN and not email.endswith("@" + ALLOWED_DOMAIN):
+            return _json(200, _err("domain_not_allowed"))
 
-    code = f"{random.randint(0, 999999):06d}"
-    expires_at = int((_now() + timedelta(minutes=10)).timestamp())
+        code = f"{random.randint(0, 999999):06d}"
+        expires_at = int((_now() + timedelta(minutes=10)).timestamp())
 
-    if not OTP_TABLE_NAME:
-        return _json(500, _err("server_not_configured"))
+        if not OTP_TABLE_NAME:
+            return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
 
-    tbl = dynamodb.Table(OTP_TABLE_NAME)
-    tbl.put_item(Item={"email": email, "code": code, "expires": expires_at})
+        tbl = dynamodb.Table(OTP_TABLE_NAME)
+        tbl.put_item(Item={"email": email, "code": code, "expires": expires_at})
 
-    # Send email via SES (optional)
-    if SES_SENDER:
-        try:
-            ses.send_email(
-                Source=SES_SENDER,
-                Destination={"ToAddresses": [email]},
-                Message={
-                    "Subject": {"Data": "Your EC2 Dashboard OTP"},
-                    "Body": {"Text": {"Data": f"Your OTP is {code}. It expires in 10 minutes."}},
-                },
-            )
-        except ClientError:
-            # For dev, return code
-            return _json(200, _ok(dev=True, code=code))
+        # Send email via SES (optional)
+        if SES_SENDER:
+            try:
+                ses.send_email(
+                    Source=SES_SENDER,
+                    Destination={"ToAddresses": [email]},
+                    Message={
+                        "Subject": {"Data": "Your EC2 Dashboard OTP"},
+                        "Body": {"Text": {"Data": f"Your OTP is {code}. It expires in 10 minutes."}},
+                    },
+                )
+            except ClientError as e:
+                # Dev mode: still succeed and reveal OTP
+                return _json(200, _ok(dev=True, code=code, ses_error=str(e)))
 
-    # In non-SES environments, return OTP for dev use (comment this out in prod)
-    return _json(200, _ok(dev=True, code=code))
+        # Dev mode (safe to keep while testing)
+        return _json(200, _ok(dev=True, code=code))
+    except ClientError as e:
+        return _json(200, _err("ddb_or_ses_error", message=str(e)))
+    except Exception as e:
+        return _json(200, _err("unexpected", message=str(e)))
+
 
 def handle_verify_otp(body):
-    email = (body.get("email") or "").strip().lower()
-    code  = (body.get("code") or "").strip()
-    if not (email and code):
-        return _json(200, _err("missing_params"))
+    try:
+        email = (body.get("email") or "").strip().lower()
+        code  = (body.get("code") or "").strip()
+        if not (email and code):
+            return _json(200, _err("missing_params"))
 
-    tbl = dynamodb.Table(OTP_TABLE_NAME)
-    res = tbl.get_item(Key={"email": email}).get("Item")
-    if not res:
-        return _json(200, _err("not_found"))
+        if not OTP_TABLE_NAME:
+            return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
 
-    if int(res.get("expires", 0)) < int(time.time()):
-        return _json(200, _err("expired"))
+        tbl = dynamodb.Table(OTP_TABLE_NAME)
+        res = tbl.get_item(Key={"email": email}).get("Item")
+        if not res:
+            return _json(200, _err("not_found"))
 
-    if res.get("code") != code:
-        return _json(200, _err("invalid_code"))
+        if int(res.get("expires", 0)) < int(time.time()):
+            return _json(200, _err("expired"))
 
-    # Issue OVT for the password step so the UI can proceed
-    ovt, ovt_exp_ms = _issue_ovt_for_email(email)
-    return _json(200, _ok(ovt=ovt, ovt_exp=ovt_exp_ms))
+        if res.get("code") != code:
+            return _json(200, _err("invalid_code"))
+
+        ovt, ovt_exp_ms = _issue_ovt_for_email(email)
+        if not ovt:
+            return _json(200, _err("ovt_issue_failed"))
+        return _json(200, _ok(ovt=ovt, ovt_exp=ovt_exp_ms))
+    except ClientError as e:
+        return _json(200, _err("ddb_error", message=str(e)))
+    except Exception as e:
+        return _json(200, _err("unexpected", message=str(e)))
+
 
 def handle_login(body):
     """
