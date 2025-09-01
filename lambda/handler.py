@@ -150,16 +150,16 @@ def handle_verify_otp(body: dict):
 
 def handle_login(body: dict):
     """
-    body: {email, username, password, ovt}
+    body: {username, password, email?}
     Validates against SSM param: "/<project>/users/<username>" => "password,role,email,name"
     Creates a JWT signed with secret at JWT_PARAM.
     """
-    email    = (body.get("email")    or "").strip().lower()
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "").strip()
-    # ovt is accepted from UI; we don't store it server-side here.
+    email    = (body.get("email") or "").strip().lower()  # optional
 
-    if not username or not password or not email.endswith("@" + ALLOWED_DOMAIN):
+    # Require username + password only. Email is optional.
+    if not username or not password:
         return _json(400, {"error": "bad_credentials"})
 
     raw = _get_user_secret(username)  # "pwd,role,email,name"
@@ -171,16 +171,25 @@ def handle_login(body: dict):
     except Exception:
         return _json(500, {"error": "user_param_malformed"})
 
-    if password != upwd or email != uemail:
+    # Password must match
+    if password != upwd:
         return _json(401, {"error": "invalid"})
 
+    # If an email was provided by the client, validate it (optional)
+    if email:
+        if ALLOWED_DOMAIN and not email.endswith("@" + ALLOWED_DOMAIN):
+            return _json(401, {"error": "invalid_domain"})
+        if uemail and email != uemail.lower():
+            return _json(401, {"error": "email_mismatch"})
+
+    # Issue JWT
     secret = _get_param(JWT_PARAM)
     now = int(_now_utc().timestamp())
     payload = {
         "sub": username,
         "name": name,
         "role": role,
-        "email": email,
+        "email": email or uemail,  # include whichever we have
         "iat": now,
         "exp": now + 8 * 3600,  # 8 hours
     }
