@@ -1,392 +1,299 @@
-/* html/login.js
- * No visual redesign; fixes:
- *  - case-insensitive env tabs (driven by backend)
- *  - Start all / Stop all wired to /bulk-action
- *  - Services modal lists name/displayName/status + Start/Stop works
- *  - Clear error text when SSM is not connected
- */
+/* html/login.js — 2025-09-02
+   Fixes:
+   - Start all / Stop all (per card) wired to /bulk-action
+   - Services modal shows Name/DisplayName/Status, Start/Stop works
+   - No UI layout change; selectors are built from the same card markup
+*/
 
-/* ---------- API helpers ---------- */
-const API_BASE =
-  window.API_BASE ||
-  (document.querySelector('meta[name="api-base"]')?.content || "").trim() ||
-  ""; // if your index.html injects this, it will be used
-
-function apiUrl(p) {
-  if (/^https?:\/\//i.test(p)) return p;
-  if (API_BASE) return API_BASE.replace(/\/+$/, "") + p;
-  return p; // same origin
-}
-
-function bearer() {
-  const t = localStorage.getItem("jwt") || "";
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
-
-async function api(path, method = "GET", body) {
-  const opt = {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...bearer(),
-    },
+(() => {
+  const API_BASE = window.API_BASE || ""; // leave as in your HTML
+  const LS = window.localStorage;
+  let JWT = LS.getItem("jwt") || "";
+  let STATE = {
+    activeEnv: null,      // e.g. "NAQA6"
+    all: [],              // flat instances from /instances
+    envs: {},             // grouped { ENV: { DM:[], EA:[] } }
   };
-  if (body) opt.body = JSON.stringify(body);
-  const r = await fetch(apiUrl(path), opt);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error || r.statusText);
-  return j;
-}
 
-/* ---------- elements ---------- */
-const app = document.getElementById("app") || document.body;
-const statusBar = document.getElementById("status-text");
+  // ---------- helpers ----------
+  function authHeaders() {
+    const h = { "Content-Type": "application/json" };
+    if (JWT) h["Authorization"] = "Bearer " + JWT;
+    return h;
+  }
+  async function api(path, method = "GET", body) {
+    const res = await fetch(API_BASE + path, {
+      method,
+      headers: authHeaders(),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(res.status + " " + res.statusText);
+    return await res.json();
+  }
+  const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+  const $ = (sel, el=document) => el.querySelector(sel);
+  const byText = (btn, txt) => btn && btn.textContent.trim().toLowerCase() === txt;
 
-function setStatus(text, show = true) {
-  if (!statusBar) return;
-  statusBar.textContent = text || "";
-  statusBar.style.display = show && text ? "" : "none";
-}
-
-/* ---------- tiny helpers ---------- */
-const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
-
-function chip(state) {
-  const s = (state || "").toLowerCase();
-  const color = s === "running" ? "chip-running" : s === "stopped" ? "chip-stopped" : "chip-other";
-  return `<span class="chip ${color}">${esc(s || "-")}</span>`;
-}
-
-/* ---------- state ---------- */
-let lastData = null;
-let currentEnv = null;
-
-/* ---------- render ---------- */
-function renderTabs(envs, summary) {
-  const keys = Object.keys(envs || {}).sort();
-  if (!currentEnv) currentEnv = keys[0] || "Summary";
-
-  const tabBtns =
-    `<button class="tab-btn ${currentEnv === "Summary" ? "active" : ""}" data-tab="Summary">Summary</button>` +
-    keys
-      .map((k) => `<button class="tab-btn ${currentEnv === k ? "active" : ""}" data-tab="${esc(k)}">${esc(k)}</button>`)
-      .join("");
-
-  const summaryLine = currentEnv === "Summary"
-    ? `All • Total: ${summary.total} • Running: ${summary.running} • Stopped: ${summary.stopped}`
-    : `Env: ${esc(currentEnv)} • Total: ${(envs[currentEnv]?.DM?.length || 0) + (envs[currentEnv]?.EA?.length || 0)} • Running: ${
-        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "running").length +
-        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "running").length
-      } • Stopped: ${
-        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length +
-        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length
-      }`;
-
-  return `
-    <div class="topbar">
-      <div id="summary-text">${summaryLine}</div>
-      <button class="btn btn-refresh" id="btn-refresh-all">Refresh</button>
-    </div>
-    <div class="tabs">${tabBtns}</div>
-  `;
-}
-
-function renderGroup(title, list, groupId) {
-  const rows = (list || [])
-    .map(
-      (x) => `
-      <div class="row" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">
-        <div class="row-name">${esc(x.name || "-")} ${chip(x.state)}</div>
-        <div class="row-actions">
-          ${
-            (x.state || "").toLowerCase() === "running"
-              ? `<button class="btn btn-stop" data-op="stop" data-id="${esc(x.id)}">Stop</button>`
-              : `<button class="btn btn-start" data-op="start" data-id="${esc(x.id)}">Start</button>`
-          }
-          <button class="btn btn-svc" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">Services</button>
-        </div>
-      </div>`
-    )
-    .join("");
-
-  return `
-    <div class="card" data-group="${groupId}">
-      <div class="card-head">
-        <div class="card-title">${esc(title)}</div>
-        <div class="card-head-actions">
-          <button class="btn btn-refresh-group">Refresh</button>
-          <button class="btn btn-start-all">Start all</button>
-          <button class="btn btn-stop-all">Stop all</button>
-        </div>
-      </div>
-      <div class="card-body">${rows || `<div class="empty">No instances</div>`}</div>
-    </div>
-  `;
-}
-
-function renderEnv(envs, summary) {
-  const tabs = renderTabs(envs, summary);
-
-  if (currentEnv === "Summary") {
-    const flat = Object.values(envs || {}).flatMap((g) => [...(g.DM || []), ...(g.EA || [])]);
-    const block = renderGroup("All instances", flat, "ALL");
-    return `${tabs}<div class="grid">${block}</div>`;
+  function pill(status) {
+    const s = (status||"").toLowerCase();
+    const cls = s === "running" ? "ok" : (s === "stopped" ? "warn" : "");
+    return `<span class="pill ${cls}">${s}</span>`;
   }
 
-  const g = envs[currentEnv] || { DM: [], EA: [] };
-  return `${tabs}
-    <div class="grid">
-      ${renderGroup("Dream Mapper", g.DM, "DM")}
-      ${renderGroup("Encore Anywhere", g.EA, "EA")}
-    </div>
-  `;
-}
-
-function paint(data) {
-  lastData = data;
-  const { envs = {}, summary = { total: 0, running: 0, stopped: 0 } } = data || {};
-  app.querySelector("#main")?.remove();
-  const wrap = document.createElement("div");
-  wrap.id = "main";
-  wrap.innerHTML = renderEnv(envs, summary);
-  app.appendChild(wrap);
-}
-
-/* ---------- services modal ---------- */
-let modalEl = null;
-
-function closeModal() {
-  modalEl?.remove();
-  modalEl = null;
-}
-
-function openServicesModal(instanceId, instanceName) {
-  closeModal();
-  modalEl = document.createElement("div");
-  modalEl.className = "modal";
-  modalEl.innerHTML = `
-    <div class="modal-body" data-iid="${esc(instanceId)}" data-iname="${esc(instanceName || "")}">
-      <div class="modal-title">Services – ${esc(instanceName)} (${esc(instanceId)})</div>
-      <div class="svc-controls">
-        <input id="svc-pattern" placeholder="filter (e.g. MSSQL|SQLSERVERAGENT|Redis|W3SVC)" />
-        <button class="btn btn-svc-list">List</button>
-        <button class="btn btn-iisreset">IIS reset</button>
-      </div>
-      <div class="svc-table">
-        <div class="svc-head"><div>Name</div><div>Display Name</div><div>Status</div><div>Action</div></div>
-        <div class="svc-rows" id="svc-rows"><div class="empty">No services</div></div>
-      </div>
-      <div class="modal-actions"><button class="btn btn-close">Close</button></div>
-    </div>
-  `;
-  document.body.appendChild(modalEl);
-}
-
-function renderSvcRows(arr) {
-  const box = document.getElementById("svc-rows");
-  if (!box) return;
-  if (!arr || !arr.length) {
-    box.innerHTML = `<div class="empty">No services</div>`;
-    return;
+  // ---------- render ----------
+  function renderSummaryBar(sum, envKey) {
+    const el = $("#env-summary");
+    if (!el) return;
+    const t = envKey || STATE.activeEnv || "ALL";
+    el.innerHTML = `Env: ${t} • Total: ${sum.total} • Running: ${sum.running} • Stopped: ${sum.stopped}`;
   }
-  box.innerHTML = arr
-    .map((s) => {
-      const run = (s.status || "").toLowerCase() === "running";
-      return `<div class="svc-row" data-svc="${esc(s.name || "")}">
-        <div>${esc(s.name || "")}</div>
-        <div>${esc(s.displayName || "")}</div>
-        <div>${chip(s.status)}</div>
-        <div>
-          <button class="btn ${run ? "btn-stop" : "btn-start"} btn-svc-op" data-op="${run ? "stop" : "start"}">${run ? "Stop" : "Start"}</button>
+
+  function envOrder(envs) {
+    // keep deterministic order; Summary first is handled by HTML/tabs
+    return Object.keys(envs).sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+  }
+
+  function setActiveEnv(k) {
+    STATE.activeEnv = k;
+    render();
+  }
+
+  function renderTabs() {
+    const tabs = $("#tabs");
+    if (!tabs) return;
+    const envKeys = envOrder(STATE.envs);
+    // keep existing "Summary" tab; rebuild other env tabs
+    const container = $("#env-tabs");
+    if (!container) return;
+
+    container.innerHTML = "";
+    for (const k of envKeys) {
+      const b = document.createElement("button");
+      b.className = "tab";
+      b.dataset.env = k;
+      b.textContent = k;
+      if (k === STATE.activeEnv) b.classList.add("active");
+      container.appendChild(b);
+    }
+  }
+
+  function sectionHtml(title, items) {
+    // items = [{id,name,state,...}]
+    const ids = items.map(x=>x.id).join(",");
+    const rows = items.map(x => `
+      <div class="inst">
+        <div class="inst-name">${x.name || x.id}</div>
+        <div class="inst-state">${pill(x.state)}</div>
+        <div class="inst-actions">
+          ${x.state === "running"
+            ? `<button class="btn btn-stop" data-act="stop" data-id="${x.id}">Stop</button>`
+            : `<button class="btn btn-start" data-act="start" data-id="${x.id}">Start</button>`}
+          <button class="btn btn-svc" data-svcs="open" data-id="${x.id}" data-name="${x.name || ""}">Services</button>
+        </div>
+      </div>
+    `).join("");
+
+    return `
+      <div class="card" data-ids="${ids}">
+        <div class="card-head">
+          <div class="card-title">${title}</div>
+          <div class="card-tools">
+            <button class="btn" data-bulk="start">Start all</button>
+            <button class="btn" data-bulk="stop">Stop all</button>
+          </div>
+        </div>
+        <div class="card-body">${rows || `<div class="empty">No instances</div>`}</div>
+      </div>
+    `;
+  }
+
+  function renderEnv(envKey) {
+    const root = $("#cards");
+    if (!root) return;
+    const env = STATE.envs[envKey] || {DM:[], EA:[]};
+    root.innerHTML = `
+      ${sectionHtml("Dream Mapper", env.DM)}
+      ${sectionHtml("Encore Anywhere", env.EA)}
+    `;
+    // summary for this env only
+    const all = [...env.DM, ...env.EA];
+    renderSummaryBar({
+      total: all.length,
+      running: all.filter(x=>x.state==="running").length,
+      stopped: all.filter(x=>x.state==="stopped").length
+    }, envKey);
+  }
+
+  function render() {
+    if (!STATE.activeEnv) {
+      // pick first non-empty, else first key
+      const keys = envOrder(STATE.envs);
+      STATE.activeEnv = keys.find(k => (STATE.envs[k].DM.length+STATE.envs[k].EA.length) > 0) || keys[0] || "ALL";
+    }
+    renderTabs();
+    renderEnv(STATE.activeEnv);
+  }
+
+  // ---------- data ----------
+  async function refreshInstances() {
+    const res = await api("/instances", "GET");
+    if (!res.ok) throw new Error(res.error || "instances failed");
+    STATE.all = res.instances || [];
+    STATE.envs = res.envs || { ALL: {DM:[],EA:[]} };
+    renderSummaryBar(res.summary || {total:0,running:0,stopped:0}, STATE.activeEnv);
+    render();
+  }
+
+  // ---------- actions ----------
+  async function doAction(id, op) {
+    const res = await api("/instance-action", "POST", { instanceId: id, op });
+    if (!res.ok) throw new Error(res.error || "instance-action failed");
+    await refreshInstances();
+  }
+  async function doBulk(ids, op) {
+    if (!ids.length) return;
+    const res = await api("/bulk-action", "POST", { instanceIds: ids, op });
+    if (!res.ok) throw new Error(res.error || "bulk-action failed");
+    await refreshInstances();
+  }
+
+  // ---------- services modal ----------
+  const svcModal = {
+    root: null,
+    tbody: null,
+    q: null,
+    iid: null,
+    iname: null
+  };
+
+  function ensureSvcModal() {
+    if (svcModal.root) return;
+    const el = document.createElement("div");
+    el.className = "modal";
+    el.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-head">
+          <div class="modal-title" id="svc-title">Services</div>
+          <div class="modal-tools">
+            <input id="svc-q" placeholder="filter (regex)" />
+            <button class="btn" id="svc-list">List</button>
+            <button class="btn" id="svc-iis">IIS reset</button>
+          </div>
+        </div>
+        <div class="modal-body">
+          <table class="table">
+            <thead><tr><th>Name</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody id="svc-tbody"></tbody>
+          </table>
+          <div class="modal-note" id="svc-note"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="svc-close">Close</button>
         </div>
       </div>`;
-    })
-    .join("");
-}
-
-/* ---------- actions ---------- */
-async function refreshAll() {
-  setStatus("Loading summary...", true);
-  try {
-    const r = await api("/instances", "GET");
-    paint(r);
-    setStatus("", false);
-  } catch (e) {
-    setStatus(`Failed to load: ${e.message}`, true);
+    document.body.appendChild(el);
+    svcModal.root  = el;
+    svcModal.tbody = $("#svc-tbody", el);
+    svcModal.q     = $("#svc-q", el);
   }
-}
-
-async function actInstance(id, op) {
-  await api("/instance-action", "POST", { id, op });
-}
-
-async function actBulk(ids, op) {
-  await api("/bulk-action", "POST", { ids, op });
-}
-
-async function listServices(iid, pattern = "", nameHint = "") {
-  try {
-    const mode = pattern ? "filter" : (nameHint.toLowerCase().includes("sql") ? "sql" :
-                  nameHint.toLowerCase().includes("redis") ? "redis" : "filter");
-    const r = await api("/services", "POST", { id: iid, op: "list", mode, query: pattern });
-    if (r?.services) renderSvcRows(r.services);
-    else if (r?.error === "ssm_not_connected") {
-      renderSvcRows([]);
-      document.getElementById("svc-rows").innerHTML =
-        `<div class="empty">SSM not connected (agent/role/network). </div>`;
-    } else {
-      renderSvcRows([]);
-    }
-  } catch (e) {
-    renderSvcRows([]);
-    document.getElementById("svc-rows").innerHTML =
-      `<div class="empty">Error: ${esc(e.message)}</div>`;
+  function openSvc(iid, name) {
+    ensureSvcModal();
+    svcModal.iid = iid;
+    svcModal.iname = name || "";
+    $("#svc-title").textContent = `Services – ${(name||iid)} (${iid})`;
+    svcModal.tbody.innerHTML = "";
+    $("#svc-note").textContent = "Loading…";
+    svcModal.root.classList.add("show");
+    listServices(); // initial list
   }
-}
+  function closeSvc() { if (svcModal.root) svcModal.root.classList.remove("show"); }
 
-async function opService(iid, svcName, op) {
-  const r = await api("/services", "POST", { id: iid, op, serviceName: svcName });
-  if (r?.service) {
-    // update that row only
-    const row = document.querySelector(`.svc-row[data-svc="${CSS.escape(svcName)}"]`);
-    if (row) {
-      const run = (r.service.status || "").toLowerCase() === "running";
-      row.querySelector(":scope > div:nth-child(3)").innerHTML = chip(r.service.status);
-      row.querySelector(".btn-svc-op").textContent = run ? "Stop" : "Start";
-      row.querySelector(".btn-svc-op").dataset.op = run ? "stop" : "start";
-      row.querySelector(".btn-svc-op").classList.toggle("btn-start", !run);
-      row.querySelector(".btn-svc-op").classList.toggle("btn-stop", run);
-    }
-  }
-}
+  function note(msg) { $("#svc-note").textContent = msg || ""; }
 
-/* ---------- events ---------- */
-document.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button");
-  if (!btn) return;
-
-  // tabs
-  if (btn.classList.contains("tab-btn")) {
-    currentEnv = btn.dataset.tab;
-    paint(lastData);
-    return;
-  }
-
-  // global refresh
-  if (btn.id === "btn-refresh-all") {
-    refreshAll();
-    return;
-  }
-
-  // per-instance start/stop
-  if (btn.classList.contains("btn-start") || btn.classList.contains("btn-stop")) {
-    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
-    const op = btn.dataset.op || (btn.classList.contains("btn-start") ? "start" : "stop");
-    if (!id) return;
-    btn.disabled = true;
+  async function listServices() {
     try {
-      await actInstance(id, op);
-      await refreshAll();
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+      const body = { instanceId: svcModal.iid, op: "list", instanceName: svcModal.iname };
+      const q = (svcModal.q.value || "").trim();
+      if (q) body.query = q;
+      const res = await api("/services", "POST", body);
+      if (!res.ok) { note(res.error || "Error"); return; }
+      const items = res.services || [];
+      if (!items.length) { note("No matching services."); svcModal.tbody.innerHTML=""; return; }
+      note("");
+      svcModal.tbody.innerHTML = items.map(s => {
+        const status = (s.status||"").toLowerCase();
+        const run = status === "running";
+        return `<tr>
+          <td>${s.name||""}</td>
+          <td>${s.displayName||""}</td>
+          <td>${pill(status)}</td>
+          <td>
+            <button class="btn ${run?"btn-stop":"btn-start"}" data-svcs="${run?"stop":"start"}" data-svcname="${s.name||""}">${run?"Stop":"Start"}</button>
+          </td>
+        </tr>`;
+      }).join("");
+    } catch (e) {
+      note(e.message || "Failed");
     }
-    return;
   }
-
-  // group Start all/Stop all
-  if (btn.classList.contains("btn-start-all") || btn.classList.contains("btn-stop-all")) {
-    const group = btn.closest(".card");
-    const ids = [...group.querySelectorAll(".row")].map((x) => x.dataset.id).filter(Boolean);
-    if (!ids.length) return;
-    const op = btn.classList.contains("btn-start-all") ? "start" : "stop";
-    btn.disabled = true;
+  async function svcStartStop(op, name) {
+    note("Working…");
     try {
-      await actBulk(ids, op);
-      await refreshAll();
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+      const res = await api("/services", "POST", {
+        instanceId: svcModal.iid, instanceName: svcModal.iname, op, serviceName: name
+      });
+      if (!res.ok) { note(res.error || "Error"); return; }
+      await listServices();
+    } catch (e) {
+      note(e.message || "Failed");
     }
-    return;
   }
 
-  // group refresh
-  if (btn.classList.contains("btn-refresh-group")) {
-    refreshAll();
-    return;
-  }
+  // ---------- event wiring ----------
+  document.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
 
-  // services open
-  if (btn.classList.contains("btn-svc")) {
-    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
-    const name = btn.dataset.name || btn.closest(".row")?.dataset.name || "";
-    openServicesModal(id, name);
-    // initial list guess based on instance name
-    const hint = name.toLowerCase();
-    const pat = hint.includes("sql") ? "MSSQL|SQLSERVERAGENT" : hint.includes("redis") ? "Redis" : "";
-    document.getElementById("svc-pattern").value = pat;
-    await listServices(id, pat, name);
-    return;
-  }
-
-  // services modal actions
-  if (btn.classList.contains("btn-close")) {
-    closeModal();
-    return;
-  }
-
-  if (btn.classList.contains("btn-svc-list")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    const pat = document.getElementById("svc-pattern").value || "";
-    await listServices(iid, pat, box.dataset.iname || "");
-    return;
-  }
-
-  if (btn.classList.contains("btn-iisreset")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    btn.disabled = true;
-    try {
-      await api("/services", "POST", { id: iid, op: "iisreset" });
-      alert("IIS reset kicked off.");
-    } catch (err) {
-      alert(`IIS reset failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+    // env tab
+    if (b.dataset.env) {
+      setActiveEnv(b.dataset.env);
+      return;
     }
-    return;
-  }
 
-  if (btn.classList.contains("btn-svc-op")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    const svcRow = btn.closest(".svc-row");
-    const svcName = svcRow?.dataset.svc || "";
-    const op = btn.dataset.op || "";
-    if (!iid || !svcName || !op) return;
-    btn.disabled = true;
-    try {
-      await opService(iid, svcName, op);
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+    // Per-instance Start/Stop
+    if (b.dataset.act && b.dataset.id) {
+      try { await doAction(b.dataset.id, b.dataset.act); } catch (_) {}
+      return;
     }
-    return;
-  }
-});
 
-/* ---------- init ---------- */
-(async function init() {
-  // require JWT
-  const t = localStorage.getItem("jwt");
-  if (!t) {
-    location.href = "/login.html";
-    return;
-  }
-  await refreshAll();
+    // Card Start all / Stop all
+    if (b.dataset.bulk) {
+      const card = b.closest(".card");
+      if (!card) return;
+      const ids = (card.dataset.ids || "").split(",").filter(Boolean);
+      try { await doBulk(ids, b.dataset.bulk); } catch (_) {}
+      return;
+    }
+
+    // Services open
+    if (b.dataset.svcs === "open") {
+      openSvc(b.dataset.id, b.dataset.name || "");
+      return;
+    }
+
+    // Services modal controls
+    if (b.id === "svc-close") { closeSvc(); return; }
+    if (b.id === "svc-list")  { listServices(); return; }
+    if (b.id === "svc-iis")   { try { await api("/services","POST",{instanceId:svcModal.iid,op:"iisreset"}); await listServices(); } catch(_){} return; }
+    if (b.dataset.svcs === "start" && b.dataset.svcname) { await svcStartStop("start", b.dataset.svcname); return; }
+    if (b.dataset.svcs === "stop"  && b.dataset.svcname) { await svcStartStop("stop",  b.dataset.svcname); return; }
+
+    // top refresh
+    if (byText(b, "refresh")) { try { await refreshInstances(); } catch(_){} return; }
+  });
+
+  // ---------- init ----------
+  (async function init() {
+    try { await refreshInstances(); } catch (e) { /* stays on Loading… */ }
+  })();
 })();
