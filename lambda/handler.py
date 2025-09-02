@@ -1,9 +1,20 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
-# EC2 Dashboard API – OTP, login, instances, actions, services.
+# EC2 Dashboard API – OTP, login, instances, actions, services (Windows).
+# No UI changes; fixes:
+#   - case-insensitive env detection
+#   - do NOT pre-filter EC2 by tag:Name (avoid case sensitivity in AWS filter)
+#   - pagination for EC2
+#   - robust SSM service list/Start/Stop payloads
 # -----------------------------------------------------------------------------
 
-import os, json, time, hmac, base64, hashlib, random
+import os
+import json
+import time
+import hmac
+import base64
+import hashlib
+import random
 from datetime import datetime, timedelta, timezone
 
 import boto3
@@ -17,44 +28,49 @@ ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com")
 PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX", "/ec2-dashboard/users")
 JWT_PARAM         = os.environ.get("JWT_PARAM", "/ec2-dashboard/jwt-secret")
 ENV_NAMES_STR     = os.environ.get("ENV_NAMES", "")
-# store as lowercase tokens for case-insensitive matching
+# store tokens lower-cased so detection is case-insensitive
 ENV_TOKENS        = [e.strip().lower() for e in (ENV_NAMES_STR or "").split(",") if e.strip()]
 
 # ---------- Clients ----------
-ec2       = boto3.client("ec2", region_name=REGION)
-ssm       = boto3.client("ssm", region_name=REGION)
-ses       = boto3.client("ses", region_name=REGION)
-dynamodb  = boto3.resource("dynamodb", region_name=REGION)
+ec2 = boto3.client("ec2", region_name=REGION)
+ssm = boto3.client("ssm", region_name=REGION)
+ses = boto3.client("ses", region_name=REGION)
+dynamodb = boto3.resource("dynamodb", region_name=REGION)
 ssm_param = boto3.client("ssm", region_name=REGION)
 
 # ---------- Globals ----------
 JWT_SECRET_CACHE = None
-USERS_CACHE = {}
+USERS_CACHE = {}  # cache SSM user records for the runtime
 
 # ---------- Utils ----------
-def _now(): return datetime.now(timezone.utc)
+def _now():
+    return datetime.now(timezone.utc)
 
 def _json(status, body, headers=None):
     h = {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
-    if headers: h.update(headers)
+    if headers:
+        h.update(headers)
     return {"statusCode": status, "headers": h, "body": json.dumps(body, default=str)}
 
-def _b64url(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+def _b64url(data_bytes):
+    return base64.urlsafe_b64encode(data_bytes).rstrip(b"=").decode()
 
 def _jwt_secret():
     global JWT_SECRET_CACHE
-    if JWT_SECRET_CACHE: return JWT_SECRET_CACHE
+    if JWT_SECRET_CACHE:
+        return JWT_SECRET_CACHE
     p = ssm_param.get_parameter(Name=JWT_PARAM, WithDecryption=True)
     JWT_SECRET_CACHE = p["Parameter"]["Value"].encode()
     return JWT_SECRET_CACHE
 
 def _sign_jwt(claims, ttl_minutes=60):
-    header = {"alg":"HS256","typ":"JWT"}
+    header = {"alg": "HS256", "typ": "JWT"}
     now = int(time.time())
-    claims = {**claims, "iat": now, "exp": now + ttl_minutes*60}
+    claims = {**claims, "iat": now, "exp": now + ttl_minutes * 60}
     h64 = _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True).encode())
     p64 = _b64url(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode())
-    sig = hmac.new(_jwt_secret(), f"{h64}.{p64}".encode(), hashlib.sha256).digest()
+    msg = f"{h64}.{p64}".encode()
+    sig = hmac.new(_jwt_secret(), msg, hashlib.sha256).digest()
     return f"{h64}.{p64}.{_b64url(sig)}"
 
 def _read_body(event):
@@ -66,20 +82,32 @@ def _read_body(event):
     except Exception:
         return {}
 
-def _ok(ok=True, **extra):  return {"ok": ok, **extra}
-def _err(code, **extra):    return {"ok": False, "error": code, **extra}
+def _ok(ok=True, **extra):
+    return {"ok": ok, **extra}
 
-# ---------- SSM / users ----------
+def _err(code, **extra):
+    return {"ok": False, "error": code, **extra}
+
+# ---------- SSM users ----------
 def _ssm_get(name, decrypt=True):
     return ssm_param.get_parameter(Name=name, WithDecryption=decrypt)["Parameter"]["Value"]
 
 def _get_user_record(username):
-    if not username: return None
-    if username in USERS_CACHE: return USERS_CACHE[username]
+    """
+    Load from SSM as:
+    A) JSON SecureString at {PREFIX}/{username}
+       {"password":"plain:...|sha256:<hex>", "role":"admin|reader|user", "email":"user@..."}
+    B) Split params at {PREFIX}/{username}/password, /role, /email
+    """
+    if not username:
+        return None
+    if username in USERS_CACHE:
+        return USERS_CACHE[username]
 
     base = f"{PARAM_USER_PREFIX}/{username}"
     rec = None
 
+    # Try JSON secret
     try:
         raw = _ssm_get(base, decrypt=True)
         try:
@@ -94,12 +122,17 @@ def _get_user_record(username):
         except Exception:
             rec = {"username": username, "password": raw, "role": "user", "email": None}
     except ClientError:
+        # Try split params
         try:
             pwd = _ssm_get(f"{base}/password", decrypt=True)
-            try:    role = _ssm_get(f"{base}/role", decrypt=False) or "user"
-            except ClientError: role = "user"
-            try:    email = (_ssm_get(f"{base}/email", decrypt=False) or "").strip().lower() or None
-            except ClientError: email = None
+            try:
+                role = _ssm_get(f"{base}/role", decrypt=False) or "user"
+            except ClientError:
+                role = "user"
+            try:
+                email = (_ssm_get(f"{base}/email", decrypt=False) or "").strip().lower() or None
+            except ClientError:
+                email = None
             rec = {"username": username, "password": pwd, "role": role, "email": email}
         except ClientError:
             rec = None
@@ -110,7 +143,8 @@ def _get_user_record(username):
     return rec
 
 def _verify_password(stored, provided):
-    if not isinstance(stored, str): return False
+    if not isinstance(stored, str):
+        return False
     s = stored.strip()
     if s.lower().startswith("sha256:"):
         want = s.split(":", 1)[1].strip().lower()
@@ -118,14 +152,16 @@ def _verify_password(stored, provided):
         return got == want
     if s.lower().startswith("plain:"):
         return provided == s.split(":", 1)[1]
-    return provided == s
+    return provided == s  # back-compat literal
 
-# ---------- DDB (OTP/OVT) ----------
+# ---------- OVT helpers ----------
 def _issue_ovt_for_email(email):
-    if not OTP_TABLE_NAME: return None, None
+    if not OTP_TABLE_NAME:
+        return None, None
     ovt = base64.urlsafe_b64encode(os.urandom(24)).rstrip(b"=").decode()
-    exp_ms = int(time.time()*1000) + 10*60*1000
-    dynamodb.Table(OTP_TABLE_NAME).update_item(
+    exp_ms = int(time.time() * 1000) + 10 * 60 * 1000
+    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    tbl.update_item(
         Key={"email": email},
         UpdateExpression="SET ovt=:o, ovt_exp_ms=:e",
         ExpressionAttributeValues={":o": ovt, ":e": exp_ms},
@@ -133,34 +169,43 @@ def _issue_ovt_for_email(email):
     return ovt, exp_ms
 
 def _ovt_record(ovt):
-    if not (OTP_TABLE_NAME and ovt): return None
+    if not (OTP_TABLE_NAME and ovt):
+        return None
     tbl = dynamodb.Table(OTP_TABLE_NAME)
     scan = tbl.scan(ProjectionExpression="email, code, expires, ovt, ovt_exp_ms")
     items = scan.get("Items", []) or []
-    now_ms = int(time.time()*1000)
+    now_ms = int(time.time() * 1000)
     for it in items:
         if (it.get("ovt") == ovt) and int(it.get("ovt_exp_ms", 0)) > now_ms:
             return it
     return None
 
+def _validate_ovt(ovt):
+    return _ovt_record(ovt) is not None
+
 def _ovt_get_email(ovt):
     rec = _ovt_record(ovt)
-    return (rec.get("email") or "").strip().lower() if rec else None
+    if not rec:
+        return None
+    return (rec.get("email") or "").strip().lower() or None
 
-# ---------- OTP endpoints ----------
+# ---------- OTP ----------
 def handle_request_otp(body):
     try:
         email = (body.get("email") or "").strip().lower()
         if not email or "@" not in email:
             return _json(200, _err("invalid_email"))
-        if ALLOWED_DOMAIN and not email.endswith("@"+ALLOWED_DOMAIN):
+        if ALLOWED_DOMAIN and not email.endswith("@" + ALLOWED_DOMAIN):
             return _json(200, _err("domain_not_allowed"))
 
         code = f"{random.randint(0, 999999):06d}"
         expires_at = int((_now() + timedelta(minutes=10)).timestamp())
+
         if not OTP_TABLE_NAME:
             return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
-        dynamodb.Table(OTP_TABLE_NAME).put_item(Item={"email": email, "code": code, "expires": expires_at})
+
+        tbl = dynamodb.Table(OTP_TABLE_NAME)
+        tbl.put_item(Item={"email": email, "code": code, "expires": expires_at})
 
         if SES_SENDER:
             try:
@@ -193,103 +238,167 @@ def handle_verify_otp(body):
 
         tbl = dynamodb.Table(OTP_TABLE_NAME)
         res = tbl.get_item(Key={"email": email}).get("Item")
-        if not res:                                return _json(200, _err("not_found"))
-        if int(res.get("expires", 0)) < int(time.time()): return _json(200, _err("expired"))
-        if res.get("code") != code:               return _json(200, _err("invalid_code"))
+        if not res:
+            return _json(200, _err("not_found"))
+        if int(res.get("expires", 0)) < int(time.time()):
+            return _json(200, _err("expired"))
+        if res.get("code") != code:
+            return _json(200, _err("invalid_code"))
 
         ovt, ovt_exp_ms = _issue_ovt_for_email(email)
-        if not ovt: return _json(200, _err("ovt_issue_failed"))
+        if not ovt:
+            return _json(200, _err("ovt_issue_failed"))
         return _json(200, _ok(ovt=ovt, ovt_exp=ovt_exp_ms))
     except ClientError as e:
         return _json(200, _err("ddb_error", message=str(e)))
     except Exception as e:
         return _json(200, _err("unexpected", message=str(e)))
 
-# ---------- EC2 listing (no tag:Name pre-filter; paginate) ----------
+# ---------- Login (dual-mode) ----------
+def handle_login(body):
+    try:
+        # Mode A: OTP login
+        email = (body.get("email") or "").strip().lower()
+        code  = (body.get("code") or "").strip()
+        if email and code:
+            tbl = dynamodb.Table(OTP_TABLE_NAME)
+            res = tbl.get_item(Key={"email": email}).get("Item")
+            if not res or res.get("code") != code or int(res.get("expires", 0)) < int(time.time()):
+                return _json(200, _err("invalid_login"))
+            role = "user"
+            token = _sign_jwt({"sub": email, "role": role})
+            return _json(200, _ok(token=token, role=role, user={"username": email}))
+
+        # Mode B: username/password (+ optional OVT)
+        username = (body.get("username") or "").strip()
+        password = (body.get("password") or "")
+        ovt      = (body.get("ovt") or "").strip()
+        if not (username and password):
+            return _json(200, _err("invalid_login"))
+
+        ovt_email = None
+        if ovt:
+            ovt_email = _ovt_get_email(ovt)
+            if not ovt_email:
+                return _json(200, _err("ovt_invalid"))
+
+        rec = _get_user_record(username)
+        if not rec or not _verify_password(rec.get("password", ""), password):
+            return _json(200, _err("invalid_login"))
+
+        assigned_email = (rec.get("email") or "").strip().lower() if rec else None
+        if assigned_email and ovt_email and assigned_email != ovt_email:
+            return _json(200, _err("email_mismatch", message="Assigned email does not match OTP email"))
+
+        role = rec.get("role", "user")
+        token = _sign_jwt({"sub": username, "role": role})
+        return _json(200, _ok(token=token, role=role, user={"username": username}))
+    except Exception as e:
+        return _json(200, _err("unexpected", message=str(e)))
+
+# ---------- EC2 ----------
 def _name_tag(tags):
     for t in tags or []:
-        if t.get("Key") == "Name":
+        if (t.get("Key") or "").lower() == "name":
             return t.get("Value")
     return ""
 
 def _detect_env(name: str) -> str:
-    n = (name or "").casefold()  # case-insensitive
-    for tok in (ENV_TOKENS or []):
-        if tok.casefold() in n:
-            return tok.upper()  # show as upper in UI
-    # if no ENV_TOKENS configured, everything goes to ALL
+    n = (name or "").lower()
+    for tok in ENV_TOKENS or []:
+        if tok in n:
+            return tok.upper()           # present tabs will be uppercase (e.g., NAQA6, DM-QA)
     return "ALL" if not ENV_TOKENS else "MISC"
 
 def _detect_role(name: str) -> str:
-    return "DM" if "dm" in (name or "").casefold() else "EA"
+    return "DM" if "dm" in (name or "").lower() else "EA"
+
+def _list_instances_all_states():
+    """Fetch instances (running|stopped|pending|stopping) with pagination. No Name filter."""
+    filters = [{"Name": "instance-state-name", "Values": ["running","stopped","pending","stopping"]}]
+    token = None
+    items = []
+    while True:
+        resp = ec2.describe_instances(Filters=filters, NextToken=token) if token else ec2.describe_instances(Filters=filters)
+        for r in resp.get("Reservations", []):
+            for i in r.get("Instances", []):
+                items.append(i)
+        token = resp.get("NextToken")
+        if not token:
+            break
+    return items
 
 def handle_instances():
-    # fetch all instances (states we care about); DO NOT prefilter by tag:Name (case-sensitive)
-    paginator = ec2.get_paginator("describe_instances")
-    filters = [{"Name": "instance-state-name", "Values": ["running","stopped","pending","stopping"]}]
-    resp_iter = paginator.paginate(Filters=filters)
+    resp_items = _list_instances_all_states()
+    rows = []
+    for i in resp_items:
+        rows.append({
+            "id": i["InstanceId"],
+            "name": _name_tag(i.get("Tags")),
+            "state": i.get("State", {}).get("Name"),
+            "type": i.get("InstanceType"),
+            "publicIp": i.get("PublicIpAddress"),
+            "privateIp": i.get("PrivateIpAddress"),
+            "platform": "windows" if (i.get("Platform") == "windows" or (i.get("PlatformDetails","").lower().startswith("windows"))) else "linux",
+        })
 
-    items = []
-    for page in resp_iter:
-        for r in page.get("Reservations", []):
-            for i in r.get("Instances", []):
-                items.append({
-                    "id": i["InstanceId"],
-                    "name": _name_tag(i.get("Tags")),
-                    "state": i.get("State", {}).get("Name"),
-                    "type": i.get("InstanceType"),
-                    "publicIp": i.get("PublicIpAddress"),
-                    "privateIp": i.get("PrivateIpAddress"),
-                    "platform": "windows" if (i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows")) else "linux",
-                })
-
-    items.sort(key=lambda x: ((x["name"] or "").lower(), x["id"]))
+    rows.sort(key=lambda x: (x["name"] or "", x["id"]))
 
     summary = {
-        "total":   len(items),
-        "running": sum(1 for x in items if (x.get("state") or "").lower() == "running"),
-        "stopped": sum(1 for x in items if (x.get("state") or "").lower() == "stopped"),
+        "total":   len(rows),
+        "running": sum(1 for x in rows if (x.get("state") or "").lower() == "running"),
+        "stopped": sum(1 for x in rows if (x.get("state") or "").lower() == "stopped"),
     }
 
     envs = {}
-    for it in items:
+    for it in rows:
         env  = _detect_env(it["name"])
-        role = _detect_role(it["name"])
+        role = _detect_role(it["name"])  # DM / EA
         envs.setdefault(env, {"DM": [], "EA": []})
         envs[env][role].append(it)
 
-    return _json(200, _ok(instances=items, summary=summary, envs=envs))
+    return _json(200, _ok(instances=rows, summary=summary, envs=envs))
 
-# ---------- EC2 actions ----------
 def _ec2_action(instance_id, op):
-    if op == "start":  ec2.start_instances(InstanceIds=[instance_id])
-    elif op == "stop": ec2.stop_instances(InstanceIds=[instance_id])
-    elif op == "reboot": ec2.reboot_instances(InstanceIds=[instance_id])
-    else: return _err("unsupported_action")
+    if op == "start":
+        ec2.start_instances(InstanceIds=[instance_id])
+    elif op == "stop":
+        ec2.stop_instances(InstanceIds=[instance_id])
+    elif op == "reboot":
+        ec2.reboot_instances(InstanceIds=[instance_id])
+    else:
+        return _err("unsupported_action")
     return _ok()
 
 def handle_instance_action(body):
     iid = (body.get("instanceId") or body.get("id") or "").strip()
     op  = (body.get("op") or body.get("action") or "").strip().lower()
-    if not iid or not op: return _json(200, _err("missing_params"))
-    try:    return _json(200, _ec2_action(iid, op))
+    if not iid or not op:
+        return _json(200, _err("missing_params"))
+    try:
+        return _json(200, _ec2_action(iid, op))
     except ClientError as e:
         return _json(200, _err("aws_error", message=str(e)))
 
 def handle_bulk(body):
     ids = body.get("instanceIds") or body.get("ids") or []
     op  = (body.get("op") or "").lower()
-    if not ids or not op: return _json(200, _err("missing_params"))
+    if not ids or not op:
+        return _json(200, _err("missing_params"))
     try:
-        if op == "start":  ec2.start_instances(InstanceIds=ids)
-        elif op == "stop": ec2.stop_instances(InstanceIds=ids)
-        elif op == "reboot": ec2.reboot_instances(InstanceIds=ids)
-        else: return _json(200, _err("unsupported_action"))
+        if op == "start":
+            ec2.start_instances(InstanceIds=ids)
+        elif op == "stop":
+            ec2.stop_instances(InstanceIds=ids)
+        elif op == "reboot":
+            ec2.reboot_instances(InstanceIds=ids)
+        else:
+            return _json(200, _err("unsupported_action"))
         return _json(200, _ok())
     except ClientError as e:
         return _json(200, _err("aws_error", message=str(e)))
 
-# ---------- SSM (Windows services) ----------
+# ---------- Services via SSM (Windows) ----------
 PS_LIST_SQL = r"""
 $svcs = Get-Service | Where-Object {
     $_.Name -like 'MSSQL*' -or
@@ -316,9 +425,12 @@ param([string]$Name)
 Stop-Service -Name $Name -Force -ErrorAction Stop
 Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
-PS_IISRESET = r""" iisreset /restart | Out-Null; "OK" """
+PS_IISRESET = r"""
+iisreset /restart
+"OK"
+"""
 
-def _send_ps(instance_id, script, timeout=60):
+def _send_ps(instance_id, script, timeout=90):
     try:
         resp = ssm.send_command(
             InstanceIds=[instance_id],
@@ -331,69 +443,82 @@ def _send_ps(instance_id, script, timeout=60):
             raise RuntimeError("ssm_not_connected")
         raise
     cid = resp["Command"]["CommandId"]
-    time.sleep(1.0)
-    for _ in range(40):
+    time.sleep(1.2)
+    for _ in range(45):
         inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
         status = inv.get("Status")
-        if status in ("Success","Cancelled","TimedOut","Failed"):
-            return status, inv.get("StandardOutputContent","").strip(), inv.get("StandardErrorContent","").strip()
+        if status in ("Success", "Cancelled", "TimedOut", "Failed"):
+            stdout = inv.get("StandardOutputContent", "").strip()
+            stderr = inv.get("StandardErrorContent", "").strip()
+            return status, stdout, stderr
         time.sleep(1.0)
     return "TimedOut", "", ""
 
-def _normalize_services_payload(body):
-    iid = (body.get("instanceId") or body.get("id") or "").strip()
-    raw_op   = (body.get("op") or "").lower().strip()
-    raw_mode = (body.get("mode") or body.get("kind") or "").lower().strip()
-    op = raw_op if raw_op in ("list","start","stop","iisreset") else "list"
-    query  = (body.get("query") or body.get("pattern") or "").strip()
-    service = (body.get("serviceName") or body.get("service") or "").strip()
-    mode = raw_mode
-    if mode in ("","list","services","service","generic"):
-        mode = "filter"
-    return iid, op, mode, query, service
-
 def handle_services(body):
     try:
-        iid, op, mode, query, service = _normalize_services_payload(body)
-        if not iid: return _json(200, _err("missing_instance_id"))
+        iid = (body.get("instanceId") or body.get("id") or "").strip()
+        op  = (body.get("op") or "").lower().strip()
+        mode = (body.get("mode") or body.get("kind") or "").lower().strip()
+        query = (body.get("query") or body.get("pattern") or "").strip()
+        service = (body.get("serviceName") or body.get("service") or "").strip()
 
+        if not iid:
+            return _json(200, _err("missing_instance_id"))
+
+        # IIS reset (short-circuit)
         if op == "iisreset":
             status, out, err = _send_ps(iid, PS_IISRESET)
-            if status != "Success": return _json(200, _err("ssm_error", status=status, stderr=err))
+            if status != "Success":
+                return _json(200, _err("ssm_error", status=status, stderr=err))
             return _json(200, _ok(result="OK"))
 
-        if op == "list":
-            if mode == "sql":   status, out, err = _send_ps(iid, PS_LIST_SQL)
-            elif mode == "redis": status, out, err = _send_ps(iid, PS_LIST_REDIS)
+        # LIST
+        if op in ("", "list"):
+            if mode in ("sql", "mssql"):
+                status, out, err = _send_ps(iid, PS_LIST_SQL)
+            elif mode == "redis":
+                status, out, err = _send_ps(iid, PS_LIST_REDIS)
             else:
-                pat = (query or "").replace('"','`"') or ".*"
-                script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
-                status, out, err = _send_ps(iid, script)
+                if not query:
+                    script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json"""
+                    status, out, err = _send_ps(iid, script)
+                else:
+                    pat = (query or "").replace('"', '`"')
+                    script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
+                    status, out, err = _send_ps(iid, script)
 
-            if status != "Success": return _json(200, _err("ssm_error", status=status, stderr=err))
+            if status != "Success":
+                return _json(200, _err("ssm_error", status=status, stderr=err))
+
             try:
                 arr = json.loads(out) if out else []
             except Exception:
                 arr = []
-            if isinstance(arr, dict): arr = [arr]
+            if isinstance(arr, dict):
+                arr = [arr]
             result = []
             for s in arr or []:
                 result.append({
-                    "name": s.get("Name") or s.get("name") or "",
-                    "displayName": s.get("DisplayName") or s.get("displayName") or "",
-                    "status": s.get("Status") or s.get("status") or "Unknown",
+                    "name": s.get("Name"),
+                    "displayName": s.get("DisplayName"),
+                    "status": s.get("Status") or "Unknown",
                 })
-            return _json(200, _ok(services=result, mode=mode))
+            return _json(200, _ok(services=result, mode=mode or ("filter" if query else "all")))
 
-        if op in ("start","stop"):
-            if not service: return _json(200, _err("missing_service_name"))
+        # START / STOP service
+        if op in ("start", "stop"):
+            if not service:
+                return _json(200, _err("missing_service_name"))
             ps = PS_START if op == "start" else PS_STOP
-            name_esc = service.replace('"','`"')
+            name_esc = service.replace('"', '`"')
             script = f'$Name = "{name_esc}";\n{ps}'
             status, out, err = _send_ps(iid, script)
-            if status != "Success": return _json(200, _err("ssm_error", status=status, stderr=err))
-            try: obj = json.loads(out) if out else {}
-            except Exception: obj = {}
+            if status != "Success":
+                return _json(200, _err("ssm_error", status=status, stderr=err))
+            try:
+                obj = json.loads(out) if out else {}
+            except Exception:
+                obj = {}
             return _json(200, _ok(service={
                 "name": obj.get("Name") or service,
                 "displayName": obj.get("DisplayName") or service,
@@ -419,15 +544,22 @@ def lambda_handler(event, context):
         body = _read_body(event)
 
         # Public
-        if path == "/request-otp" and method == "POST":  return handle_request_otp(body)
-        if path == "/verify-otp"  and method == "POST":  return handle_verify_otp(body)
-        if path == "/login"       and method == "POST":  return handle_login(body)
+        if path == "/request-otp" and method == "POST":
+            return handle_request_otp(body)
+        if path == "/verify-otp" and method == "POST":
+            return handle_verify_otp(body)
+        if path == "/login" and method == "POST":
+            return handle_login(body)
 
-        # Protected
-        if path == "/instances"        and method == "GET":  return handle_instances()
-        if path == "/instance-action"  and method == "POST": return handle_instance_action(body)
-        if path == "/bulk-action"      and method == "POST": return handle_bulk(body)
-        if path == "/services"         and method == "POST": return handle_services(body)
+        # Protected (custom authorizer handles JWT)
+        if path == "/instances" and method == "GET":
+            return handle_instances()
+        if path == "/instance-action" and method == "POST":
+            return handle_instance_action(body)
+        if path == "/bulk-action" and method == "POST":
+            return handle_bulk(body)
+        if path == "/services" and method == "POST":
+            return handle_services(body)
 
         return _json(404, {"error": "not_found", "path": path, "method": method})
     except Exception as e:
