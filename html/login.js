@@ -1,117 +1,133 @@
 // website/login.js
 // -----------------------------------------------------------------------------
-// Front-end glue for OTP login + instance list + actions + Services modal.
-// Works with the Lambda above. Sends the new payload shape, but the backend
-// also supports legacy shapes for safety.
+// OTP/Sign-in flow + Instances + Services, with JWT attached automatically.
 // -----------------------------------------------------------------------------
 
 (function () {
   const API_BASE =
     window.__API_BASE__ ||
     (document.querySelector("meta[name=api-base]")?.content || "").trim() ||
-    ""; // e.g., "https://u5gyqkfkc3.execute-api.us-east-2.amazonaws.com"
+    ""; // e.g., "https://9c36fvxj24.execute-api.us-east-2.amazonaws.com"
 
   if (!API_BASE) {
     console.warn("API base not configured; set window.__API_BASE__ or <meta name='api-base'>");
   }
 
-  // ------------- tiny helpers -------------
-  const $ = (sel) => document.querySelector(sel);
+  // ---------- tiny helpers ----------
+  const $  = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-// Centralized API helper – attaches JWT and handles 401
-async function api(path, method = "GET", body) {
-  const headers = { "Content-Type": "application/json" };
+  // Centralized API helper – attaches JWT and handles 401s
+  async function api(path, method = "GET", body) {
+    const headers = { "Content-Type": "application/json" };
+    const tok = localStorage.getItem("jwt");
+    if (tok) headers["Authorization"] = "Bearer " + tok;
 
-  // attach JWT if present
-  const tok = localStorage.getItem("jwt");
-  if (tok) headers["Authorization"] = "Bearer " + tok;
+    const opt = { method, headers };
+    if (body !== undefined && body !== null) opt.body = JSON.stringify(body);
 
-  const opt = { method, headers };
-  if (body !== undefined && body !== null) opt.body = JSON.stringify(body);
+    const res = await fetch(API_BASE + path, opt);
 
-  const res = await fetch(API_BASE + path, opt);
+    if (res.status === 401) {
+      // token missing/expired → clear and send user back to verify/login
+      try { localStorage.removeItem("jwt"); } catch (_) {}
+      throw new Error("Unauthorized (401) — please verify email & sign in again.");
+    }
 
-  // if token is missing/expired → bounce to email verify/login
-  if (res.status === 401) {
-    try { localStorage.removeItem("jwt"); } catch (_) {}
-    // If you have a separate login page, redirect there:
-    // location.href = "/login.html";
-    // Otherwise just show a message:
-    throw new Error("Unauthorized (401) — please verify email & sign in again.");
+    // backend always returns JSON
+    let json = {};
+    try { json = await res.json(); } catch (_) { json = {}; }
+
+    if (!res.ok || json.ok === false) {
+      const msg = json.error || json.message || `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    return json;
   }
 
-  // Parse JSON (backend always returns JSON bodies)
-  let json = {};
-  try { json = await res.json(); } catch (_) { json = {}; }
-
-  // Surface non-200s as errors with backend message when available
-  if (!res.ok || json.ok === false) {
-    const msg = json.error || json.message || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-
-  return json;
-}
-
-
-  // ------------- OTP flow -------------
+  // ---------- OTP flow ----------
   const emailInput = $("#email");
-  const otpInput = $("#otp");
-  const btnReq = $("#btn-request-otp");
-  const btnVerify = $("#btn-verify-otp");
-  const btnLogin = $("#btn-login");
-  const tokenSpan = $("#token");
+  const otpInput   = $("#otp");
+  const btnReq     = $("#btn-request-otp");
+  const btnVerify  = $("#btn-verify-otp");
+  const btnLogin   = $("#btn-login");
+  const tokenSpan  = $("#token");
 
   btnReq?.addEventListener("click", async () => {
     const email = emailInput.value.trim();
     if (!email) return alert("Enter email");
-    const res = await api("/request-otp", "POST", { email });
-    alert(res.ok ? "OTP sent (check email). Dev: " + (res.code || "") : "Failed: " + res.error);
+    try {
+      const res = await api("/request-otp", "POST", { email });
+      alert(res.ok ? `OTP sent. Dev: ${res.code || ""}` : `Failed: ${res.error}`);
+    } catch (e) {
+      alert(e.message || "Failed to request OTP");
+    }
   });
 
   btnVerify?.addEventListener("click", async () => {
     const email = emailInput.value.trim();
-    const code = otpInput.value.trim();
-    const res = await api("/verify-otp", "POST", { email, code });
-    alert(res.ok ? "OTP is valid" : "Invalid OTP");
+    const code  = otpInput.value.trim();
+    if (!email || !code) return alert("Enter email and OTP");
+    try {
+      const res = await api("/verify-otp", "POST", { email, code });
+      alert(res.ok ? "OTP verified" : "Invalid OTP");
+    } catch (e) {
+      alert(e.message || "OTP verify failed");
+    }
   });
 
+  // Simple OTP login (email + code) used by your login.html
   btnLogin?.addEventListener("click", async () => {
-    const email = emailInput.value.trim();
-    const code = otpInput.value.trim();
-    const res = await api("/login", "POST", { email, code });
-    if (!res.ok) return alert("Login failed: " + res.error);
-    localStorage.setItem("jwt", res.token);
-    tokenSpan.textContent = res.token.slice(0, 24) + "…";
-    await refreshInstances();
+    const email = emailInput?.value?.trim();
+    const code  = otpInput?.value?.trim();
+    if (!email || !code) return alert("Enter email and OTP");
+    try {
+      const res = await api("/login", "POST", { email, code });
+      localStorage.setItem("jwt", res.token);
+      if (tokenSpan) tokenSpan.textContent = res.token.slice(0, 24) + "…";
+      await refreshInstances();
+    } catch (e) {
+      alert("Login failed: " + (e.message || "unknown error"));
+    }
   });
 
-  // ------------- Instances -------------
-  const tbl = $("#instances");
+  // ---------- Instances ----------
+  const tbl        = $("#instances");
   const btnRefresh = $("#btn-refresh");
-  const btnStartAll = $("#btn-start-all");
-  const btnStopAll = $("#btn-stop-all");
+  const btnStartAll  = $("#btn-start-all");
+  const btnStopAll   = $("#btn-stop-all");
+  const btnRebootAll = $("#btn-reboot-all");
 
   async function refreshInstances() {
-    const res = await api("/instances", "GET");
-    if (!res.ok) return alert("Failed to list instances");
-    renderInstances(res.instances || []);
+    const panel = $("#summary-panel");
+    try {
+      const res = await api("/instances", "GET");
+      renderInstances(res.instances || []);
+      if (panel) panel.dataset.state = "ready";
+    } catch (e) {
+      if (panel) panel.dataset.state = "error";
+      console.error(e);
+      alert(e.message || "Failed to load instances");
+    }
   }
 
-  function renderInstances(items) {
-    const rows = items
+  function renderInstances(list) {
+    if (!tbl) return;
+    const rows = (list || [])
       .map((x) => {
-        const id = x.id, name = x.name || id, state = x.state || "";
-        const svcBtn = `<button class="btn btn-svc" data-id="${id}" data-name="${name}">Services</button>`;
-        const startBtn = `<button class="btn btn-start" data-id="${id}">Start</button>`;
-        const stopBtn = `<button class="btn btn-stop" data-id="${id}">Stop</button>`;
-        const rebootBtn = `<button class="btn btn-reboot" data-id="${id}">Reboot</button>`;
-        return `<tr>
-          <td>${name}</td>
-          <td>${id}</td>
+        const state = (x.state || "").toLowerCase();
+        return `
+        <tr>
+          <td>${x.name || "-"}</td>
+          <td>${x.id}</td>
           <td>${state}</td>
-          <td>${startBtn} ${stopBtn} ${rebootBtn} ${svcBtn}</td>
+          <td class="actions">
+            <button class="btn-svc"    data-id="${x.id}" data-name="${x.name || ""}">Services</button>
+            <button class="btn-start"  data-id="${x.id}">Start</button>
+            <button class="btn-stop"   data-id="${x.id}">Stop</button>
+            <button class="btn-reboot" data-id="${x.id}">Reboot</button>
+          </td>
         </tr>`;
       })
       .join("");
@@ -124,122 +140,140 @@ async function api(path, method = "GET", body) {
     const b = e.target.closest("button");
     if (!b) return;
     const id = b.dataset.id;
-    if (b.classList.contains("btn-start")) {
-      await api("/instance-action", "POST", { instanceId: id, op: "start" });
-      return refreshInstances();
-    }
-    if (b.classList.contains("btn-stop")) {
-      await api("/instance-action", "POST", { instanceId: id, op: "stop" });
-      return refreshInstances();
-    }
-    if (b.classList.contains("btn-reboot")) {
-      await api("/instance-action", "POST", { instanceId: id, op: "reboot" });
-      return refreshInstances();
-    }
-    if (b.classList.contains("btn-svc")) {
-      openServicesModal({ instanceId: id, instanceName: b.dataset.name || "" });
+    try {
+      if (b.classList.contains("btn-start")) {
+        await api("/instance-action", "POST", { instanceId: id, op: "start" });
+      } else if (b.classList.contains("btn-stop")) {
+        await api("/instance-action", "POST", { instanceId: id, op: "stop" });
+      } else if (b.classList.contains("btn-reboot")) {
+        await api("/instance-action", "POST", { instanceId: id, op: "reboot" });
+      } else if (b.classList.contains("btn-svc")) {
+        openServicesModal({ instanceId: id, instanceName: b.dataset.name || "" });
+        return;
+      }
+      await refreshInstances();
+    } catch (e2) {
+      alert(e2.message || "Action failed");
     }
   });
 
   btnStartAll?.addEventListener("click", async () => {
-    const ids = $$("tbody tr td:nth-child(2)").map((td) => td.textContent.trim()).filter(Boolean);
+    const ids = $$("tbody tr [data-id]").map((b) => b.dataset.id);
     if (!ids.length) return;
     await api("/bulk-action", "POST", { instanceIds: ids, op: "start" });
-    refreshInstances();
+    await refreshInstances();
   });
-
   btnStopAll?.addEventListener("click", async () => {
-    const ids = $$("tbody tr td:nth-child(2)").map((td) => td.textContent.trim()).filter(Boolean);
+    const ids = $$("tbody tr [data-id]").map((b) => b.dataset.id);
     if (!ids.length) return;
     await api("/bulk-action", "POST", { instanceIds: ids, op: "stop" });
-    refreshInstances();
+    await refreshInstances();
+  });
+  btnRebootAll?.addEventListener("click", async () => {
+    const ids = $$("tbody tr [data-id]").map((b) => b.dataset.id);
+    if (!ids.length) return;
+    await api("/bulk-action", "POST", { instanceIds: ids, op: "reboot" });
+    await refreshInstances();
   });
 
-  // ------------- Services Modal -------------
-  const modal = $("#svc-modal");
-  const modalTitle = $("#svc-title");
-  const listBody = $("#svc-list");
-  const selMode = $("#svc-mode");
-  const inpFilter = $("#svc-filter");
-  const btnList = $("#svc-list-btn");
-  const btnIISReset = $("#svc-iisreset");
+  // ---------- Services modal (unchanged behavior; tolerant payload) ----------
+  const modal           = $("#svc-modal");
+  const svcList         = $("#svc-list");
+  const svcSearch       = $("#svc-search");
+  const btnSvcList      = $("#btn-svc-list");
+  const btnSvcStart     = $("#btn-svc-start");
+  const btnSvcStop      = $("#btn-svc-stop");
+  const btnIISReset     = $("#btn-iis-reset");
   let currentSvcContext = null;
 
   function openServicesModal(ctx) {
-    currentSvcContext = { ...ctx, mode: guessModeFromName(ctx.instanceName) };
-    selMode.value = currentSvcContext.mode;
-    modalTitle.textContent = `Services — ${ctx.instanceName} (${ctx.instanceId})`;
-    listBody.innerHTML = `<tr><td colspan="4">Click "List"</td></tr>`;
-    modal.style.display = "block";
+    currentSvcContext = ctx;
+    modal?.classList.add("open");
+    svcList.innerHTML = "";
+    svcSearch.value = "";
+    listServices();  // initial load
   }
 
-  $("#svc-close")?.addEventListener("click", () => (modal.style.display = "none"));
-
-  selMode?.addEventListener("change", () => {
-    if (currentSvcContext) currentSvcContext.mode = selMode.value;
-  });
-
-  btnList?.addEventListener("click", async () => {
+  async function listServices() {
     if (!currentSvcContext) return;
-    const mode = selMode.value;
-    const query = inpFilter.value.trim();
-    const payload = { instanceId: currentSvcContext.instanceId, op: "list", mode };
-    if (mode === "filter" && query) payload.query = query;
-
-    const res = await api("/services", "POST", payload);
-    if (!res.ok) {
-      const msg = res.error === "ssm_not_connected" ? "SSM: not connected" :
-                  res.error === "unsupported" ? "Unsupported mode" :
-                  "Error: " + res.error;
-      listBody.innerHTML = `<tr><td colspan="4">${msg}</td></tr>`;
-      return;
+    const query = svcSearch.value.trim();
+    const mode  = query ? "filter" : guessModeFromName(currentSvcContext.instanceName);
+    try {
+      const res = await api("/services", "POST", {
+        instanceId: currentSvcContext.instanceId,
+        op: "list",
+        mode,
+        query
+      });
+      const arr = res.services || [];
+      svcList.innerHTML = arr.map(s =>
+        `<li data-name="${s.name}"><span>${s.displayName || s.name}</span><em>${s.status}</em></li>`
+      ).join("") || `<li class="empty">No services</li>`;
+    } catch (e) {
+      alert(e.message || "Failed to list services");
     }
-    const rows = (res.services || []).map(s => {
-      const n = s.name || "", d = s.displayName || "", st = s.status || "";
-      const startBtn = `<button class="svc-start" data-name="${n}">Start</button>`;
-      const stopBtn  = `<button class="svc-stop" data-name="${n}">Stop</button>`;
-      return `<tr><td>${n}</td><td>${d}</td><td>${st}</td><td>${startBtn} ${stopBtn}</td></tr>`;
-    }).join("");
-    listBody.innerHTML = rows || `<tr><td colspan="4">No services</td></tr>`;
+  }
+
+  btnSvcList?.addEventListener("click", listServices);
+
+  btnSvcStart?.addEventListener("click", async () => {
+    const sel = svcList.querySelector("li.selected");
+    if (!sel || !currentSvcContext) return alert("Pick a service");
+    const name = sel.dataset.name;
+    try {
+      const res = await api("/services", "POST", {
+        instanceId: currentSvcContext.instanceId,
+        op: "start",
+        mode: "filter",
+        serviceName: name
+      });
+      alert(res.ok ? "Service started" : ("Service action failed: " + (res.error || "")));
+      await listServices();
+    } catch (e) {
+      alert(e.message || "Service start failed");
+    }
   });
 
-  listBody?.addEventListener("click", async (e) => {
-    const b = e.target.closest("button");
-    if (!b || !currentSvcContext) return;
-    const serviceName = b.dataset.name;
-    const op = b.classList.contains("svc-start") ? "start" : "stop";
-    const res = await api("/services", "POST", {
-      instanceId: currentSvcContext.instanceId,
-      op,
-      mode: selMode.value,
-      serviceName
-    });
-    if (res.ok) {
-      // Update row status
-      await btnList.click();
-    } else {
-      alert("Service action failed: " + res.error);
+  btnSvcStop?.addEventListener("click", async () => {
+    const sel = svcList.querySelector("li.selected");
+    if (!sel || !currentSvcContext) return alert("Pick a service");
+    const name = sel.dataset.name;
+    try {
+      const res = await api("/services", "POST", {
+        instanceId: currentSvcContext.instanceId,
+        op: "stop",
+        mode: "filter",
+        serviceName: name
+      });
+      alert(res.ok ? "Service stopped" : ("Service action failed: " + (res.error || "")));
+      await listServices();
+    } catch (e) {
+      alert(e.message || "Service stop failed");
     }
   });
 
   btnIISReset?.addEventListener("click", async () => {
     if (!currentSvcContext) return;
-    const res = await api("/services", "POST", {
-      instanceId: currentSvcContext.instanceId,
-      op: "iisreset",
-      mode: "filter"
-    });
-    alert(res.ok ? "IIS reset sent" : "IIS reset failed: " + res.error);
+    try {
+      const res = await api("/services", "POST", {
+        instanceId: currentSvcContext.instanceId,
+        op: "iisreset",
+        mode: "filter"
+      });
+      alert(res.ok ? "IIS reset sent" : ("IIS reset failed: " + (res.error || "")));
+    } catch (e) {
+      alert(e.message || "IIS reset failed");
+    }
   });
 
   function guessModeFromName(name) {
     const n = (name || "").toLowerCase();
-    if (n.includes("sql")) return "sql";
+    if (n.includes("sql"))   return "sql";
     if (n.includes("redis")) return "redis";
     if (n.includes("svc") || n.includes("web")) return "filter";
     return "filter";
   }
 
   // Auto-load instances if table exists on page
-  if (tbl) refreshInstances();
+  if ($("#instances")) refreshInstances();
 })();

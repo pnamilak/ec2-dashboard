@@ -204,9 +204,14 @@ resource "aws_iam_role_policy" "lambda_policy" {
       {
         Effect = "Allow",
         Action = [
-          "ssm:GetParameter","ssm:GetParameters","ssm:DescribeParameters",
-          "ssm:SendCommand","ssm:GetCommandInvocation","ssm:DescribeInstanceInformation"
-        ],
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:DescribeParameters",
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:DescribeInstanceInformation",
+          "ssm:GetParametersByPath"
+                  ],
         Resource = "*"
       },
       {
