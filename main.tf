@@ -452,7 +452,7 @@ locals {
   target_ids = lookup(local.target_map, var.assign_profile_target, [])
 }
 
-# Attach/replace profile using AWS CLI (idempotent), and clean on destroy
+# Attach/replace profile using AWS CLI (idempotent)
 resource "null_resource" "attach_ssm_profile" {
   for_each = { for id in local.target_ids : id => id }
 
@@ -467,7 +467,7 @@ resource "null_resource" "attach_ssm_profile" {
     null_resource.ensure_ssm_slr
   ]
 
-  # Create/Update
+  # CREATE/UPDATE: ensure the target profile is attached (idempotent)
   provisioner "local-exec" {
     when        = create
     interpreter = ["/bin/bash", "-lc"]
@@ -476,56 +476,94 @@ resource "null_resource" "attach_ssm_profile" {
       IID="${each.value}"
       PROF="${aws_iam_instance_profile.ec2_ssm_profile.name}"
       REGION="${var.aws_region}"
+      TARGET_SUFFIX=":instance-profile/$PROF"
 
-      # Find ACTIVE association only (State == associated)
-      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --query 'IamInstanceProfileAssociations[?State==`associated`][0].AssociationId' \
-        --output text --region "$REGION" || true)
-      CUR_ARN=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --query 'IamInstanceProfileAssociations[?State==`associated`][0].IamInstanceProfile.Arn' \
-        --output text --region "$REGION" || true)
+      get_field() {
+        aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query "IamInstanceProfileAssociations[0].$1" \
+          --output text 2>/dev/null || true
+      }
 
-      TARGET_ARN_SUFFIX=":instance-profile/$PROF"
+      # Prefer an ACTIVE association if present; else take the first one.
+      get_active() {
+        aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query "IamInstanceProfileAssociations[?State==\`associated\`][0].$1" \
+          --output text 2>/dev/null || true
+      }
+
+      ASSOC_ID="$(get_active AssociationId)"
+      if [ -z "$ASSOC_ID" ] || [ "$ASSOC_ID" = "None" ]; then
+        # Fallback to any existing association (may be associating/disassociating)
+        ASSOC_ID="$(get_field AssociationId)"
+      fi
+
+      STATE="$(get_field State)"
+      CUR_ARN="$(get_field IamInstanceProfile.Arn)"
 
       if [ -z "$ASSOC_ID" ] || [ "$ASSOC_ID" = "None" ]; then
-        echo "No active association; associating $IID -> $PROF"
+        echo "No association -> associate $IID -> $PROF"
         aws ec2 associate-iam-instance-profile \
           --instance-id "$IID" \
           --iam-instance-profile Name="$PROF" \
           --region "$REGION" >/dev/null
-      else
-        if [[ "$CUR_ARN" == *"$TARGET_ARN_SUFFIX" ]]; then
-          echo "Already associated: $IID -> $PROF (noop)"
-        else
-          echo "Replacing $IID assoc $ASSOC_ID -> $PROF"
-          # Small retry loop in case AWS is briefly transitioning state
-          for i in 1 2 3; do
-            set +e
-            aws ec2 replace-iam-instance-profile-association \
-              --association-id "$ASSOC_ID" \
-              --iam-instance-profile Name="$PROF" \
-              --region "$REGION" >/dev/null
-            rc=$?
-            set -e
-            if [ $rc -eq 0 ]; then
-              echo "Replaced association."
-              break
-            fi
-            echo "Replace failed (attempt $i); sleeping..." >&2
-            sleep 3
-          done
-          if [ $rc -ne 0 ]; then
-            echo "ERROR: could not replace association after retries." >&2
-            exit $rc
-          fi
-        fi
+        exit 0
       fi
+
+      if [[ "$CUR_ARN" == *"$TARGET_SUFFIX" ]] && [[ "$STATE" == "associated" ]]; then
+        echo "Already correct ($IID -> $PROF), skipping."
+        exit 0
+      fi
+
+      echo "Needs change ($IID): state=$STATE; current=$CUR_ARN"
+
+      # 1) Try REPLACE when possible (works when association is 'associated')
+      set +e
+      aws ec2 replace-iam-instance-profile-association \
+        --association-id "$ASSOC_ID" \
+        --iam-instance-profile Name="$PROF" \
+        --region "$REGION" >/dev/null
+      rc=$?
+      set -e
+      if [ $rc -eq 0 ]; then
+        echo "Replaced association for $IID"
+        exit 0
+      fi
+
+      # 2) Fallback: DISASSOCIATE (best effort), wait until gone, then ASSOCIATE
+      echo "Replace failed (state=$STATE). Disassociate -> wait -> associate..."
+      set +e
+      aws ec2 disassociate-iam-instance-profile \
+        --association-id "$ASSOC_ID" \
+        --region "$REGION" >/dev/null
+      set -e
+
+      # Wait until there is no visible association
+      for i in {1..12}; do
+        sleep 5
+        NOW="$(aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query 'IamInstanceProfileAssociations[0].AssociationId' \
+          --output text 2>/dev/null || true)"
+        if [ -z "$NOW" ] || [ "$NOW" = "None" ]; then
+          break
+        fi
+        echo "Waiting for disassociate... ($i)"
+      done
+
+      echo "Associate $IID -> $PROF"
+      aws ec2 associate-iam-instance-profile \
+        --instance-id "$IID" \
+        --iam-instance-profile Name="$PROF" \
+        --region "$REGION" >/dev/null
     EOT
   }
 
-  # Destroy: disassociate if still attached
+  # DESTROY: only disassociate if *our* profile is attached
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["/bin/bash", "-lc"]
@@ -533,17 +571,30 @@ resource "null_resource" "attach_ssm_profile" {
       set -euo pipefail
       IID="${self.triggers.instance_id}"
       REGION="${self.triggers.region}"
-      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
+      PROF="${self.triggers.profile_name}"
+      TARGET_SUFFIX=":instance-profile/$PROF"
+
+      ASSOC_ID="$(aws ec2 describe-iam-instance-profile-associations \
         --filters Name=instance-id,Values="$IID" \
-        --query 'IamInstanceProfileAssociations[?State==`associated`][0].AssociationId' \
-        --output text --region "$REGION" || true)
-      if [ -n "$ASSOC_ID" ] && [ "$ASSOC_ID" != "None" ]; then
-        echo "Disassociating $IID assoc $ASSOC_ID"
+        --region "$REGION" \
+        --query 'IamInstanceProfileAssociations[0].AssociationId' \
+        --output text 2>/dev/null || true)"
+      CUR_ARN="$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values="$IID" \
+        --region "$REGION" \
+        --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
+        --output text 2>/dev/null || true)"
+
+      if [ -n "$ASSOC_ID" ] && [ "$ASSOC_ID" != "None" ] && [[ "$CUR_ARN" == *"$TARGET_SUFFIX" ]]; then
+        echo "Disassociating $IID ($PROF)"
         aws ec2 disassociate-iam-instance-profile \
           --association-id "$ASSOC_ID" \
-          --region "$REGION" >/dev/null
+          --region "$REGION" >/dev/null || true
+      else
+        echo "No disassociate needed for $IID"
       fi
     EOT
   }
 }
+
 
