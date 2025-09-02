@@ -19,14 +19,41 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-  async function api(path, method = "GET", body) {
-    const opt = { method, headers: { "Content-Type": "application/json" } };
-    if (body) opt.body = JSON.stringify(body);
-    const r = await fetch(API_BASE + path, opt);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return j;
+// Centralized API helper – attaches JWT and handles 401
+async function api(path, method = "GET", body) {
+  const headers = { "Content-Type": "application/json" };
+
+  // attach JWT if present
+  const tok = localStorage.getItem("jwt");
+  if (tok) headers["Authorization"] = "Bearer " + tok;
+
+  const opt = { method, headers };
+  if (body !== undefined && body !== null) opt.body = JSON.stringify(body);
+
+  const res = await fetch(API_BASE + path, opt);
+
+  // if token is missing/expired → bounce to email verify/login
+  if (res.status === 401) {
+    try { localStorage.removeItem("jwt"); } catch (_) {}
+    // If you have a separate login page, redirect there:
+    // location.href = "/login.html";
+    // Otherwise just show a message:
+    throw new Error("Unauthorized (401) — please verify email & sign in again.");
   }
+
+  // Parse JSON (backend always returns JSON bodies)
+  let json = {};
+  try { json = await res.json(); } catch (_) { json = {}; }
+
+  // Surface non-200s as errors with backend message when available
+  if (!res.ok || json.ok === false) {
+    const msg = json.error || json.message || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+
+  return json;
+}
+
 
   // ------------- OTP flow -------------
   const emailInput = $("#email");
