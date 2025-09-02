@@ -15,7 +15,7 @@ variable "website_bucket_name" {
 variable "env_names" {
   description = "Environment tokens to match in EC2 Name tag (tabs)."
   type        = list(string)
-  default     = ["NAQA1","NAQA2","NAQA3","NAQA6","APQA1","EUQA1","Dev"]
+  default     = ["naqa1","naqa2","naqa3","naqa6","apqa1","euqa1","dm-dev","dm-qa"]
 }
 
 variable "allowed_email_domain" {

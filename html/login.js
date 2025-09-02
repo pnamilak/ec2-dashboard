@@ -1,199 +1,392 @@
-/* login.js – dashboard interactions (services fixed) */
+/* html/login.js
+ * No visual redesign; fixes:
+ *  - case-insensitive env tabs (driven by backend)
+ *  - Start all / Stop all wired to /bulk-action
+ *  - Services modal lists name/displayName/status + Start/Stop works
+ *  - Clear error text when SSM is not connected
+ */
 
-const API_BASE = window.__API_BASE__; // set by index.html.tpl from Terraform output
-let jwt = localStorage.getItem("jwt") || "";
+/* ---------- API helpers ---------- */
+const API_BASE =
+  window.API_BASE ||
+  (document.querySelector('meta[name="api-base"]')?.content || "").trim() ||
+  ""; // if your index.html injects this, it will be used
 
-function api(path, method = "GET", body) {
-  const headers = { "Content-Type": "application/json" };
-  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-  return fetch(`${API_BASE}${path}`, {
+function apiUrl(p) {
+  if (/^https?:\/\//i.test(p)) return p;
+  if (API_BASE) return API_BASE.replace(/\/+$/, "") + p;
+  return p; // same origin
+}
+
+function bearer() {
+  const t = localStorage.getItem("jwt") || "";
+  return t ? { Authorization: `Bearer ${t}` } : {};
+}
+
+async function api(path, method = "GET", body) {
+  const opt = {
     method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  }).then(async (r) => {
-    const txt = await r.text();
-    let data = {};
-    try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-    if (!r.ok) throw new Error(data.error || r.statusText);
-    return data;
-  });
-}
-
-/* ---------- Services Modal ---------- */
-
-const svcModal = {
-  el: null,
-  tbody: null,
-  titleEl: null,
-  filterWrap: null,
-  filterInput: null,
-  listBtn: null,
-  iisBtn: null,
-  instanceId: null,
-  mode: "filter", // 'sql' | 'redis' | 'filter'
-};
-
-function ensureModal() {
-  if (svcModal.el) return;
-  const modal = document.createElement("div");
-  modal.id = "svc-modal";
-  modal.innerHTML = `
-    <div class="modal-backdrop"></div>
-    <div class="modal">
-      <div class="modal-header">
-        <h3 id="svc-title">Services</h3>
-        <button id="svc-close" class="btn btn-ghost">Close</button>
-      </div>
-      <div class="modal-body">
-        <div id="svc-filter-wrap" class="row" style="display:none;gap:8px;margin-bottom:10px;">
-          <input id="svc-filter" type="text" placeholder="Type 2-5 letters (SVC/WEB)" class="input" />
-          <button id="svc-list" class="btn btn-primary">List</button>
-          <button id="svc-iis" class="btn btn-soft">IIS reset</button>
-        </div>
-        <table class="table">
-          <thead>
-            <tr><th>Name</th><th>Display Name</th><th>Status</th><th>Action</th></tr>
-          </thead>
-          <tbody id="svc-body"></tbody>
-        </table>
-        <div id="svc-note" class="muted" style="margin-top:8px;"></div>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  svcModal.el = modal;
-  svcModal.tbody = modal.querySelector("#svc-body");
-  svcModal.titleEl = modal.querySelector("#svc-title");
-  svcModal.filterWrap = modal.querySelector("#svc-filter-wrap");
-  svcModal.filterInput = modal.querySelector("#svc-filter");
-  svcModal.listBtn = modal.querySelector("#svc-list");
-  svcModal.iisBtn = modal.querySelector("#svc-iis");
-
-  modal.querySelector("#svc-close").onclick = () => modal.classList.remove("open");
-  svcModal.listBtn.onclick = () => doList();
-  svcModal.iisBtn.onclick = () => doIisReset();
-}
-
-function openServicesModal(instance) {
-  ensureModal();
-  svcModal.instanceId = instance.id;
-  svcModal.titleEl.textContent = `Services – ${instance.name} (${instance.id})`;
-
-  // decide mode by instance name
-  const n = (instance.name || "").toLowerCase();
-  if (n.includes("sql")) {
-    svcModal.mode = "sql";
-    svcModal.filterWrap.style.display = "none";
-    doList();
-  } else if (n.includes("redis")) {
-    svcModal.mode = "redis";
-    svcModal.filterWrap.style.display = "none";
-    doList();
-  } else if (n.includes("svc") || n.includes("web")) {
-    svcModal.mode = "filter";
-    svcModal.filterWrap.style.display = "flex";
-    svcModal.filterInput.value = "";
-    svcModal.tbody.innerHTML = "";
-    modalNote("Type 2-5 letters and click List.");
-  } else {
-    // default to filter mode
-    svcModal.mode = "filter";
-    svcModal.filterWrap.style.display = "flex";
-    svcModal.filterInput.value = "";
-    svcModal.tbody.innerHTML = "";
-    modalNote("Type 2-5 letters and click List.");
-  }
-
-  svcModal.el.classList.add("open");
-}
-
-function modalNote(text) {
-  const el = svcModal.el.querySelector("#svc-note");
-  el.textContent = text || "";
-}
-
-function doList() {
-  modalNote("Listing...");
-  const payload = {
-    instanceId: svcModal.instanceId,
-    op: "list",
-    mode: svcModal.mode
+    headers: {
+      "Content-Type": "application/json",
+      ...bearer(),
+    },
   };
-  if (svcModal.mode === "filter") {
-    payload.query = (svcModal.filterInput.value || "").trim();
+  if (body) opt.body = JSON.stringify(body);
+  const r = await fetch(apiUrl(path), opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error || r.statusText);
+  return j;
+}
+
+/* ---------- elements ---------- */
+const app = document.getElementById("app") || document.body;
+const statusBar = document.getElementById("status-text");
+
+function setStatus(text, show = true) {
+  if (!statusBar) return;
+  statusBar.textContent = text || "";
+  statusBar.style.display = show && text ? "" : "none";
+}
+
+/* ---------- tiny helpers ---------- */
+const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
+
+function chip(state) {
+  const s = (state || "").toLowerCase();
+  const color = s === "running" ? "chip-running" : s === "stopped" ? "chip-stopped" : "chip-other";
+  return `<span class="chip ${color}">${esc(s || "-")}</span>`;
+}
+
+/* ---------- state ---------- */
+let lastData = null;
+let currentEnv = null;
+
+/* ---------- render ---------- */
+function renderTabs(envs, summary) {
+  const keys = Object.keys(envs || {}).sort();
+  if (!currentEnv) currentEnv = keys[0] || "Summary";
+
+  const tabBtns =
+    `<button class="tab-btn ${currentEnv === "Summary" ? "active" : ""}" data-tab="Summary">Summary</button>` +
+    keys
+      .map((k) => `<button class="tab-btn ${currentEnv === k ? "active" : ""}" data-tab="${esc(k)}">${esc(k)}</button>`)
+      .join("");
+
+  const summaryLine = currentEnv === "Summary"
+    ? `All • Total: ${summary.total} • Running: ${summary.running} • Stopped: ${summary.stopped}`
+    : `Env: ${esc(currentEnv)} • Total: ${(envs[currentEnv]?.DM?.length || 0) + (envs[currentEnv]?.EA?.length || 0)} • Running: ${
+        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "running").length +
+        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "running").length
+      } • Stopped: ${
+        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length +
+        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length
+      }`;
+
+  return `
+    <div class="topbar">
+      <div id="summary-text">${summaryLine}</div>
+      <button class="btn btn-refresh" id="btn-refresh-all">Refresh</button>
+    </div>
+    <div class="tabs">${tabBtns}</div>
+  `;
+}
+
+function renderGroup(title, list, groupId) {
+  const rows = (list || [])
+    .map(
+      (x) => `
+      <div class="row" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">
+        <div class="row-name">${esc(x.name || "-")} ${chip(x.state)}</div>
+        <div class="row-actions">
+          ${
+            (x.state || "").toLowerCase() === "running"
+              ? `<button class="btn btn-stop" data-op="stop" data-id="${esc(x.id)}">Stop</button>`
+              : `<button class="btn btn-start" data-op="start" data-id="${esc(x.id)}">Start</button>`
+          }
+          <button class="btn btn-svc" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">Services</button>
+        </div>
+      </div>`
+    )
+    .join("");
+
+  return `
+    <div class="card" data-group="${groupId}">
+      <div class="card-head">
+        <div class="card-title">${esc(title)}</div>
+        <div class="card-head-actions">
+          <button class="btn btn-refresh-group">Refresh</button>
+          <button class="btn btn-start-all">Start all</button>
+          <button class="btn btn-stop-all">Stop all</button>
+        </div>
+      </div>
+      <div class="card-body">${rows || `<div class="empty">No instances</div>`}</div>
+    </div>
+  `;
+}
+
+function renderEnv(envs, summary) {
+  const tabs = renderTabs(envs, summary);
+
+  if (currentEnv === "Summary") {
+    const flat = Object.values(envs || {}).flatMap((g) => [...(g.DM || []), ...(g.EA || [])]);
+    const block = renderGroup("All instances", flat, "ALL");
+    return `${tabs}<div class="grid">${block}</div>`;
   }
-  api("/services", "POST", payload)
-    .then((res) => {
-      svcModal.tbody.innerHTML = "";
-      if (res.note === "not_connected") {
-        modalNote("No services (SSM: not connected).");
-        return;
-      }
-      if (!res.ok) {
-        modalNote(res.error || "Error");
-        return;
-      }
-      const items = res.services || [];
-      if (!items.length) {
-        modalNote("No matching services.");
-        return;
-      }
-      modalNote("");
-      for (const s of items) {
-        const tr = document.createElement("tr");
-        const status = (s.status || "").toLowerCase();
-        const isRunning = status === "running";
-        tr.innerHTML = `
-          <td>${s.name || ""}</td>
-          <td>${s.display || ""}</td>
-          <td><span class="pill ${isRunning ? "ok" : "warn"}">${status}</span></td>
-          <td>
-            <button class="btn ${isRunning ? "btn-stop" : "btn-start"}"
-                    data-svc="${s.name}"
-                    data-op="${isRunning ? "stop" : "start"}">
-              ${isRunning ? "Stop" : "Start"}
-            </button>
-          </td>`;
-        svcModal.tbody.appendChild(tr);
-      }
-      // wire actions
-      svcModal.tbody.querySelectorAll("button[data-svc]").forEach((b) => {
-        b.onclick = () => doControl(b.dataset.svc, b.dataset.op);
-      });
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
+
+  const g = envs[currentEnv] || { DM: [], EA: [] };
+  return `${tabs}
+    <div class="grid">
+      ${renderGroup("Dream Mapper", g.DM, "DM")}
+      ${renderGroup("Encore Anywhere", g.EA, "EA")}
+    </div>
+  `;
 }
 
-function doControl(serviceName, op) {
-  modalNote(`${op} ${serviceName}...`);
-  api("/services", "POST", {
-    instanceId: svcModal.instanceId,
-    op,
-    serviceName
-  })
-    .then((res) => {
-      if (!res.ok) {
-        modalNote(res.error || "Error");
-        return;
-      }
-      doList(); // refresh list
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
+function paint(data) {
+  lastData = data;
+  const { envs = {}, summary = { total: 0, running: 0, stopped: 0 } } = data || {};
+  app.querySelector("#main")?.remove();
+  const wrap = document.createElement("div");
+  wrap.id = "main";
+  wrap.innerHTML = renderEnv(envs, summary);
+  app.appendChild(wrap);
 }
 
-function doIisReset() {
-  modalNote("Issuing IIS reset...");
-  api("/services", "POST", {
-    instanceId: svcModal.instanceId,
-    op: "iisreset",
-  })
-    .then((res) => {
-      modalNote(res.ok ? (res.message || "IIS reset sent.") : (res.error || "IIS reset failed"));
-    })
-    .catch((e) => modalNote(`Error: ${e.message}`));
+/* ---------- services modal ---------- */
+let modalEl = null;
+
+function closeModal() {
+  modalEl?.remove();
+  modalEl = null;
 }
 
-/* ---------- existing dashboard wiring ---------- */
-/* Your existing code should call openServicesModal(instance)
-   when the per-instance “Services” button is clicked. */
-window.openServicesModal = openServicesModal;
+function openServicesModal(instanceId, instanceName) {
+  closeModal();
+  modalEl = document.createElement("div");
+  modalEl.className = "modal";
+  modalEl.innerHTML = `
+    <div class="modal-body" data-iid="${esc(instanceId)}" data-iname="${esc(instanceName || "")}">
+      <div class="modal-title">Services – ${esc(instanceName)} (${esc(instanceId)})</div>
+      <div class="svc-controls">
+        <input id="svc-pattern" placeholder="filter (e.g. MSSQL|SQLSERVERAGENT|Redis|W3SVC)" />
+        <button class="btn btn-svc-list">List</button>
+        <button class="btn btn-iisreset">IIS reset</button>
+      </div>
+      <div class="svc-table">
+        <div class="svc-head"><div>Name</div><div>Display Name</div><div>Status</div><div>Action</div></div>
+        <div class="svc-rows" id="svc-rows"><div class="empty">No services</div></div>
+      </div>
+      <div class="modal-actions"><button class="btn btn-close">Close</button></div>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+}
+
+function renderSvcRows(arr) {
+  const box = document.getElementById("svc-rows");
+  if (!box) return;
+  if (!arr || !arr.length) {
+    box.innerHTML = `<div class="empty">No services</div>`;
+    return;
+  }
+  box.innerHTML = arr
+    .map((s) => {
+      const run = (s.status || "").toLowerCase() === "running";
+      return `<div class="svc-row" data-svc="${esc(s.name || "")}">
+        <div>${esc(s.name || "")}</div>
+        <div>${esc(s.displayName || "")}</div>
+        <div>${chip(s.status)}</div>
+        <div>
+          <button class="btn ${run ? "btn-stop" : "btn-start"} btn-svc-op" data-op="${run ? "stop" : "start"}">${run ? "Stop" : "Start"}</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+/* ---------- actions ---------- */
+async function refreshAll() {
+  setStatus("Loading summary...", true);
+  try {
+    const r = await api("/instances", "GET");
+    paint(r);
+    setStatus("", false);
+  } catch (e) {
+    setStatus(`Failed to load: ${e.message}`, true);
+  }
+}
+
+async function actInstance(id, op) {
+  await api("/instance-action", "POST", { id, op });
+}
+
+async function actBulk(ids, op) {
+  await api("/bulk-action", "POST", { ids, op });
+}
+
+async function listServices(iid, pattern = "", nameHint = "") {
+  try {
+    const mode = pattern ? "filter" : (nameHint.toLowerCase().includes("sql") ? "sql" :
+                  nameHint.toLowerCase().includes("redis") ? "redis" : "filter");
+    const r = await api("/services", "POST", { id: iid, op: "list", mode, query: pattern });
+    if (r?.services) renderSvcRows(r.services);
+    else if (r?.error === "ssm_not_connected") {
+      renderSvcRows([]);
+      document.getElementById("svc-rows").innerHTML =
+        `<div class="empty">SSM not connected (agent/role/network). </div>`;
+    } else {
+      renderSvcRows([]);
+    }
+  } catch (e) {
+    renderSvcRows([]);
+    document.getElementById("svc-rows").innerHTML =
+      `<div class="empty">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+async function opService(iid, svcName, op) {
+  const r = await api("/services", "POST", { id: iid, op, serviceName: svcName });
+  if (r?.service) {
+    // update that row only
+    const row = document.querySelector(`.svc-row[data-svc="${CSS.escape(svcName)}"]`);
+    if (row) {
+      const run = (r.service.status || "").toLowerCase() === "running";
+      row.querySelector(":scope > div:nth-child(3)").innerHTML = chip(r.service.status);
+      row.querySelector(".btn-svc-op").textContent = run ? "Stop" : "Start";
+      row.querySelector(".btn-svc-op").dataset.op = run ? "stop" : "start";
+      row.querySelector(".btn-svc-op").classList.toggle("btn-start", !run);
+      row.querySelector(".btn-svc-op").classList.toggle("btn-stop", run);
+    }
+  }
+}
+
+/* ---------- events ---------- */
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+
+  // tabs
+  if (btn.classList.contains("tab-btn")) {
+    currentEnv = btn.dataset.tab;
+    paint(lastData);
+    return;
+  }
+
+  // global refresh
+  if (btn.id === "btn-refresh-all") {
+    refreshAll();
+    return;
+  }
+
+  // per-instance start/stop
+  if (btn.classList.contains("btn-start") || btn.classList.contains("btn-stop")) {
+    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
+    const op = btn.dataset.op || (btn.classList.contains("btn-start") ? "start" : "stop");
+    if (!id) return;
+    btn.disabled = true;
+    try {
+      await actInstance(id, op);
+      await refreshAll();
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  // group Start all/Stop all
+  if (btn.classList.contains("btn-start-all") || btn.classList.contains("btn-stop-all")) {
+    const group = btn.closest(".card");
+    const ids = [...group.querySelectorAll(".row")].map((x) => x.dataset.id).filter(Boolean);
+    if (!ids.length) return;
+    const op = btn.classList.contains("btn-start-all") ? "start" : "stop";
+    btn.disabled = true;
+    try {
+      await actBulk(ids, op);
+      await refreshAll();
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  // group refresh
+  if (btn.classList.contains("btn-refresh-group")) {
+    refreshAll();
+    return;
+  }
+
+  // services open
+  if (btn.classList.contains("btn-svc")) {
+    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
+    const name = btn.dataset.name || btn.closest(".row")?.dataset.name || "";
+    openServicesModal(id, name);
+    // initial list guess based on instance name
+    const hint = name.toLowerCase();
+    const pat = hint.includes("sql") ? "MSSQL|SQLSERVERAGENT" : hint.includes("redis") ? "Redis" : "";
+    document.getElementById("svc-pattern").value = pat;
+    await listServices(id, pat, name);
+    return;
+  }
+
+  // services modal actions
+  if (btn.classList.contains("btn-close")) {
+    closeModal();
+    return;
+  }
+
+  if (btn.classList.contains("btn-svc-list")) {
+    const box = btn.closest(".modal-body");
+    const iid = box.dataset.iid;
+    const pat = document.getElementById("svc-pattern").value || "";
+    await listServices(iid, pat, box.dataset.iname || "");
+    return;
+  }
+
+  if (btn.classList.contains("btn-iisreset")) {
+    const box = btn.closest(".modal-body");
+    const iid = box.dataset.iid;
+    btn.disabled = true;
+    try {
+      await api("/services", "POST", { id: iid, op: "iisreset" });
+      alert("IIS reset kicked off.");
+    } catch (err) {
+      alert(`IIS reset failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
+  if (btn.classList.contains("btn-svc-op")) {
+    const box = btn.closest(".modal-body");
+    const iid = box.dataset.iid;
+    const svcRow = btn.closest(".svc-row");
+    const svcName = svcRow?.dataset.svc || "";
+    const op = btn.dataset.op || "";
+    if (!iid || !svcName || !op) return;
+    btn.disabled = true;
+    try {
+      await opService(iid, svcName, op);
+    } catch (err) {
+      alert(`Failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+});
+
+/* ---------- init ---------- */
+(async function init() {
+  // require JWT
+  const t = localStorage.getItem("jwt");
+  if (!t) {
+    location.href = "/login.html";
+    return;
+  }
+  await refreshAll();
+})();

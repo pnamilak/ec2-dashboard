@@ -5,10 +5,34 @@
 locals {
   site_bucket_name = var.website_bucket_name != "" ? var.website_bucket_name : "${var.project_name}-${random_id.site.hex}-site"
   name_filters     = [for e in var.env_names : "*${e}*"]
+  account_id     = data.aws_caller_identity.current.account_id
+  users_path_arn = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/users/*"
+  jwt_param_arn  = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/jwt-secret"
 }
+
+# Who am I? (used to build ARNs without "*")
+data "aws_caller_identity" "current" {}
 
 resource "random_id" "site" {
   byte_length = 3
+}
+
+# ----------------------- Ensure SSM service-linked role exists (idempotent) -----------------------
+resource "null_resource" "ensure_ssm_slr" {
+  triggers = {
+    region = var.aws_region
+  }
+
+  provisioner "local-exec" {
+    when        = create
+    interpreter = ["/bin/bash", "-lc"]
+    command     = <<-EOT
+      set -euo pipefail
+      aws iam get-role --role-name AWSServiceRoleForAmazonSSM >/dev/null 2>&1 || \
+      aws iam create-service-linked-role --aws-service-name ssm.amazonaws.com >/dev/null
+      echo "SSM service-linked role is present."
+    EOT
+  }
 }
 
 # ----------------------- S3 Website -----------------------
@@ -165,43 +189,75 @@ resource "aws_iam_role" "lambda_exec" {
 }
 
 resource "aws_iam_role_policy" "lambda_policy" {
-  name = "${var.project_name}-policy"
+  name = "ec2-dashboard-lambda"
   role = aws_iam_role.lambda_exec.id
 
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
+      # CloudWatch Logs
       {
         Effect   = "Allow",
         Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
-        Resource = "*"
+        Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*"
       },
+
+      # DynamoDB OTP table
       {
         Effect   = "Allow",
-        Action   = ["ses:SendEmail","ses:SendRawEmail"],
-        Resource = "*"
+        Action   = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan"
+        ],
+        Resource = aws_dynamodb_table.otp.arn
       },
+
+      # SSM parameters + commands used by /services
       {
         Effect = "Allow",
         Action = [
-          "ssm:GetParameter","ssm:GetParameters","ssm:DescribeParameters",
-          "ssm:SendCommand","ssm:GetCommandInvocation","ssm:DescribeInstanceInformation"
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath",
+          "ssm:DescribeParameters",
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:DescribeInstanceInformation"
         ],
         Resource = "*"
       },
+
+      # SES send for OTP mail
       {
         Effect   = "Allow",
-        Action   = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"],
-        Resource = aws_dynamodb_table.otp.arn
+        Action   = ["ses:SendEmail", "ses:SendRawEmail"],
+        Resource = "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"
       },
+
+      # >>> NEW: EC2 read (for /instances)
       {
         Effect   = "Allow",
-        Action   = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"],
+        Action   = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeInstanceStatus",
+          "ec2:DescribeTags"
+        ],
         Resource = "*"
+      },
+
+      # >>> NEW: EC2 instance actions (for /instance-action and /bulk-action)
+      {
+        Effect   = "Allow",
+        Action   = ["ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances"],
+        Resource = "arn:aws:ec2:${var.aws_region}:${local.account_id}:instance/*"
       }
     ]
   })
 }
+
 
 # ----------------------- Lambdas -----------------------
 resource "aws_lambda_function" "api" {
@@ -396,7 +452,7 @@ locals {
   target_ids = lookup(local.target_map, var.assign_profile_target, [])
 }
 
-# Attach/replace profile using AWS CLI (idempotent), and clean on destroy
+# Attach/replace profile using AWS CLI (idempotent)
 resource "null_resource" "attach_ssm_profile" {
   for_each = { for id in local.target_ids : id => id }
 
@@ -406,9 +462,12 @@ resource "null_resource" "attach_ssm_profile" {
     region       = var.aws_region
   }
 
-  depends_on = [aws_iam_instance_profile.ec2_ssm_profile]
+  depends_on = [
+    aws_iam_instance_profile.ec2_ssm_profile,
+    null_resource.ensure_ssm_slr
+  ]
 
-  # Create/Update
+  # CREATE/UPDATE: ensure the target profile is attached (idempotent)
   provisioner "local-exec" {
     when        = create
     interpreter = ["/bin/bash", "-lc"]
@@ -417,29 +476,94 @@ resource "null_resource" "attach_ssm_profile" {
       IID="${each.value}"
       PROF="${aws_iam_instance_profile.ec2_ssm_profile.name}"
       REGION="${var.aws_region}"
+      TARGET_SUFFIX=":instance-profile/$PROF"
 
-      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
-        --filters Name=instance-id,Values="$IID" \
-        --query 'IamInstanceProfileAssociations[0].AssociationId' \
-        --output text --region "$REGION" || true)
+      get_field() {
+        aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query "IamInstanceProfileAssociations[0].$1" \
+          --output text 2>/dev/null || true
+      }
+
+      # Prefer an ACTIVE association if present; else take the first one.
+      get_active() {
+        aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query "IamInstanceProfileAssociations[?State==\`associated\`][0].$1" \
+          --output text 2>/dev/null || true
+      }
+
+      ASSOC_ID="$(get_active AssociationId)"
+      if [ -z "$ASSOC_ID" ] || [ "$ASSOC_ID" = "None" ]; then
+        # Fallback to any existing association (may be associating/disassociating)
+        ASSOC_ID="$(get_field AssociationId)"
+      fi
+
+      STATE="$(get_field State)"
+      CUR_ARN="$(get_field IamInstanceProfile.Arn)"
 
       if [ -z "$ASSOC_ID" ] || [ "$ASSOC_ID" = "None" ]; then
-        echo "Associating $IID -> $PROF"
+        echo "No association -> associate $IID -> $PROF"
         aws ec2 associate-iam-instance-profile \
           --instance-id "$IID" \
           --iam-instance-profile Name="$PROF" \
           --region "$REGION" >/dev/null
-      else
-        echo "Replacing $IID assoc $ASSOC_ID -> $PROF"
-        aws ec2 replace-iam-instance-profile-association \
-          --association-id "$ASSOC_ID" \
-          --iam-instance-profile Name="$PROF" \
-          --region "$REGION" >/dev/null
+        exit 0
       fi
+
+      if [[ "$CUR_ARN" == *"$TARGET_SUFFIX" ]] && [[ "$STATE" == "associated" ]]; then
+        echo "Already correct ($IID -> $PROF), skipping."
+        exit 0
+      fi
+
+      echo "Needs change ($IID): state=$STATE; current=$CUR_ARN"
+
+      # 1) Try REPLACE when possible (works when association is 'associated')
+      set +e
+      aws ec2 replace-iam-instance-profile-association \
+        --association-id "$ASSOC_ID" \
+        --iam-instance-profile Name="$PROF" \
+        --region "$REGION" >/dev/null
+      rc=$?
+      set -e
+      if [ $rc -eq 0 ]; then
+        echo "Replaced association for $IID"
+        exit 0
+      fi
+
+      # 2) Fallback: DISASSOCIATE (best effort), wait until gone, then ASSOCIATE
+      echo "Replace failed (state=$STATE). Disassociate -> wait -> associate..."
+      set +e
+      aws ec2 disassociate-iam-instance-profile \
+        --association-id "$ASSOC_ID" \
+        --region "$REGION" >/dev/null
+      set -e
+
+      # Wait until there is no visible association
+      for i in {1..12}; do
+        sleep 5
+        NOW="$(aws ec2 describe-iam-instance-profile-associations \
+          --filters Name=instance-id,Values="$IID" \
+          --region "$REGION" \
+          --query 'IamInstanceProfileAssociations[0].AssociationId' \
+          --output text 2>/dev/null || true)"
+        if [ -z "$NOW" ] || [ "$NOW" = "None" ]; then
+          break
+        fi
+        echo "Waiting for disassociate... ($i)"
+      done
+
+      echo "Associate $IID -> $PROF"
+      aws ec2 associate-iam-instance-profile \
+        --instance-id "$IID" \
+        --iam-instance-profile Name="$PROF" \
+        --region "$REGION" >/dev/null
     EOT
   }
 
-  # Destroy: disassociate if still attached
+  # DESTROY: only disassociate if *our* profile is attached
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["/bin/bash", "-lc"]
@@ -447,16 +571,30 @@ resource "null_resource" "attach_ssm_profile" {
       set -euo pipefail
       IID="${self.triggers.instance_id}"
       REGION="${self.triggers.region}"
-      ASSOC_ID=$(aws ec2 describe-iam-instance-profile-associations \
+      PROF="${self.triggers.profile_name}"
+      TARGET_SUFFIX=":instance-profile/$PROF"
+
+      ASSOC_ID="$(aws ec2 describe-iam-instance-profile-associations \
         --filters Name=instance-id,Values="$IID" \
+        --region "$REGION" \
         --query 'IamInstanceProfileAssociations[0].AssociationId' \
-        --output text --region "$REGION" || true)
-      if [ -n "$ASSOC_ID" ] && [ "$ASSOC_ID" != "None" ]; then
-        echo "Disassociating $IID assoc $ASSOC_ID"
+        --output text 2>/dev/null || true)"
+      CUR_ARN="$(aws ec2 describe-iam-instance-profile-associations \
+        --filters Name=instance-id,Values="$IID" \
+        --region "$REGION" \
+        --query 'IamInstanceProfileAssociations[0].IamInstanceProfile.Arn' \
+        --output text 2>/dev/null || true)"
+
+      if [ -n "$ASSOC_ID" ] && [ "$ASSOC_ID" != "None" ] && [[ "$CUR_ARN" == *"$TARGET_SUFFIX" ]]; then
+        echo "Disassociating $IID ($PROF)"
         aws ec2 disassociate-iam-instance-profile \
           --association-id "$ASSOC_ID" \
-          --region "$REGION" >/dev/null
+          --region "$REGION" >/dev/null || true
+      else
+        echo "No disassociate needed for $IID"
       fi
     EOT
   }
 }
+
+
