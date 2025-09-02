@@ -211,7 +211,13 @@ resource "aws_iam_role_policy" "lambda_policy" {
       },
       {
         Effect   = "Allow",
-        Action   = ["dynamodb:PutItem","dynamodb:GetItem","dynamodb:DeleteItem"],
+        Action   = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem", 
+          "dynamodb:DeleteItem",  
+          "dynamodb:Scan"          
+        ],
         Resource = aws_dynamodb_table.otp.arn
       },
       {
