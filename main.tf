@@ -18,8 +18,6 @@ resource "random_id" "site" {
 }
 
 # ----------------------- Ensure SSM service-linked role exists (idempotent) -----------------------
-# We deliberately use a CLI-based guard to "create if missing".
-# If it already exists, AWS returns EntityAlreadyExists and we ignore it.
 resource "null_resource" "ensure_ssm_slr" {
   triggers = {
     region = var.aws_region
@@ -195,31 +193,31 @@ resource "aws_iam_role_policy" "lambda_policy" {
   role = aws_iam_role.lambda_exec.id
 
   policy = jsonencode({
-    Version = "2012-10-17"
+    Version = "2012-10-17",
     Statement = [
       # CloudWatch Logs for this function
       {
-        Effect   = "Allow"
-        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
+        Effect   = "Allow",
+        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
         Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*"
       },
 
       # OTP table (include UpdateItem + Scan)
       {
-        Effect   = "Allow"
+        Effect   = "Allow",
         Action   = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
-          "dynamodb:UpdateItem", 
-          "dynamodb:DeleteItem",  
-          "dynamodb:Scan"          
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan"
         ],
         Resource = aws_dynamodb_table.otp.arn
       },
 
       # Read users and JWT secret from SSM Parameter Store (no "*")
       {
-        Effect   = "Allow"
+        Effect = "Allow",
         Action = [
           "ssm:GetParameter",
           "ssm:GetParameters",
@@ -228,8 +226,15 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "ssm:GetCommandInvocation",
           "ssm:DescribeInstanceInformation",
           "ssm:GetParametersByPath"
-                  ],
+        ],
         Resource = [local.users_path_arn, local.jwt_param_arn]
+      },
+
+      # >>> ADDED: SES send
+      {
+        "Effect": "Allow",
+        "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+        "Resource": "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"
       }
     ]
   })
@@ -443,7 +448,6 @@ resource "null_resource" "attach_ssm_profile" {
     null_resource.ensure_ssm_slr
   ]
 
-  # Create/Update
   provisioner "local-exec" {
     when        = create
     interpreter = ["/bin/bash", "-lc"]
@@ -474,7 +478,6 @@ resource "null_resource" "attach_ssm_profile" {
     EOT
   }
 
-  # Destroy: disassociate if still attached
   provisioner "local-exec" {
     when        = destroy
     interpreter = ["/bin/bash", "-lc"]
