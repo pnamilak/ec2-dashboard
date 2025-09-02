@@ -293,16 +293,31 @@ def handle_login(body):
         return _json(200, _err("unexpected", message=str(e)))
 
 # ---------- EC2 ----------
+# handler.py — same as yours, with grouped /instances output
+
+
 def _name_tag(tags):
     for t in tags or []:
         if t.get("Key") == "Name":
             return t.get("Value")
     return ""
 
+def _detect_env(name: str) -> str:
+    n = (name or "").lower()
+    for tok in ENV_TOKENS or []:
+        if tok.lower() in n:
+            return tok.upper()
+    return "ALL" if not ENV_TOKENS else "MISC"
+
+def _detect_role(name: str) -> str:
+    return "DM" if "dm" in (name or "").lower() else "EA"
+
 def handle_instances():
-    filters = [{"Name": "instance-state-name", "Values": ["running", "stopped", "pending", "stopping"]}]
+    # filter by ENV_TOKENS if provided
+    filters = [{"Name": "instance-state-name", "Values": ["running","stopped","pending","stopping"]}]
     if ENV_TOKENS:
         filters.append({"Name": "tag:Name", "Values": [f"*{tok}*" for tok in ENV_TOKENS]})
+
     resp = ec2.describe_instances(Filters=filters)
     items = []
     for r in resp.get("Reservations", []):
@@ -316,8 +331,28 @@ def handle_instances():
                 "privateIp": i.get("PrivateIpAddress"),
                 "platform": "windows" if i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows") else "linux",
             })
+
     items.sort(key=lambda x: (x["name"] or "", x["id"]))
-    return _json(200, _ok(instances=items))
+
+    # Build grouped shape (for the UI card/tabs)
+    summary = {
+        "total":   len(items),
+        "running": sum(1 for x in items if (x.get("state") or "").lower() == "running"),
+        "stopped": sum(1 for x in items if (x.get("state") or "").lower() == "stopped"),
+    }
+
+    envs = {}
+    for it in items:
+        env  = _detect_env(it["name"])
+        role = _detect_role(it["name"])  # DM / EA
+        envs.setdefault(env, {"DM": [], "EA": []})
+        envs[env][role].append(it)
+
+    # Keep "instances" for back-compat, add summary/envs for the new UI
+    return _json(200, _ok(instances=items, summary=summary, envs=envs))
+
+
+
 
 def _ec2_action(instance_id, op):
     if op == "start":
