@@ -1,6 +1,7 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API – OTP, login, instances, actions, services.
+# Hardened for robust error reporting (no API Gateway 500 bubbles).
 # -----------------------------------------------------------------------------
 
 import os
@@ -23,8 +24,8 @@ ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com")
 PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX", "/ec2-dashboard/users")
 JWT_PARAM         = os.environ.get("JWT_PARAM", "/ec2-dashboard/jwt-secret")
 ENV_NAMES_STR     = os.environ.get("ENV_NAMES", "")
+# Allow tokens like "naqa6,dm-dev,dm-qa". Matching is case-insensitive.
 ENV_TOKENS        = [e.strip() for e in (ENV_NAMES_STR or "").split(",") if e.strip()]
-ENV_TOKENS_LC     = [e.lower() for e in ENV_TOKENS]  # case-insensitive matching
 
 # ---------- Clients ----------
 ec2 = boto3.client("ec2", region_name=REGION)
@@ -32,13 +33,10 @@ ssm = boto3.client("ssm", region_name=REGION)
 ses = boto3.client("ses", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 ssm_param = boto3.client("ssm", region_name=REGION)
-sts = boto3.client("sts")
-ACCOUNT_ID = sts.get_caller_identity()["Account"]
-SENDER_ID_ARN = f"arn:aws:ses:{REGION}:{ACCOUNT_ID}:identity/{SES_SENDER}"
 
 # ---------- Globals ----------
 JWT_SECRET_CACHE = None
-USERS_CACHE = {}
+USERS_CACHE = {}  # cache SSM user records for the runtime
 
 # ---------- Utils ----------
 def _now():
@@ -99,6 +97,7 @@ def _get_user_record(username):
     base = f"{PARAM_USER_PREFIX}/{username}"
     rec = None
 
+    # Try JSON secret
     try:
         raw = _ssm_get(base, decrypt=True)
         try:
@@ -113,6 +112,7 @@ def _get_user_record(username):
         except Exception:
             rec = {"username": username, "password": raw, "role": "user", "email": None}
     except ClientError:
+        # Try split params
         try:
             pwd = _ssm_get(f"{base}/password", decrypt=True)
             try:
@@ -142,7 +142,7 @@ def _verify_password(stored, provided):
         return got == want
     if s.lower().startswith("plain:"):
         return provided == s.split(":", 1)[1]
-    return provided == s
+    return provided == s  # back-compat literal
 
 # ---------- OVT helpers ----------
 def _issue_ovt_for_email(email):
@@ -179,66 +179,6 @@ def _ovt_get_email(ovt):
         return None
     return (rec.get("email") or "").strip().lower() or None
 
-# ---------- EC2 ----------
-def _name_tag(tags):
-    for t in tags or []:
-        if t.get("Key") == "Name":
-            return t.get("Value")
-    return ""
-
-def _detect_env(name: str) -> str:
-    n = (name or "").lower()
-    for tok in ENV_TOKENS_LC or []:
-        if tok in n:
-            return tok.upper()  # "naqa6" -> "NAQA6", "dm-dev" -> "DM-DEV"
-    return "ALL" if not ENV_TOKENS_LC else "MISC"
-
-def _detect_role(name: str) -> str:
-    return "DM" if "dm" in (name or "").lower() else "EA"
-
-def handle_instances():
-    # Only state filter at EC2 API; environment filtering is done in Python (case-insensitive).
-    filters = [{"Name": "instance-state-name", "Values": ["running","stopped","pending","stopping"]}]
-    resp = ec2.describe_instances(Filters=filters)
-
-    items = []
-    for r in resp.get("Reservations", []):
-        for i in r.get("Instances", []):
-            name = _name_tag(i.get("Tags"))
-
-            # Filter by ENV tokens in Python (case-insensitive)
-            if ENV_TOKENS_LC:
-                n = (name or "").lower()
-                if not any(tok in n for tok in ENV_TOKENS_LC):
-                    continue
-
-            items.append({
-                "id": i["InstanceId"],
-                "name": name,
-                "state": i.get("State", {}).get("Name"),
-                "type": i.get("InstanceType"),
-                "publicIp": i.get("PublicIpAddress"),
-                "privateIp": i.get("PrivateIpAddress"),
-                "platform": "windows" if i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows") else "linux",
-            })
-
-    items.sort(key=lambda x: (x["name"] or "", x["id"]))
-
-    summary = {
-        "total":   len(items),
-        "running": sum(1 for x in items if (x.get("state") or "").lower() == "running"),
-        "stopped": sum(1 for x in items if (x.get("state") or "").lower() == "stopped"),
-    }
-
-    envs = {}
-    for it in items:
-        env  = _detect_env(it["name"])
-        role = _detect_role(it["name"])  # DM / EA
-        envs.setdefault(env, {"DM": [], "EA": []})
-        envs[env][role].append(it)
-
-    return _json(200, _ok(instances=items, summary=summary, envs=envs))
-
 # ---------- OTP ----------
 def handle_request_otp(body):
     try:
@@ -249,7 +189,7 @@ def handle_request_otp(body):
             return _json(200, _err("domain_not_allowed"))
 
         code = f"{random.randint(0, 999999):06d}"
-        expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp())
+        expires_at = int((_now() + timedelta(minutes=10)).timestamp())
 
         if not OTP_TABLE_NAME:
             return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
@@ -261,8 +201,6 @@ def handle_request_otp(body):
             try:
                 ses.send_email(
                     Source=SES_SENDER,
-                    SourceArn=SENDER_ID_ARN,
-                    ReturnPath=SES_SENDER,
                     Destination={"ToAddresses": [email]},
                     Message={
                         "Subject": {"Data": "Your EC2 Dashboard OTP"},
@@ -306,47 +244,103 @@ def handle_verify_otp(body):
     except Exception as e:
         return _json(200, _err("unexpected", message=str(e)))
 
-# ---------- Login ----------
-def handle_login(body):
+# ---------- Helpers for grouping ----------
+def _name_tag(tags):
+    for t in tags or []:
+        if t.get("Key") == "Name":
+            return t.get("Value")
+    return ""
+
+def _detect_env(name: str) -> str:
+    n = (name or "").lower()
+    for tok in ENV_TOKENS or []:
+        t = tok.lower()
+        # case-insensitive, also tolerate hyphens in token vs name
+        if t in n or n.startswith(t) or n.replace("-", "").startswith(t.replace("-", "")):
+            return tok.upper()
+    return "ALL" if not ENV_TOKENS else "MISC"
+
+def _detect_role(name: str) -> str:
+    return "DM" if "dm" in (name or "").lower() else "EA"
+
+# ---------- EC2 ----------
+def handle_instances():
+    # IMPORTANT: Do NOT filter by tag:Name here – EC2 API matching is case-sensitive.
+    # We keep the state filter for efficiency, then group by env/role in Python (case-insensitive).
+    filters = [{"Name": "instance-state-name", "Values": ["running", "stopped", "pending", "stopping"]}]
+
+    items = []
+    paginator = ec2.get_paginator("describe_instances")
+    for page in paginator.paginate(Filters=filters):
+        for r in page.get("Reservations", []):
+            for i in r.get("Instances", []):
+                name = _name_tag(i.get("Tags"))
+                it = {
+                    "id": i["InstanceId"],
+                    "name": name,
+                    "state": i.get("State", {}).get("Name"),
+                    "type": i.get("InstanceType"),
+                    "publicIp": i.get("PublicIpAddress"),
+                    "privateIp": i.get("PrivateIpAddress"),
+                    "platform": "windows" if i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows") else "linux",
+                }
+                items.append(it)
+
+    items.sort(key=lambda x: ((x["name"] or "").lower(), x["id"]))
+
+    summary = {
+        "total":   len(items),
+        "running": sum(1 for x in items if (x.get("state") or "").lower() == "running"),
+        "stopped": sum(1 for x in items if (x.get("state") or "").lower() == "stopped"),
+    }
+
+    envs = {}
+    for it in items:
+        env  = _detect_env(it["name"])
+        role = _detect_role(it["name"])  # DM / EA
+        envs.setdefault(env, {"DM": [], "EA": []})
+        envs[env][role].append(it)
+
+    return _json(200, _ok(instances=items, summary=summary, envs=envs))
+
+def _ec2_action(instance_id, op):
+    if op == "start":
+        ec2.start_instances(InstanceIds=[instance_id])
+    elif op == "stop":
+        ec2.stop_instances(InstanceIds=[instance_id])
+    elif op == "reboot":
+        ec2.reboot_instances(InstanceIds=[instance_id])
+    else:
+        return _err("unsupported_action")
+    return _ok()
+
+def handle_instance_action(body):
+    iid = (body.get("instanceId") or body.get("id") or "").strip()
+    op  = (body.get("op") or body.get("action") or "").strip().lower()
+    if not iid or not op:
+        return _json(200, _err("missing_params"))
     try:
-        # Mode A: OTP login
-        email = (body.get("email") or "").strip().lower()
-        code  = (body.get("code") or "").strip()
-        if email and code:
-            tbl = dynamodb.Table(OTP_TABLE_NAME)
-            res = tbl.get_item(Key={"email": email}).get("Item")
-            if not res or res.get("code") != code or int(res.get("expires", 0)) < int(time.time()):
-                return _json(200, _err("invalid_login"))
-            role = "user"
-            token = _sign_jwt({"sub": email, "role": role})
-            return _json(200, _ok(token=token, role=role, user={"username": email}))
+        return _json(200, _ec2_action(iid, op))
+    except ClientError as e:
+        return _json(200, _err("aws_error", message=str(e)))
 
-        # Mode B: username/password (+ optional OVT)
-        username = (body.get("username") or "").strip()
-        password = (body.get("password") or "")
-        ovt      = (body.get("ovt") or "").strip()
-        if not (username and password):
-            return _json(200, _err("invalid_login"))
-
-        ovt_email = None
-        if ovt:
-            ovt_email = _ovt_get_email(ovt)
-            if not ovt_email:
-                return _json(200, _err("ovt_invalid"))
-
-        rec = _get_user_record(username)
-        if not rec or not _verify_password(rec.get("password", ""), password):
-            return _json(200, _err("invalid_login"))
-
-        assigned_email = (rec.get("email") or "").strip().lower() if rec else None
-        if assigned_email and ovt_email and assigned_email != ovt_email:
-            return _json(200, _err("email_mismatch", message="Assigned email does not match OTP email"))
-
-        role = rec.get("role", "user")
-        token = _sign_jwt({"sub": username, "role": role})
-        return _json(200, _ok(token=token, role=role, user={"username": username}))
-    except Exception as e:
-        return _json(200, _err("unexpected", message=str(e)))
+def handle_bulk(body):
+    ids = body.get("instanceIds") or body.get("ids") or []
+    op  = (body.get("op") or "").lower()
+    if not ids or not op:
+        return _json(200, _err("missing_params"))
+    try:
+        if op == "start":
+            ec2.start_instances(InstanceIds=ids)
+        elif op == "stop":
+            ec2.stop_instances(InstanceIds=ids)
+        elif op == "reboot":
+            ec2.reboot_instances(InstanceIds=ids)
+        else:
+            return _json(200, _err("unsupported_action"))
+        return _json(200, _ok())
+    except ClientError as e:
+        return _json(200, _err("aws_error", message=str(e)))
 
 # ---------- Services via SSM ----------
 PS_LIST_SQL = r"""
@@ -407,7 +401,7 @@ def _send_ps(instance_id, script, params=None, timeout=60):
 def _normalize_services_payload(body):
     iid = (body.get("instanceId") or body.get("id") or "").strip()
     raw_op = (body.get("op") or "").lower().strip()
-    raw_mode = (body.get("kind") or body.get("mode") or "").lower().strip()
+    raw_mode = (body.get("mode") or body.get("kind") or "").lower().strip()
     op = raw_op if raw_op in ("list", "start", "stop", "iisreset") else "list"
     instance_name = (body.get("instanceName") or "").lower()
     query = (body.get("query") or body.get("pattern") or "").strip()
