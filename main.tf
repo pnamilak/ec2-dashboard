@@ -195,14 +195,14 @@ resource "aws_iam_role_policy" "lambda_policy" {
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
-      # CloudWatch Logs for this function
+      # CloudWatch Logs
       {
         Effect   = "Allow",
         Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
         Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*"
       },
 
-      # OTP table (include UpdateItem + Scan)
+      # DynamoDB OTP table
       {
         Effect   = "Allow",
         Action   = [
@@ -215,30 +215,49 @@ resource "aws_iam_role_policy" "lambda_policy" {
         Resource = aws_dynamodb_table.otp.arn
       },
 
-      # Read users and JWT secret from SSM Parameter Store (no "*")
+      # SSM parameters + commands used by /services
       {
         Effect = "Allow",
         Action = [
           "ssm:GetParameter",
           "ssm:GetParameters",
+          "ssm:GetParametersByPath",
           "ssm:DescribeParameters",
           "ssm:SendCommand",
           "ssm:GetCommandInvocation",
-          "ssm:DescribeInstanceInformation",
-          "ssm:GetParametersByPath"
+          "ssm:DescribeInstanceInformation"
         ],
-        Resource = [local.users_path_arn, local.jwt_param_arn]
+        Resource = "*"
       },
 
-      # >>> ADDED: SES send
+      # SES send for OTP mail
       {
-        "Effect": "Allow",
-        "Action": ["ses:SendEmail", "ses:SendRawEmail"],
-        "Resource": "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"
+        Effect   = "Allow",
+        Action   = ["ses:SendEmail", "ses:SendRawEmail"],
+        Resource = "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"
+      },
+
+      # >>> NEW: EC2 read (for /instances)
+      {
+        Effect   = "Allow",
+        Action   = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeInstanceStatus",
+          "ec2:DescribeTags"
+        ],
+        Resource = "*"
+      },
+
+      # >>> NEW: EC2 instance actions (for /instance-action and /bulk-action)
+      {
+        Effect   = "Allow",
+        Action   = ["ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances"],
+        Resource = "arn:aws:ec2:${var.aws_region}:${local.account_id}:instance/*"
       }
     ]
   })
 }
+
 
 # ----------------------- Lambdas -----------------------
 resource "aws_lambda_function" "api" {
