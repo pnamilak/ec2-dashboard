@@ -5,7 +5,13 @@
 locals {
   site_bucket_name = var.website_bucket_name != "" ? var.website_bucket_name : "${var.project_name}-${random_id.site.hex}-site"
   name_filters     = [for e in var.env_names : "*${e}*"]
+  account_id     = data.aws_caller_identity.current.account_id
+  users_path_arn = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/users/*"
+  jwt_param_arn  = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/jwt-secret"
 }
+
+# Who am I? (used to build ARNs without "*")
+data "aws_caller_identity" "current" {}
 
 resource "random_id" "site" {
   byte_length = 3
@@ -185,37 +191,22 @@ resource "aws_iam_role" "lambda_exec" {
 }
 
 resource "aws_iam_role_policy" "lambda_policy" {
-  name = "${var.project_name}-policy"
+  name = "ec2-dashboard-lambda"
   role = aws_iam_role.lambda_exec.id
 
   policy = jsonencode({
-    Version = "2012-10-17",
+    Version = "2012-10-17"
     Statement = [
+      # CloudWatch Logs for this function
       {
-        Effect   = "Allow",
-        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
-        Resource = "*"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"]
+        Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*"
       },
+
+      # OTP table (include UpdateItem + Scan)
       {
-        Effect   = "Allow",
-        Action   = ["ses:SendEmail","ses:SendRawEmail"],
-        Resource = "*"
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "ssm:GetParameter",
-          "ssm:GetParameters",
-          "ssm:DescribeParameters",
-          "ssm:SendCommand",
-          "ssm:GetCommandInvocation",
-          "ssm:DescribeInstanceInformation",
-          "ssm:GetParametersByPath"
-                  ],
-        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/users/*"
-      },
-      {
-        Effect   = "Allow",
+        Effect   = "Allow"
         Action   = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
@@ -225,10 +216,20 @@ resource "aws_iam_role_policy" "lambda_policy" {
         ],
         Resource = aws_dynamodb_table.otp.arn
       },
+
+      # Read users and JWT secret from SSM Parameter Store (no "*")
       {
-        Effect   = "Allow",
-        Action   = ["ec2:DescribeInstances","ec2:StartInstances","ec2:StopInstances"],
-        Resource = "*"
+        Effect   = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:DescribeParameters",
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation",
+          "ssm:DescribeInstanceInformation",
+          "ssm:GetParametersByPath"
+                  ],
+        Resource = [local.users_path_arn, local.jwt_param_arn]
       }
     ]
   })
