@@ -1,299 +1,248 @@
-/* html/login.js — 2025-09-02
-   Fixes:
-   - Start all / Stop all (per card) wired to /bulk-action
-   - Services modal shows Name/DisplayName/Status, Start/Stop works
-   - No UI layout change; selectors are built from the same card markup
-*/
+// html/login.js
+// Minimal, UI-compatible fixes for env/grouping, bulk actions, and services.
 
 (() => {
-  const API_BASE = window.API_BASE || ""; // leave as in your HTML
-  const LS = window.localStorage;
-  let JWT = LS.getItem("jwt") || "";
-  let STATE = {
-    activeEnv: null,      // e.g. "NAQA6"
-    all: [],              // flat instances from /instances
-    envs: {},             // grouped { ENV: { DM:[], EA:[] } }
-  };
+  const API = window.API_BASE || "";                 // from index.html template
+  const token = () => localStorage.getItem("token"); // set at login
 
-  // ---------- helpers ----------
-  function authHeaders() {
-    const h = { "Content-Type": "application/json" };
-    if (JWT) h["Authorization"] = "Bearer " + JWT;
-    return h;
-  }
-  async function api(path, method = "GET", body) {
-    const res = await fetch(API_BASE + path, {
-      method,
-      headers: authHeaders(),
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw new Error(res.status + " " + res.statusText);
-    return await res.json();
-  }
-  const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
-  const $ = (sel, el=document) => el.querySelector(sel);
-  const byText = (btn, txt) => btn && btn.textContent.trim().toLowerCase() === txt;
-
-  function pill(status) {
-    const s = (status||"").toLowerCase();
-    const cls = s === "running" ? "ok" : (s === "stopped" ? "warn" : "");
-    return `<span class="pill ${cls}">${s}</span>`;
-  }
-
-  // ---------- render ----------
-  function renderSummaryBar(sum, envKey) {
-    const el = $("#env-summary");
-    if (!el) return;
-    const t = envKey || STATE.activeEnv || "ALL";
-    el.innerHTML = `Env: ${t} • Total: ${sum.total} • Running: ${sum.running} • Stopped: ${sum.stopped}`;
-  }
-
-  function envOrder(envs) {
-    // keep deterministic order; Summary first is handled by HTML/tabs
-    return Object.keys(envs).sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
-  }
-
-  function setActiveEnv(k) {
-    STATE.activeEnv = k;
-    render();
-  }
-
-  function renderTabs() {
-    const tabs = $("#tabs");
-    if (!tabs) return;
-    const envKeys = envOrder(STATE.envs);
-    // keep existing "Summary" tab; rebuild other env tabs
-    const container = $("#env-tabs");
-    if (!container) return;
-
-    container.innerHTML = "";
-    for (const k of envKeys) {
-      const b = document.createElement("button");
-      b.className = "tab";
-      b.dataset.env = k;
-      b.textContent = k;
-      if (k === STATE.activeEnv) b.classList.add("active");
-      container.appendChild(b);
-    }
-  }
-
-  function sectionHtml(title, items) {
-    // items = [{id,name,state,...}]
-    const ids = items.map(x=>x.id).join(",");
-    const rows = items.map(x => `
-      <div class="inst">
-        <div class="inst-name">${x.name || x.id}</div>
-        <div class="inst-state">${pill(x.state)}</div>
-        <div class="inst-actions">
-          ${x.state === "running"
-            ? `<button class="btn btn-stop" data-act="stop" data-id="${x.id}">Stop</button>`
-            : `<button class="btn btn-start" data-act="start" data-id="${x.id}">Start</button>`}
-          <button class="btn btn-svc" data-svcs="open" data-id="${x.id}" data-name="${x.name || ""}">Services</button>
-        </div>
-      </div>
-    `).join("");
-
-    return `
-      <div class="card" data-ids="${ids}">
-        <div class="card-head">
-          <div class="card-title">${title}</div>
-          <div class="card-tools">
-            <button class="btn" data-bulk="start">Start all</button>
-            <button class="btn" data-bulk="stop">Stop all</button>
-          </div>
-        </div>
-        <div class="card-body">${rows || `<div class="empty">No instances</div>`}</div>
-      </div>
-    `;
-  }
-
-  function renderEnv(envKey) {
-    const root = $("#cards");
-    if (!root) return;
-    const env = STATE.envs[envKey] || {DM:[], EA:[]};
-    root.innerHTML = `
-      ${sectionHtml("Dream Mapper", env.DM)}
-      ${sectionHtml("Encore Anywhere", env.EA)}
-    `;
-    // summary for this env only
-    const all = [...env.DM, ...env.EA];
-    renderSummaryBar({
-      total: all.length,
-      running: all.filter(x=>x.state==="running").length,
-      stopped: all.filter(x=>x.state==="stopped").length
-    }, envKey);
-  }
-
-  function render() {
-    if (!STATE.activeEnv) {
-      // pick first non-empty, else first key
-      const keys = envOrder(STATE.envs);
-      STATE.activeEnv = keys.find(k => (STATE.envs[k].DM.length+STATE.envs[k].EA.length) > 0) || keys[0] || "ALL";
-    }
-    renderTabs();
-    renderEnv(STATE.activeEnv);
-  }
-
-  // ---------- data ----------
-  async function refreshInstances() {
-    const res = await api("/instances", "GET");
-    if (!res.ok) throw new Error(res.error || "instances failed");
-    STATE.all = res.instances || [];
-    STATE.envs = res.envs || { ALL: {DM:[],EA:[]} };
-    renderSummaryBar(res.summary || {total:0,running:0,stopped:0}, STATE.activeEnv);
-    render();
-  }
-
-  // ---------- actions ----------
-  async function doAction(id, op) {
-    const res = await api("/instance-action", "POST", { instanceId: id, op });
-    if (!res.ok) throw new Error(res.error || "instance-action failed");
-    await refreshInstances();
-  }
-  async function doBulk(ids, op) {
-    if (!ids.length) return;
-    const res = await api("/bulk-action", "POST", { instanceIds: ids, op });
-    if (!res.ok) throw new Error(res.error || "bulk-action failed");
-    await refreshInstances();
-  }
-
-  // ---------- services modal ----------
-  const svcModal = {
-    root: null,
-    tbody: null,
-    q: null,
-    iid: null,
-    iname: null
-  };
-
-  function ensureSvcModal() {
-    if (svcModal.root) return;
-    const el = document.createElement("div");
-    el.className = "modal";
-    el.innerHTML = `
-      <div class="modal-box">
-        <div class="modal-head">
-          <div class="modal-title" id="svc-title">Services</div>
-          <div class="modal-tools">
-            <input id="svc-q" placeholder="filter (regex)" />
-            <button class="btn" id="svc-list">List</button>
-            <button class="btn" id="svc-iis">IIS reset</button>
-          </div>
-        </div>
-        <div class="modal-body">
-          <table class="table">
-            <thead><tr><th>Name</th><th>Display Name</th><th>Status</th><th>Action</th></tr></thead>
-            <tbody id="svc-tbody"></tbody>
-          </table>
-          <div class="modal-note" id="svc-note"></div>
-        </div>
-        <div class="modal-foot">
-          <button class="btn" id="svc-close">Close</button>
-        </div>
-      </div>`;
-    document.body.appendChild(el);
-    svcModal.root  = el;
-    svcModal.tbody = $("#svc-tbody", el);
-    svcModal.q     = $("#svc-q", el);
-  }
-  function openSvc(iid, name) {
-    ensureSvcModal();
-    svcModal.iid = iid;
-    svcModal.iname = name || "";
-    $("#svc-title").textContent = `Services – ${(name||iid)} (${iid})`;
-    svcModal.tbody.innerHTML = "";
-    $("#svc-note").textContent = "Loading…";
-    svcModal.root.classList.add("show");
-    listServices(); // initial list
-  }
-  function closeSvc() { if (svcModal.root) svcModal.root.classList.remove("show"); }
-
-  function note(msg) { $("#svc-note").textContent = msg || ""; }
-
-  async function listServices() {
-    try {
-      const body = { instanceId: svcModal.iid, op: "list", instanceName: svcModal.iname };
-      const q = (svcModal.q.value || "").trim();
-      if (q) body.query = q;
-      const res = await api("/services", "POST", body);
-      if (!res.ok) { note(res.error || "Error"); return; }
-      const items = res.services || [];
-      if (!items.length) { note("No matching services."); svcModal.tbody.innerHTML=""; return; }
-      note("");
-      svcModal.tbody.innerHTML = items.map(s => {
-        const status = (s.status||"").toLowerCase();
-        const run = status === "running";
-        return `<tr>
-          <td>${s.name||""}</td>
-          <td>${s.displayName||""}</td>
-          <td>${pill(status)}</td>
-          <td>
-            <button class="btn ${run?"btn-stop":"btn-start"}" data-svcs="${run?"stop":"start"}" data-svcname="${s.name||""}">${run?"Stop":"Start"}</button>
-          </td>
-        </tr>`;
-      }).join("");
-    } catch (e) {
-      note(e.message || "Failed");
-    }
-  }
-  async function svcStartStop(op, name) {
-    note("Working…");
-    try {
-      const res = await api("/services", "POST", {
-        instanceId: svcModal.iid, instanceName: svcModal.iname, op, serviceName: name
-      });
-      if (!res.ok) { note(res.error || "Error"); return; }
-      await listServices();
-    } catch (e) {
-      note(e.message || "Failed");
-    }
-  }
-
-  // ---------- event wiring ----------
-  document.addEventListener("click", async (e) => {
-    const b = e.target.closest("button");
-    if (!b) return;
-
-    // env tab
-    if (b.dataset.env) {
-      setActiveEnv(b.dataset.env);
-      return;
-    }
-
-    // Per-instance Start/Stop
-    if (b.dataset.act && b.dataset.id) {
-      try { await doAction(b.dataset.id, b.dataset.act); } catch (_) {}
-      return;
-    }
-
-    // Card Start all / Stop all
-    if (b.dataset.bulk) {
-      const card = b.closest(".card");
-      if (!card) return;
-      const ids = (card.dataset.ids || "").split(",").filter(Boolean);
-      try { await doBulk(ids, b.dataset.bulk); } catch (_) {}
-      return;
-    }
-
-    // Services open
-    if (b.dataset.svcs === "open") {
-      openSvc(b.dataset.id, b.dataset.name || "");
-      return;
-    }
-
-    // Services modal controls
-    if (b.id === "svc-close") { closeSvc(); return; }
-    if (b.id === "svc-list")  { listServices(); return; }
-    if (b.id === "svc-iis")   { try { await api("/services","POST",{instanceId:svcModal.iid,op:"iisreset"}); await listServices(); } catch(_){} return; }
-    if (b.dataset.svcs === "start" && b.dataset.svcname) { await svcStartStop("start", b.dataset.svcname); return; }
-    if (b.dataset.svcs === "stop"  && b.dataset.svcname) { await svcStartStop("stop",  b.dataset.svcname); return; }
-
-    // top refresh
-    if (byText(b, "refresh")) { try { await refreshInstances(); } catch(_){} return; }
+  const hdrs = () => ({
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + token()
   });
 
-  // ---------- init ----------
-  (async function init() {
-    try { await refreshInstances(); } catch (e) { /* stays on Loading… */ }
-  })();
+  // ------------ Helpers ------------
+  const q = (sel, el=document) => el.querySelector(sel);
+  const qq = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+
+  function toast(msg) {
+    console.log(msg);
+    const el = q("#toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 1800);
+  }
+
+  // ------------ Instances ------------
+  let STATE = {
+    envOrder: [],
+    envs: {},       // same shape as API: { ENV: {DM:[], EA:[]} }
+    flat: []        // all instances
+  };
+
+  async function fetchInstances() {
+    const r = await fetch(`${API}/instances`, { method:"GET", headers: hdrs() });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "instances_failed");
+    STATE.envs = j.envs || {};
+    STATE.flat = j.instances || [];
+
+    // Keep tab order using keys; normalize to what API sends (already uppercased)
+    STATE.envOrder = Object.keys(STATE.envs).sort();
+
+    renderTabs();
+    renderEnv(STATE.envOrder[0] || "ALL");
+  }
+
+  // ------------ Render Tabs / Panels ------------
+  function renderTabs() {
+    const tabs = q("#tabs");
+    if (!tabs) return;
+    tabs.innerHTML = "";
+
+    const add = (label) => {
+      const b = document.createElement("button");
+      b.className = "pill";
+      b.textContent = label;
+      b.onclick = () => renderEnv(label);
+      tabs.appendChild(b);
+    };
+
+    if (STATE.envOrder.length === 0) add("Summary");
+    else {
+      add("Summary");
+      STATE.envOrder.forEach(add);
+    }
+  }
+
+  function instancesInEnv(env) {
+    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) {
+      return { DM: [], EA: [] };
+    }
+    return STATE.envs[env];
+  }
+
+  function renderEnv(env) {
+    const header = q("#envHeader");
+    header.textContent = `Env: ${env} • Total: ${STATE.flat.length} • `
+      + `Running: ${STATE.flat.filter(x=>x.state==='running').length} • `
+      + `Stopped: ${STATE.flat.filter(x=>x.state==='stopped').length}`;
+
+    const dm = q("#dmList"); const ea = q("#eaList");
+    dm.innerHTML = ""; ea.innerHTML = "";
+
+    const groups = instancesInEnv(env);
+    [ ["DM", dm], ["EA", ea] ].forEach(([role, mount]) => {
+      (groups[role] || []).forEach(inst => mount.appendChild(instanceRow(inst)));
+    });
+
+    // wire group buttons
+    q("#dm-start-all").onclick = () => startAll(env, "DM");
+    q("#dm-stop-all").onclick  = () => stopAll(env, "DM");
+    q("#ea-start-all").onclick = () => startAll(env, "EA");
+    q("#ea-stop-all").onclick  = () => stopAll(env, "EA");
+  }
+
+  function instanceRow(inst) {
+    const row = document.createElement("div");
+    row.className = "inst-row";
+    row.innerHTML = `
+      <div class="inst-name">${inst.name || inst.id}</div>
+      <span class="badge ${inst.state}">${inst.state}</span>
+      <div class="actions">
+        <button class="btn danger" data-op="stop">Stop</button>
+        <button class="btn ok"     data-op="start">Start</button>
+        <button class="btn warn"   data-svc="1">Services</button>
+      </div>
+    `;
+    const [btnStop, btnStart, btnSvc] = qq("button", row);
+
+    btnStart.onclick = () => doAction(inst.id, "start");
+    btnStop.onclick  = () => doAction(inst.id, "stop");
+    btnSvc.onclick   = () => openServices(inst);
+
+    // disable inconsistent button by state
+    if ((inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
+    if ((inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
+
+    return row;
+  }
+
+  async function doAction(id, op) {
+    const r = await fetch(`${API}/instance-action`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ id, op })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "action_failed"); return; }
+    toast(`${op} requested`);
+    await fetchInstances();   // refresh
+  }
+
+  async function startAll(env, role) {
+    const ids = (instancesInEnv(env)[role] || []).map(x => x.id);
+    if (!ids.length) return;
+    await bulk("start", ids);
+  }
+  async function stopAll(env, role) {
+    const ids = (instancesInEnv(env)[role] || []).map(x => x.id);
+    if (!ids.length) return;
+    await bulk("stop", ids);
+  }
+  async function bulk(op, ids) {
+    const r = await fetch(`${API}/bulk-action`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ op, instanceIds: ids })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "bulk_failed"); return; }
+    toast(`${op} all requested`);
+    await fetchInstances();
+  }
+
+  // ------------ Services Modal ------------
+  function openServices(inst) {
+    const modal = q("#svcModal");
+    modal.dataset.iid = inst.id;
+    modal.dataset.iname = inst.name || "";
+    q("#svcTitle").textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
+    q("#svcRows").innerHTML = "";
+    q("#svcQuery").value = "";       // leave empty to auto-detect mode
+    modal.classList.add("show");
+    listServices();                  // initial list
+  }
+
+  function closeServices() {
+    q("#svcModal").classList.remove("show");
+  }
+
+  async function listServices() {
+    const iid   = q("#svcModal").dataset.iid;
+    const iname = q("#svcModal").dataset.iname;
+    const query = q("#svcQuery").value.trim();
+
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ id: iid, instanceName: iname, op:"list", query })
+    });
+    const j = await r.json();
+
+    const tbody = q("#svcRows");
+    tbody.innerHTML = "";
+
+    if (!j.ok) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+      tbody.appendChild(tr);
+      return;
+    }
+
+    (j.services || []).forEach(svc => {
+      const tr = document.createElement("tr");
+      const status = (svc.status || "Unknown").toLowerCase();
+      tr.innerHTML = `
+        <td>${svc.name || ""}</td>
+        <td>${svc.displayName || ""}</td>
+        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
+        <td>
+          <button class="btn ok"   data-op="start">Start</button>
+          <button class="btn danger" data-op="stop">Stop</button>
+        </td>
+      `;
+      const [btnStart, btnStop] = qq("button", tr);
+      btnStart.onclick = () => changeService(iid, svc.name, "start");
+      btnStop.onclick  = () => changeService(iid, svc.name, "stop");
+      if (status === "running") btnStart.disabled = true;
+      if (status === "stopped") btnStop.disabled = true;
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function changeService(iid, name, op) {
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ id: iid, op, serviceName: name })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "svc_failed"); return; }
+    await listServices();
+  }
+
+  // wire modal buttons
+  document.addEventListener("click", (e) => {
+    if (e.target.id === "svcClose") closeServices();
+    if (e.target.id === "svcList")  listServices();
+    if (e.target.id === "svcIIS")   iisReset();
+  });
+
+  async function iisReset() {
+    const iid = q("#svcModal").dataset.iid;
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ id: iid, op:"iisreset" })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "iis_failed"); return; }
+    toast("IIS restarted");
+    await listServices();
+  }
+
+  // ------------ Init ------------
+  window.DASH = { fetchInstances }; // tiny hook if you need it in console
+
+  // start immediately after login page sets token
+  fetchInstances().catch(err => {
+    console.error(err);
+    toast("Failed to load instances");
+  });
 })();

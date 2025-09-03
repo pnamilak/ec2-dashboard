@@ -1,24 +1,14 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API – OTP, login, instances, actions, services.
-# (No UI changes required)  — 2025-09-02
-# Fixes:
-#  - No EC2 pre-filter by tag:Name (case-insensitive env detection)
-#  - Proper pagination for instances
-#  - Robust SSM scripts & JSON parsing for services (list/start/stop)
+# (No UI changes; fixes env matching, bulk actions, services list.)
 # -----------------------------------------------------------------------------
 
-import os
-import json
-import time
-import hmac
-import base64
-import hashlib
-import random
+import os, json, time, hmac, base64, hashlib, random
 from datetime import datetime, timedelta, timezone
 
 import boto3
-from botocore.exceptions import ClientError, EndpointConnectionError, BotoCoreError
+from botocore.exceptions import ClientError, EndpointConnectionError
 
 # ---------- Environment ----------
 REGION            = os.environ.get("REGION", "us-east-2")
@@ -27,50 +17,33 @@ SES_SENDER        = os.environ.get("SES_SENDER", "")
 ALLOWED_DOMAIN    = os.environ.get("ALLOWED_DOMAIN", "gmail.com")
 PARAM_USER_PREFIX = os.environ.get("PARAM_USER_PREFIX", "/ec2-dashboard/users")
 JWT_PARAM         = os.environ.get("JWT_PARAM", "/ec2-dashboard/jwt-secret")
-ENV_NAMES_STR     = os.environ.get("ENV_NAMES", "")  # e.g. "naqa1,naqa6,dm-dev"
+ENV_NAMES_STR     = os.environ.get("ENV_NAMES", "")  # comma separated
+
+# normalize ENV tokens once, but keep originals for display
 ENV_TOKENS        = [e.strip() for e in (ENV_NAMES_STR or "").split(",") if e.strip()]
+ENV_TOKENS_LOWER  = [e.lower() for e in ENV_TOKENS]
 
 # ---------- Clients ----------
-ec2 = boto3.client("ec2", region_name=REGION)
-ssm = boto3.client("ssm", region_name=REGION)
-ses = boto3.client("ses", region_name=REGION)
-dynamodb = boto3.resource("dynamodb", region_name=REGION)
+ec2       = boto3.client("ec2", region_name=REGION)
+ssm       = boto3.client("ssm", region_name=REGION)
+ses       = boto3.client("ses", region_name=REGION)
+ddb       = boto3.resource("dynamodb", region_name=REGION)
 ssm_param = boto3.client("ssm", region_name=REGION)
 
 # ---------- Globals ----------
 JWT_SECRET_CACHE = None
-USERS_CACHE = {}  # cache SSM user records for the runtime
+USERS_CACHE = {}
 
 # ---------- Utils ----------
-def _now():
-    return datetime.now(timezone.utc)
+def _now():           return datetime.now(timezone.utc)
+def _b64url(b):       return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+def _ok(ok=True, **k):  return {"ok": ok, **k}
+def _err(code, **k):    return {"ok": False, "error": code, **k}
 
 def _json(status, body, headers=None):
-    h = {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
-    if headers:
-        h.update(headers)
-    return {"statusCode": status, "headers": h, "body": json.dumps(body, default=str)}
-
-def _b64url(data_bytes):
-    return base64.urlsafe_b64encode(data_bytes).rstrip(b"=").decode()
-
-def _jwt_secret():
-    global JWT_SECRET_CACHE
-    if JWT_SECRET_CACHE:
-        return JWT_SECRET_CACHE
-    p = ssm_param.get_parameter(Name=JWT_PARAM, WithDecryption=True)
-    JWT_SECRET_CACHE = p["Parameter"]["Value"].encode()
-    return JWT_SECRET_CACHE
-
-def _sign_jwt(claims, ttl_minutes=60):
-    header = {"alg": "HS256", "typ": "JWT"}
-    now = int(time.time())
-    claims = {**claims, "iat": now, "exp": now + ttl_minutes * 60}
-    h64 = _b64url(json.dumps(header, separators=(",", ":"), sort_keys=True).encode())
-    p64 = _b64url(json.dumps(claims, separators=(",", ":"), sort_keys=True).encode())
-    msg = f"{h64}.{p64}".encode()
-    sig = hmac.new(_jwt_secret(), msg, hashlib.sha256).digest()
-    return f"{h64}.{p64}.{_b64url(sig)}"
+    h = {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}
+    if headers: h.update(headers)
+    return {"statusCode":status,"headers":h,"body":json.dumps(body, default=str)}
 
 def _read_body(event):
     body = event.get("body")
@@ -81,49 +54,56 @@ def _read_body(event):
     except Exception:
         return {}
 
-def _ok(ok=True, **extra):
-    return {"ok": ok, **extra}
+def _jwt_secret():
+    global JWT_SECRET_CACHE
+    if JWT_SECRET_CACHE: return JWT_SECRET_CACHE
+    p = ssm_param.get_parameter(Name=JWT_PARAM, WithDecryption=True)
+    JWT_SECRET_CACHE = p["Parameter"]["Value"].encode()
+    return JWT_SECRET_CACHE
 
-def _err(code, **extra):
-    return {"ok": False, "error": code, **extra}
+def _sign_jwt(claims, ttl_minutes=60):
+    header = {"alg":"HS256","typ":"JWT"}
+    now = int(time.time())
+    claims = {**claims, "iat": now, "exp": now + ttl_minutes*60}
+    h64 = _b64url(json.dumps(header, separators=(",",":"), sort_keys=True).encode())
+    p64 = _b64url(json.dumps(claims, separators=(",",":"), sort_keys=True).encode())
+    msg = f"{h64}.{p64}".encode()
+    sig = hmac.new(_jwt_secret(), msg, hashlib.sha256).digest()
+    return f"{h64}.{p64}.{_b64url(sig)}"
 
-# ---------- SSM users ----------
+# ---------- Users from SSM ----------
 def _ssm_get(name, decrypt=True):
     return ssm_param.get_parameter(Name=name, WithDecryption=decrypt)["Parameter"]["Value"]
 
 def _get_user_record(username):
-    if not username:
-        return None
-    if username in USERS_CACHE:
-        return USERS_CACHE[username]
+    if not username: return None
+    if username in USERS_CACHE: return USERS_CACHE[username]
 
     base = f"{PARAM_USER_PREFIX}/{username}"
     rec = None
 
     try:
-        raw = _ssm_get(base, decrypt=True)
+        raw = _ssm_get(base, True)
         try:
             obj = json.loads(raw)
             if isinstance(obj, dict) and ("password" in obj or "hash" in obj):
-                pwd   = obj.get("password") or obj.get("hash")
-                role  = (obj.get("role") or "user").strip() or "user"
-                email = (obj.get("email") or "").strip().lower() or None
-                rec = {"username": username, "password": pwd, "role": role, "email": email}
+                rec = {
+                    "username": username,
+                    "password": obj.get("password") or obj.get("hash"),
+                    "role": (obj.get("role") or "user").strip() or "user",
+                    "email": (obj.get("email") or "").strip().lower() or None,
+                }
             else:
                 rec = {"username": username, "password": raw, "role": "user", "email": None}
         except Exception:
             rec = {"username": username, "password": raw, "role": "user", "email": None}
     except ClientError:
         try:
-            pwd = _ssm_get(f"{base}/password", decrypt=True)
-            try:
-                role = _ssm_get(f"{base}/role", decrypt=False) or "user"
-            except ClientError:
-                role = "user"
-            try:
-                email = (_ssm_get(f"{base}/email", decrypt=False) or "").strip().lower() or None
-            except ClientError:
-                email = None
+            pwd = _ssm_get(f"{base}/password", True)
+            try: role = _ssm_get(f"{base}/role", False) or "user"
+            except ClientError: role = "user"
+            try: email = (_ssm_get(f"{base}/email", False) or "").strip().lower() or None
+            except ClientError: email = None
             rec = {"username": username, "password": pwd, "role": role, "email": email}
         except ClientError:
             rec = None
@@ -134,24 +114,22 @@ def _get_user_record(username):
     return rec
 
 def _verify_password(stored, provided):
-    if not isinstance(stored, str):
-        return False
+    if not isinstance(stored, str): return False
     s = stored.strip()
     if s.lower().startswith("sha256:"):
-        want = s.split(":", 1)[1].strip().lower()
-        got = hashlib.sha256(provided.encode()).hexdigest()
+        want = s.split(":",1)[1].strip().lower()
+        got  = hashlib.sha256(provided.encode()).hexdigest()
         return got == want
     if s.lower().startswith("plain:"):
-        return provided == s.split(":", 1)[1]
-    return provided == s  # back-compat literal
+        return provided == s.split(":",1)[1]
+    return provided == s
 
-# ---------- OTP (unchanged except more robust error bubbles) ----------
+# ---------- OTP ----------
 def _issue_ovt_for_email(email):
-    if not OTP_TABLE_NAME:
-        return None, None
+    if not OTP_TABLE_NAME: return None, None
     ovt = base64.urlsafe_b64encode(os.urandom(24)).rstrip(b"=").decode()
-    exp_ms = int(time.time() * 1000) + 10 * 60 * 1000
-    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    exp_ms = int(time.time()*1000) + 10*60*1000
+    tbl = ddb.Table(OTP_TABLE_NAME)
     tbl.update_item(
         Key={"email": email},
         UpdateExpression="SET ovt=:o, ovt_exp_ms=:e",
@@ -160,12 +138,11 @@ def _issue_ovt_for_email(email):
     return ovt, exp_ms
 
 def _ovt_record(ovt):
-    if not (OTP_TABLE_NAME and ovt):
-        return None
-    tbl = dynamodb.Table(OTP_TABLE_NAME)
+    if not (OTP_TABLE_NAME and ovt): return None
+    tbl = ddb.Table(OTP_TABLE_NAME)
     scan = tbl.scan(ProjectionExpression="email, code, expires, ovt, ovt_exp_ms")
     items = scan.get("Items", []) or []
-    now_ms = int(time.time() * 1000)
+    now_ms = int(time.time()*1000)
     for it in items:
         if (it.get("ovt") == ovt) and int(it.get("ovt_exp_ms", 0)) > now_ms:
             return it
@@ -173,16 +150,14 @@ def _ovt_record(ovt):
 
 def _ovt_get_email(ovt):
     rec = _ovt_record(ovt)
-    if not rec:
-        return None
-    return (rec.get("email") or "").strip().lower() or None
+    return (rec.get("email") or "").strip().lower() if rec else None
 
 def handle_request_otp(body):
     try:
         email = (body.get("email") or "").strip().lower()
         if not email or "@" not in email:
             return _json(200, _err("invalid_email"))
-        if ALLOWED_DOMAIN and not email.endswith("@" + ALLOWED_DOMAIN):
+        if ALLOWED_DOMAIN and not email.endswith("@"+ALLOWED_DOMAIN):
             return _json(200, _err("domain_not_allowed"))
 
         code = f"{random.randint(0, 999999):06d}"
@@ -191,8 +166,7 @@ def handle_request_otp(body):
         if not OTP_TABLE_NAME:
             return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
 
-        tbl = dynamodb.Table(OTP_TABLE_NAME)
-        tbl.put_item(Item={"email": email, "code": code, "expires": expires_at})
+        ddb.Table(OTP_TABLE_NAME).put_item(Item={"email": email, "code": code, "expires": expires_at})
 
         if SES_SENDER:
             try:
@@ -205,6 +179,7 @@ def handle_request_otp(body):
                     },
                 )
             except ClientError as e:
+                # still reveal the code for dev
                 return _json(200, _ok(dev=True, code=code, ses_error=str(e)))
 
         return _json(200, _ok(dev=True, code=code))
@@ -223,8 +198,7 @@ def handle_verify_otp(body):
         if not OTP_TABLE_NAME:
             return _json(200, _err("server_not_configured", hint="OTP_TABLE env var is empty"))
 
-        tbl = dynamodb.Table(OTP_TABLE_NAME)
-        res = tbl.get_item(Key={"email": email}).get("Item")
+        res = ddb.Table(OTP_TABLE_NAME).get_item(Key={"email": email}).get("Item")
         if not res:
             return _json(200, _err("not_found"))
         if int(res.get("expires", 0)) < int(time.time()):
@@ -241,39 +215,70 @@ def handle_verify_otp(body):
     except Exception as e:
         return _json(200, _err("unexpected", message=str(e)))
 
-# ---------- EC2 (no pre-filter by tag:Name; case-insensitive env detection) ----------
+def handle_login(body):
+    try:
+        # Mode A: OTP
+        email = (body.get("email") or "").strip().lower()
+        code  = (body.get("code") or "").strip()
+        if email and code:
+            res = ddb.Table(OTP_TABLE_NAME).get_item(Key={"email": email}).get("Item")
+            if not res or res.get("code") != code or int(res.get("expires",0)) < int(time.time()):
+                return _json(200, _err("invalid_login"))
+            token = _sign_jwt({"sub": email, "role":"user"})
+            return _json(200, _ok(token=token, role="user", user={"username": email}))
+
+        # Mode B: user/pass (+ optional OVT)
+        username = (body.get("username") or "").strip()
+        password = (body.get("password") or "")
+        ovt      = (body.get("ovt") or "").strip()
+        if not (username and password):
+            return _json(200, _err("invalid_login"))
+
+        if ovt and not _ovt_get_email(ovt):
+            return _json(200, _err("ovt_invalid"))
+
+        rec = _get_user_record(username)
+        if not rec or not _verify_password(rec.get("password",""), password):
+            return _json(200, _err("invalid_login"))
+
+        token = _sign_jwt({"sub": username, "role": rec.get("role","user")})
+        return _json(200, _ok(token=token, role=rec.get("role","user"), user={"username": username}))
+    except Exception as e:
+        return _json(200, _err("unexpected", message=str(e)))
+
+# ---------- EC2 ----------
 def _name_tag(tags):
     for t in tags or []:
         if t.get("Key") == "Name":
-            return t.get("Value")
+            return t.get("Value") or ""
     return ""
 
 def _detect_env(name: str) -> str:
+    """
+    Case-insensitive: find first ENV_TOKENS_LOWER that is a substring of the name.
+    If not found, bucket as 'MISC' (or 'ALL' if no tokens configured).
+    """
+    if not ENV_TOKENS:
+        return "ALL"
     n = (name or "").lower()
-    if not n:
-        return "MISC" if ENV_TOKENS else "ALL"
-    # tokens provided in ENV_NAMES; treat case-insensitively
-    for tok in ENV_TOKENS or []:
-        if tok.lower() in n:
+    for tok in ENV_TOKENS_LOWER:
+        if tok in n:
+            # display as upper for tabs, keep hyphens (e.g., dm-dev)
             return tok.upper()
-    # common extras requested
-    if "dm-dev" in n:
-        return "DM-DEV"
-    if "dm-qa" in n:
-        return "DM-QA"
-    # keep misc grouping if explicit tokens exist
-    return "ALL" if not ENV_TOKENS else "MISC"
+    return "MISC"
 
 def _detect_role(name: str) -> str:
-    # Your two columns/cards
-    return "DM" if "dm" in (name or "").lower() else "EA"
+    n = (name or "").lower()
+    return "DM" if "dm" in n else "EA"
 
 def handle_instances():
-    # Only filter by state; gather all then group in Python
-    filters = [{"Name": "instance-state-name", "Values": ["running","stopped","pending","stopping"]}]
+    # DO NOT pre-filter by tag:Name (case-sensitive) – fetch by state only, paginate
     paginator = ec2.get_paginator("describe_instances")
+    filters = [{"Name":"instance-state-name","Values":["running","stopped","pending","stopping"]}]
+    pages = paginator.paginate(Filters=filters)
+
     items = []
-    for page in paginator.paginate(Filters=filters):
+    for page in pages:
         for r in page.get("Reservations", []):
             for i in r.get("Instances", []):
                 items.append({
@@ -286,7 +291,8 @@ def handle_instances():
                     "platform": "windows" if (i.get("Platform") == "windows" or i.get("PlatformDetails","").lower().startswith("windows")) else "linux",
                 })
 
-    items.sort(key=lambda x: ((x["name"] or "").lower(), x["id"]))
+    items.sort(key=lambda x: (x["name"] or "", x["id"]))
+
     summary = {
         "total":   len(items),
         "running": sum(1 for x in items if (x.get("state") or "").lower() == "running"),
@@ -296,7 +302,7 @@ def handle_instances():
     envs = {}
     for it in items:
         env  = _detect_env(it["name"])
-        role = _detect_role(it["name"])  # DM / EA
+        role = _detect_role(it["name"])           # DM / EA buckets for your two columns
         envs.setdefault(env, {"DM": [], "EA": []})
         envs[env][role].append(it)
 
@@ -324,8 +330,8 @@ def handle_instance_action(body):
         return _json(200, _err("aws_error", message=str(e)))
 
 def handle_bulk(body):
-    ids = body.get("instanceIds") or body.get("ids") or []
-    op  = (body.get("op") or "").lower()
+    ids = (body.get("instanceIds") or body.get("ids") or []) or []
+    op  = (body.get("op") or body.get("action") or "").strip().lower()
     if not ids or not op:
         return _json(200, _err("missing_params"))
     try:
@@ -342,37 +348,40 @@ def handle_bulk(body):
         return _json(200, _err("aws_error", message=str(e)))
 
 # ---------- Services via SSM ----------
-# PowerShell snippets (explicit ConvertTo-Json -Compress for predictable parsing)
 PS_LIST_SQL = r"""
 $svcs = Get-Service | Where-Object {
-  $_.Name -like 'MSSQL*' -or $_.Name -like 'SQLSERVERAGENT*' -or $_.DisplayName -match 'SQL Server'
+    $_.Name -like 'MSSQL*' -or
+    $_.Name -like 'SQLSERVERAGENT*' -or
+    $_.DisplayName -match 'SQL Server'
 }
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
+
 PS_LIST_REDIS = r"""
 $svcs = Get-Service | Where-Object { $_.Name -like 'Redis*' -or $_.DisplayName -like 'Redis*' }
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
+
 PS_LIST_FILTER = r"""
 $svcs = Get-Service | Where-Object { $_.Name -match $Pattern -or $_.DisplayName -match $Pattern }
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress
+$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
+
 PS_START = r"""
 param([string]$Name)
 Start-Service -Name $Name -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress
+Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
+
 PS_STOP = r"""
 param([string]$Name)
 Stop-Service -Name $Name -Force -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress
-"""
-PS_IISRESET = r"""
-iisreset /restart | Out-Null
-'{"result":"OK"}'
+Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
 """
 
-def _send_ps(instance_id, script, timeout=90):
+PS_IISRESET = r"""iisreset /restart | Out-Null ; "OK" """
+
+def _send_ps(instance_id, script, timeout=60):
     try:
         resp = ssm.send_command(
             InstanceIds=[instance_id],
@@ -384,51 +393,34 @@ def _send_ps(instance_id, script, timeout=90):
         if "InvalidInstanceId" in str(e) or "TargetNotConnected" in str(e):
             raise RuntimeError("ssm_not_connected")
         raise
-    cid = resp["Command"]["CommandId"]
 
-    # poll
-    time.sleep(1.0)
-    for _ in range(60):
+    cid = resp["Command"]["CommandId"]
+    time.sleep(1.2)
+    for _ in range(40):
         inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
-        status = inv.get("Status")
-        if status in ("Success", "Cancelled", "TimedOut", "Failed"):
-            stdout = inv.get("StandardOutputContent", "").strip()
-            stderr = inv.get("StandardErrorContent", "").strip()
-            return status, stdout, stderr
+        st  = inv.get("Status")
+        if st in ("Success","Cancelled","TimedOut","Failed"):
+            return st, (inv.get("StandardOutputContent","") or "").strip(), (inv.get("StandardErrorContent","") or "").strip()
         time.sleep(1.0)
     return "TimedOut", "", ""
 
-def _parse_json_array(s):
-    try:
-        if not s:
-            return []
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return [obj]
-        if isinstance(obj, list):
-            return obj
-        return []
-    except Exception:
-        return []
-
 def _normalize_services_payload(body):
-    iid = (body.get("instanceId") or body.get("id") or "").strip()
-    raw_op = (body.get("op") or "").lower().strip()
-    raw_mode = (body.get("mode") or body.get("kind") or "").lower().strip()
-    op = raw_op if raw_op in ("list", "start", "stop", "iisreset") else "list"
-    instance_name = (body.get("instanceName") or "").lower()
-    query = (body.get("query") or body.get("pattern") or "").strip()
+    iid     = (body.get("instanceId") or body.get("id") or "").strip()
+    raw_op  = (body.get("op") or "").lower().strip()
+    raw_md  = (body.get("mode") or body.get("kind") or "").lower().strip()
+    query   = (body.get("query") or body.get("pattern") or "").strip()
     service = (body.get("serviceName") or body.get("service") or "").strip()
-    mode = raw_mode
-    if mode in ("", "list", "services", "service", "generic"):
+
+    op  = raw_op if raw_op in ("list","start","stop","iisreset") else "list"
+    mode = raw_md
+    if mode in ("", "list", "services", "generic"):
+        inst_name = (body.get("instanceName") or "").lower()
         if query:
             mode = "filter"
-        elif "sql" in instance_name:
+        elif "sql" in inst_name:
             mode = "sql"
-        elif "redis" in instance_name:
+        elif "redis" in inst_name:
             mode = "redis"
-        elif ("svc" in instance_name) or ("web" in instance_name):
-            mode = "filter"
         else:
             mode = "filter"
     return iid, op, mode, query, service
@@ -440,61 +432,61 @@ def handle_services(body):
             return _json(200, _err("missing_instance_id"))
 
         if op == "iisreset":
-            status, out, err = _send_ps(iid, PS_IISRESET)
-            if status != "Success":
-                return _json(200, _err("ssm_error", status=status, stderr=err))
+            st, out, err = _send_ps(iid, PS_IISRESET)
+            if st != "Success":
+                return _json(200, _err("ssm_error", status=st, stderr=err))
             return _json(200, _ok(result="OK"))
 
         if op == "list":
             if mode == "sql":
-                status, out, err = _send_ps(iid, PS_LIST_SQL)
+                st, out, err = _send_ps(iid, PS_LIST_SQL)
             elif mode == "redis":
-                status, out, err = _send_ps(iid, PS_LIST_REDIS)
-            elif mode == "filter":
-                if not query:
-                    # to keep payload small, still allow a generic "first N"
-                    script = r"""Get-Service | Select-Object -First 100 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json -Compress"""
-                    status, out, err = _send_ps(iid, script)
-                else:
-                    pat = (query or "").replace('"', '`"')
-                    script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
-                    status, out, err = _send_ps(iid, script)
+                st, out, err = _send_ps(iid, PS_LIST_REDIS)
             else:
-                return _json(200, _err("unsupported", details={"mode": mode}))
+                if not query:
+                    script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json"""
+                    st, out, err = _send_ps(iid, script)
+                else:
+                    pat = (query or "").replace('"','`"')
+                    script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
+                    st, out, err = _send_ps(iid, script)
 
-            if status != "Success":
-                if "TargetNotConnected" in (err or ""):
-                    return _json(200, _err("ssm_not_connected"))
-                return _json(200, _err("ssm_error", status=status, stderr=err))
+            if st != "Success":
+                return _json(200, _err("ssm_error", status=st, stderr=err))
 
-            arr = _parse_json_array(out)
+            try:
+                arr = json.loads(out) if out else []
+            except Exception:
+                arr = []
+            if isinstance(arr, dict):
+                arr = [arr]
+
             result = []
-            for s in arr:
-                if not isinstance(s, dict):
-                    continue
+            for s in arr or []:
                 result.append({
-                    "name": s.get("Name") or s.get("name") or "",
+                    "name":        s.get("Name") or s.get("name") or "",
                     "displayName": s.get("DisplayName") or s.get("displayName") or "",
-                    "status": (s.get("Status") or s.get("status") or "Unknown"),
+                    "status":      s.get("Status") or s.get("status") or "Unknown",
                 })
             return _json(200, _ok(services=result, mode=mode))
 
-        if op in ("start", "stop"):
+        if op in ("start","stop"):
             if not service:
                 return _json(200, _err("missing_service_name"))
             ps = PS_START if op == "start" else PS_STOP
-            name_esc = service.replace('"', '`"')
+            name_esc = service.replace('"','`"')
             script = f'$Name = "{name_esc}";\n{ps}'
-            status, out, err = _send_ps(iid, script)
-            if status != "Success":
-                if "TargetNotConnected" in (err or ""):
-                    return _json(200, _err("ssm_not_connected"))
-                return _json(200, _err("ssm_error", status=status, stderr=err))
-            obj = (_parse_json_array(out) or [{}])[0]
+            st, out, err = _send_ps(iid, script)
+            if st != "Success":
+                return _json(200, _err("ssm_error", status=st, stderr=err))
+            try:
+                obj = json.loads(out) if out else {}
+            except Exception:
+                obj = {}
             return _json(200, _ok(service={
-                "name": obj.get("Name") or service,
+                "name":        obj.get("Name") or service,
                 "displayName": obj.get("DisplayName") or service,
-                "status": obj.get("Status") or "Unknown",
+                "status":      obj.get("Status") or "Unknown",
             }))
 
         return _json(200, _err("unsupported", details={"op": op}))
@@ -502,7 +494,7 @@ def handle_services(body):
         if str(e) == "ssm_not_connected":
             return _json(200, _err("ssm_not_connected"))
         return _json(200, _err("runtime_error", message=str(e)))
-    except (ClientError, EndpointConnectionError, BotoCoreError) as e:
+    except (ClientError, EndpointConnectionError) as e:
         msg = str(e)
         if "TargetNotConnected" in msg:
             return _json(200, _err("ssm_not_connected"))
@@ -511,32 +503,21 @@ def handle_services(body):
 # ---------- Router ----------
 def lambda_handler(event, context):
     try:
-        path = (event.get("rawPath") or event.get("path") or "").strip()
+        path   = (event.get("rawPath") or event.get("path") or "").strip()
         method = (event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod") or "GET").upper()
-        body = _read_body(event)
+        body   = _read_body(event)
 
         # Public
-        if path == "/request-otp" and method == "POST":
-            return handle_request_otp(body)
-        if path == "/verify-otp" and method == "POST":
-            return handle_verify_otp(body)
-        if path == "/login" and method == "POST":
-            # dual-mode login is in original code (omitted here for brevity)
-            # reuse the previous implementation:
-            #   - email+code
-            #   - username+password (+ optional OVT)
-            return handle_login(body)
+        if path == "/request-otp"   and method == "POST": return handle_request_otp(body)
+        if path == "/verify-otp"    and method == "POST": return handle_verify_otp(body)
+        if path == "/login"         and method == "POST": return handle_login(body)
 
         # Protected
-        if path == "/instances" and method == "GET":
-            return handle_instances()
-        if path == "/instance-action" and method == "POST":
-            return handle_instance_action(body)
-        if path == "/bulk-action" and method == "POST":
-            return handle_bulk(body)
-        if path == "/services" and method == "POST":
-            return handle_services(body)
+        if path == "/instances"         and method == "GET":  return handle_instances()
+        if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
+        if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
+        if path == "/services"          and method == "POST": return handle_services(body)
 
-        return _json(404, {"error": "not_found", "path": path, "method": method})
+        return _json(404, {"error":"not_found","path":path,"method":method})
     except Exception as e:
         return _json(200, _err("unexpected_top", message=str(e)))
