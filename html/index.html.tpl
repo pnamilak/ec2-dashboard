@@ -277,16 +277,27 @@ function openServices(it){
   $("svcMsg").textContent = '';
 
   async function list(){
-    let payload = { id: it.id, mode:'list', instanceName: it.name, kind:type };
-    if (type === 'svcweb') {
+// Map whatever we used to pass (e.g. "sql", "svcsql", "redis", "svcredis", "svcweb") to API "mode"
+    const toMode = t => {
+      t = (t || "").toLowerCase();
+      if (t.includes("sql"))   return "sql";
+      if (t.includes("redis")) return "redis";
+      return "filter"; // web/filter case
+    };
+
+    const mode = toMode(type);
+    let payload = { instanceId: it.id, op: "list", mode };
+
+    if (mode === "filter") {
       const pat = $("svcFilter").value.trim();
       if (pat.length < 2) {
         $("svcBody").innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.pattern = pat;
+      payload.query = pat; // new field name ("pattern" -> "query")
     }
+
     try{
       const r = await http('/services','POST', payload);
       const items = r.services || [];

@@ -196,50 +196,63 @@
     const mode  = decideMode(iname);
 
     const r = await fetch(`${API}/services`, {
-      method:"POST", headers: hdrs(),
-      body: JSON.stringify({ instanceId: iid, op:"list", mode, query })
+      method: "POST",
+      headers: hdrs(),
+      body: JSON.stringify({ instanceId: iid, op: "list", mode, query })
     });
     const j = await r.json();
 
     const tbody = q("#svcRows");
     if (tbody) tbody.innerHTML = "";
 
-    if (j && j.note === "not_connected") {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4">No services (SSM not connected)</td>`;
-      if (tbody) tbody.appendChild(tr);
-      return;
-    }
-
     if (!j.ok) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
-      if (tbody) tbody.appendChild(tr);
+      if (tbody) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+        tbody.appendChild(tr);
+      }
       return;
     }
 
-    (j.services || []).forEach(svc => {
-      const name   = svc.name || svc.Name || "";
-      const disp   = svc.display || svc.displayName || svc.DisplayName || "";
-      const status = (svc.status || svc.Status || "unknown").toLowerCase();
+    // --- NEW: normalize each row from any server shape into {name, display, status} ---
+    const rows = (j.services || []).map(raw => {
+      // string like "Name|Display|Status"
+      if (typeof raw === "string") {
+        const [n = "", d = "", s = ""] = raw.split("|");
+        return { name: n, display: d, status: (s || "unknown").toLowerCase() };
+      }
+      // object shapes
+      const name =
+        raw.name ?? raw.Name ?? raw.service ?? raw.Service ?? raw.ServiceName ?? "";
+      const display =
+        raw.display ?? raw.displayName ?? raw.Display ?? raw.DisplayName ?? name;
+      const status =
+        (raw.status ?? raw.Status ?? raw.state ?? raw.State ?? "unknown").toLowerCase();
+      return { name, display, status };
+    });
+
+    // --- render ---
+    rows.forEach(svc => {
       const tr = document.createElement("tr");
+      const status = (svc.status || "unknown").toLowerCase();
       tr.innerHTML = `
-        <td>${name}</td>
-        <td>${disp}</td>
-        <td><span class="badge ${status}">${status}</span></td>
+        <td>${svc.name || ""}</td>
+        <td>${svc.display || ""}</td>
+        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
         <td>
-          <button class="btn ok"     data-op="start" type="button">Start</button>
-          <button class="btn danger" data-op="stop"  type="button">Stop</button>
+          <button class="btn ok"     data-op="start">Start</button>
+          <button class="btn danger" data-op="stop">Stop</button>
         </td>
       `;
       const [btnStart, btnStop] = qq("button", tr);
-      if (btnStart) btnStart.onclick = () => changeService(iid, name, "start");
-      if (btnStop)  btnStop.onclick  = () => changeService(iid, name, "stop");
+      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
+      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
       if (btnStart && status === "running") btnStart.disabled = true;
       if (btnStop  && status === "stopped") btnStop.disabled = true;
-      if (tbody) tbody.appendChild(tr);
+      tbody && tbody.appendChild(tr);
     });
   }
+
 
   async function changeService(iid, name, op) {
     if (!name) { toast("service name missing"); return; }
