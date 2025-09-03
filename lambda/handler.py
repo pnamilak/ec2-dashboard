@@ -10,6 +10,9 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
 
+# === NEW: extra stdlib for robust stdout parsing ===
+import io, csv, re
+
 # ---------- Environment ----------
 REGION            = os.environ.get("REGION", "us-east-2")
 OTP_TABLE_NAME    = os.environ.get("OTP_TABLE", "")
@@ -404,6 +407,74 @@ def _send_ps(instance_id, script, timeout=60):
         time.sleep(1.0)
     return "TimedOut", "", ""
 
+# ---- NEW: Fallback parsers + normalizer for services stdout ----
+def _normalized_status(raw):
+    s = (str(raw or "")).strip().lower()
+    if s in ("running","started","startpending"): return "running"
+    if s in ("stopped","stoppped","stoppending"): return "stopped"
+    return s or "unknown"
+
+def _normalize_service_row(r: dict):
+    name = r.get("name") or r.get("Name") or r.get("service") or r.get("ServiceName") or r.get("Service") or ""
+    disp = r.get("display_name") or r.get("DisplayName") or r.get("displayName") or name
+    st   = r.get("status") or r.get("Status") or r.get("state") or r.get("State") or "unknown"
+    status = _normalized_status(st)
+    return {
+        "name": name,
+        "display_name": disp or name,
+        "status": status,
+        "canStart": status != "running",
+        "canStop":  status == "running",
+    }
+
+def _parse_json_services(text):
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict): return [obj]
+        if isinstance(obj, list): return obj
+    except Exception:
+        pass
+    return []
+
+def _parse_csv_services(text):
+    try:
+        f = io.StringIO(text)
+        rdr = csv.DictReader(f)
+        rows = [{(k or "").strip(): (v or "").strip() for k, v in row.items()} for row in rdr]
+        return rows or []
+    except Exception:
+        return []
+
+def _parse_keyvals_services(text):
+    blocks = re.split(r"\r?\n\s*\r?\n", (text or "").strip())
+    out = []
+    for b in blocks:
+        row = {}
+        for ln in b.splitlines():
+            m = re.match(r"^\s*([A-Za-z][\w ]+)\s*[:=]\s*(.+?)\s*$", ln)
+            if m: row[m.group(1).strip()] = m.group(2).strip()
+        if row: out.append(row)
+    return out
+
+def _parse_table_services(text):
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    if len(lines) < 2: return []
+    hdr = lines[0]
+    if not (("Status" in hdr) and ("Name" in hdr) and ("DisplayName" in hdr)): return []
+    out = []
+    for ln in lines[1:]:
+        parts = re.split(r"\s{2,}", ln.strip())
+        if len(parts) >= 3:
+            status, name, display = parts[0], parts[1], "  ".join(parts[2:])
+            out.append({"Status": status, "Name": name, "DisplayName": display})
+    return out
+
+def _parse_services_stdout(text):
+    for fn in (_parse_json_services, _parse_csv_services, _parse_keyvals_services, _parse_table_services):
+        rows = fn(text)
+        if rows: return rows
+    return []
+
 def _normalize_services_payload(body):
     iid     = (body.get("instanceId") or body.get("id") or "").strip()
     raw_op  = (body.get("op") or "").lower().strip()
@@ -454,21 +525,10 @@ def handle_services(body):
             if st != "Success":
                 return _json(200, _err("ssm_error", status=st, stderr=err))
 
-            try:
-                arr = json.loads(out) if out else []
-            except Exception:
-                arr = []
-            if isinstance(arr, dict):
-                arr = [arr]
-
-            result = []
-            for s in arr or []:
-                result.append({
-                    "name":        s.get("Name") or s.get("name") or "",
-                    "displayName": s.get("DisplayName") or s.get("displayName") or "",
-                    "status":      s.get("Status") or s.get("status") or "Unknown",
-                })
-            return _json(200, _ok(services=result, mode=mode))
+            # Robust parsing + normalization
+            rows_raw = _parse_services_stdout(out or "")
+            rows_norm = [_normalize_service_row(r) for r in rows_raw]
+            return _json(200, _ok(services=rows_norm, mode=mode))
 
         if op in ("start","stop"):
             if not service:
@@ -483,11 +543,8 @@ def handle_services(body):
                 obj = json.loads(out) if out else {}
             except Exception:
                 obj = {}
-            return _json(200, _ok(service={
-                "name":        obj.get("Name") or service,
-                "displayName": obj.get("DisplayName") or service,
-                "status":      obj.get("Status") or "Unknown",
-            }))
+            row = _normalize_service_row(obj or {"name": service, "Status": obj.get("Status")})
+            return _json(200, _ok(service=row))
 
         return _json(200, _err("unsupported", details={"op": op}))
     except RuntimeError as e:
@@ -517,6 +574,10 @@ def lambda_handler(event, context):
         if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
         if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
         if path == "/services"          and method == "POST": return handle_services(body)
+        # NEW: allow GET /services?instanceId=... (safe addition; UI can keep POST)
+        if path == "/services"          and method == "GET":
+            iid = (event.get("queryStringParameters") or {}).get("instanceId")
+            return handle_services({"instanceId": iid, "op": "list"})
 
         return _json(404, {"error":"not_found","path":path,"method":method})
     except Exception as e:
