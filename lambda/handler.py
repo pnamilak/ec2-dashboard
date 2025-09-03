@@ -528,6 +528,54 @@ def list_services(instance_id: str, mode: str, query: str | None = None):
 
     return {"ok": True, "services": services}
 
+def diag_services(instance_id: str, mode: str, query: str | None = None):
+    # Build the same PS as list_services (pipe-delimited)
+    if mode == "sql":
+        ps = [
+            '$sv = Get-Service | Where-Object { '
+            '$_.Name -like "MSSQL*" -or $_.Name -like "SQLSERVERAGENT*" -or '
+            '$_.Name -eq "SQLBrowser" -or $_.Name -eq "SQLWriter" -or '
+            '$_.DisplayName -match "SQL Server" }'
+        ]
+    elif mode == "redis":
+        ps = [ '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }' ]
+    else:
+        q = (query or "").replace("'", "''")
+        ps = [
+            f"$q = '{q}'",
+            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }'
+        ]
+
+    ps += [
+        '$sv | ForEach-Object {',
+        '  $n = $_.Name',
+        '  $d = $_.DisplayName',
+        '  $s = $_.Status.ToString().ToLower()',
+        '  Write-Output ("{0}|{1}|{2}" -f $n,$d,$s)',
+        '}'
+    ]
+
+    ok, stdout, stderr = _run_powershell(instance_id, ps)
+
+    # Parse the same pipe-delimited shape our list_services now expects
+    services = []
+    for ln in (stdout or "").splitlines():
+        if "|" not in ln: 
+            continue
+        parts = ln.split("|", 2)
+        if len(parts) != 3:
+            continue
+        name, display, status = [p.strip() for p in parts]
+        services.append({"name": name, "display": display or name, "status": (status or "").lower()})
+
+    # Return raw and parsed so we can see exactly what's happening
+    return {
+        "ok": ok,
+        "stdout": (stdout or "")[:4000],
+        "stderr": (stderr or "")[:4000],
+        "parsed_head": services[:5],
+        "count": len(services)
+    }
 
 
 def control_service(instance_id: str, service_name: str, op: str):
@@ -617,6 +665,11 @@ def lambda_handler(event, context):
             return _json(200, control_service(iid, svc, op))
         if op == "iisreset":
             return _json(200, iis_reset(iid))
+        
+        if op == "diag":
+            mode = (body.get("mode") or "filter").lower()
+            query = body.get("query") or ""
+            return _json(200, diag_services(iid, mode, query))
         return _json(200, _err("unknown op"))
 
     return _json(404, {"error":"not_found","path":path,"method":method})
