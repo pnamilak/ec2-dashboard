@@ -1,13 +1,15 @@
 // html/login.js
-// Minimal, UI-compatible fixes for env/grouping, bulk actions, and services.
+// Fixed: API base resolution, JWT header, /services contract (instanceId), displayName fallback,
+// and safer StartAll/StopAll bindings.
 
 (() => {
-  const API = window.API_BASE || "";                 // from index.html template
-  const token = () => localStorage.getItem("token"); // set at login
+  const API =
+    (window.__API_BASE__ || window.API_BASE || localStorage.getItem("api_base_url") || "").replace(/\/+$/,"");
+  const jwt = () => localStorage.getItem("jwt"); // token set at login page
 
   const hdrs = () => ({
     "Content-Type": "application/json",
-    "Authorization": "Bearer " + token()
+    ...(jwt() ? { "Authorization": "Bearer " + jwt() } : {}),
   });
 
   // ------------ Helpers ------------
@@ -74,23 +76,31 @@
 
   function renderEnv(env) {
     const header = q("#envHeader");
-    header.textContent = `Env: ${env} • Total: ${STATE.flat.length} • `
-      + `Running: ${STATE.flat.filter(x=>x.state==='running').length} • `
-      + `Stopped: ${STATE.flat.filter(x=>x.state==='stopped').length}`;
+    if (header) {
+      header.textContent = `Env: ${env} • Total: ${STATE.flat.length} • `
+        + `Running: ${STATE.flat.filter(x=>x.state==='running').length} • `
+        + `Stopped: ${STATE.flat.filter(x=>x.state==='stopped').length}`;
+    }
 
     const dm = q("#dmList"); const ea = q("#eaList");
-    dm.innerHTML = ""; ea.innerHTML = "";
+    if (dm) dm.innerHTML = "";
+    if (ea) ea.innerHTML = "";
 
     const groups = instancesInEnv(env);
     [ ["DM", dm], ["EA", ea] ].forEach(([role, mount]) => {
+      if (!mount) return;
       (groups[role] || []).forEach(inst => mount.appendChild(instanceRow(inst)));
     });
 
-    // wire group buttons
-    q("#dm-start-all").onclick = () => startAll(env, "DM");
-    q("#dm-stop-all").onclick  = () => stopAll(env, "DM");
-    q("#ea-start-all").onclick = () => startAll(env, "EA");
-    q("#ea-stop-all").onclick  = () => stopAll(env, "EA");
+    // wire group buttons safely (ids might be missing or duplicated elsewhere)
+    const dmStart = q("#dm-start-all");
+    const dmStop  = q("#dm-stop-all");
+    const eaStart = q("#ea-start-all");
+    const eaStop  = q("#ea-stop-all");
+    if (dmStart) dmStart.onclick = () => startAll(env, "DM");
+    if (dmStop)  dmStop.onclick  = () => stopAll(env, "DM");
+    if (eaStart) eaStart.onclick = () => startAll(env, "EA");
+    if (eaStop)  eaStop.onclick  = () => stopAll(env, "EA");
   }
 
   function instanceRow(inst) {
@@ -107,13 +117,13 @@
     `;
     const [btnStop, btnStart, btnSvc] = qq("button", row);
 
-    btnStart.onclick = () => doAction(inst.id, "start");
-    btnStop.onclick  = () => doAction(inst.id, "stop");
-    btnSvc.onclick   = () => openServices(inst);
+    if (btnStart) btnStart.onclick = () => doAction(inst.id, "start");
+    if (btnStop)  btnStop.onclick  = () => doAction(inst.id, "stop");
+    if (btnSvc)   btnSvc.onclick   = () => openServices(inst);
 
     // disable inconsistent button by state
-    if ((inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
-    if ((inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
+    if (btnStart && (inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
+    if (btnStop && (inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
 
     return row;
   }
@@ -151,39 +161,57 @@
   }
 
   // ------------ Services Modal ------------
+  function decideMode(name) {
+    const n = (name || "").toLowerCase();
+    if (n.includes("sql")) return "sql";
+    if (n.includes("redis")) return "redis";
+    return "filter";
+  }
+
   function openServices(inst) {
     const modal = q("#svcModal");
+    if (!modal) return;
     modal.dataset.iid = inst.id;
     modal.dataset.iname = inst.name || "";
-    q("#svcTitle").textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
-    q("#svcRows").innerHTML = "";
-    q("#svcQuery").value = "";       // leave empty to auto-detect mode
+    const title = q("#svcTitle");
+    if (title) title.textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
+    const rows = q("#svcRows");
+    if (rows) rows.innerHTML = "";
+    const inp = q("#svcQuery");
+    if (inp) inp.value = "";       // leave empty to auto-detect mode
     modal.classList.add("show");
     listServices();                  // initial list
   }
 
   function closeServices() {
-    q("#svcModal").classList.remove("show");
+    const modal = q("#svcModal");
+    if (modal) modal.classList.remove("show");
   }
 
   async function listServices() {
-    const iid   = q("#svcModal").dataset.iid;
-    const iname = q("#svcModal").dataset.iname;
-    const query = q("#svcQuery").value.trim();
+    const modal = q("#svcModal");
+    if (!modal) return;
+    const iid   = modal.dataset.iid;
+    const iname = modal.dataset.iname;
+    const queryEl = q("#svcQuery");
+    const query = (queryEl && queryEl.value ? queryEl.value.trim() : "");
+    const mode  = decideMode(iname);
 
     const r = await fetch(`${API}/services`, {
       method:"POST", headers: hdrs(),
-      body: JSON.stringify({ id: iid, instanceName: iname, op:"list", query })
+      body: JSON.stringify({ instanceId: iid, op:"list", mode, query })
     });
     const j = await r.json();
 
     const tbody = q("#svcRows");
-    tbody.innerHTML = "";
+    if (tbody) tbody.innerHTML = "";
 
     if (!j.ok) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
-      tbody.appendChild(tr);
+      if (tbody) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+        tbody.appendChild(tr);
+      }
       return;
     }
 
@@ -192,7 +220,7 @@
       const status = (svc.status || "Unknown").toLowerCase();
       tr.innerHTML = `
         <td>${svc.name || ""}</td>
-        <td>${svc.displayName || ""}</td>
+        <td>${(svc.display || svc.displayName) || ""}</td>
         <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
         <td>
           <button class="btn ok"   data-op="start">Start</button>
@@ -200,18 +228,18 @@
         </td>
       `;
       const [btnStart, btnStop] = qq("button", tr);
-      btnStart.onclick = () => changeService(iid, svc.name, "start");
-      btnStop.onclick  = () => changeService(iid, svc.name, "stop");
-      if (status === "running") btnStart.disabled = true;
-      if (status === "stopped") btnStop.disabled = true;
-      tbody.appendChild(tr);
+      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
+      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
+      if (btnStart && status === "running") btnStart.disabled = true;
+      if (btnStop  && status === "stopped") btnStop.disabled = true;
+      if (tbody) tbody.appendChild(tr);
     });
   }
 
   async function changeService(iid, name, op) {
     const r = await fetch(`${API}/services`, {
       method:"POST", headers: hdrs(),
-      body: JSON.stringify({ id: iid, op, serviceName: name })
+      body: JSON.stringify({ instanceId: iid, op, serviceName: name })
     });
     const j = await r.json();
     if (!j.ok) { toast(j.error || "svc_failed"); return; }
@@ -226,10 +254,12 @@
   });
 
   async function iisReset() {
-    const iid = q("#svcModal").dataset.iid;
+    const modal = q("#svcModal");
+    if (!modal) return;
+    const iid = modal.dataset.iid;
     const r = await fetch(`${API}/services`, {
       method:"POST", headers: hdrs(),
-      body: JSON.stringify({ id: iid, op:"iisreset" })
+      body: JSON.stringify({ instanceId: iid, op:"iisreset" })
     });
     const j = await r.json();
     if (!j.ok) { toast(j.error || "iis_failed"); return; }
