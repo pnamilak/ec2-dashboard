@@ -1,6 +1,6 @@
 // html/login.js
 // Fixed: API base resolution, JWT header, /services contract (instanceId), displayName fallback,
-// and safer StartAll/StopAll bindings.
+// and safer StartAll/StopAll bindings.  (Minimal changes; UI/flow unchanged.)
 
 (() => {
   const API =
@@ -24,6 +24,12 @@
     el.classList.add("show");
     setTimeout(() => el.classList.remove("show"), 1800);
   }
+
+  // Prevent accidental navigation to /services (some themes render <a href="/services">)
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest('a[href="/services"]');
+    if (a) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
 
   // ------------ Instances ------------
   let STATE = {
@@ -110,16 +116,16 @@
       <div class="inst-name">${inst.name || inst.id}</div>
       <span class="badge ${inst.state}">${inst.state}</span>
       <div class="actions">
-        <button class="btn danger" data-op="stop">Stop</button>
-        <button class="btn ok"     data-op="start">Start</button>
-        <button class="btn warn"   data-svc="1">Services</button>
+        <button class="btn danger" data-op="stop" type="button">Stop</button>
+        <button class="btn ok"     data-op="start" type="button">Start</button>
+        <button class="btn warn"   data-svc="1"    type="button">Services</button>
       </div>
     `;
     const [btnStop, btnStart, btnSvc] = qq("button", row);
 
     if (btnStart) btnStart.onclick = () => doAction(inst.id, "start");
     if (btnStop)  btnStop.onclick  = () => doAction(inst.id, "stop");
-    if (btnSvc)   btnSvc.onclick   = () => openServices(inst);
+    if (btnSvc)   btnSvc.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openServices(inst); });
 
     // disable inconsistent button by state
     if (btnStart && (inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
@@ -171,16 +177,17 @@
   function openServices(inst) {
     const modal = q("#svcModal");
     if (!modal) return;
-    modal.dataset.iid = inst.id;
+    // Always store instanceId (API contract)
+    modal.dataset.iid = inst.instanceId || inst.id;
     modal.dataset.iname = inst.name || "";
     const title = q("#svcTitle");
-    if (title) title.textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
+    if (title) title.textContent = `Services – ${inst.name || inst.id} (${modal.dataset.iid})`;
     const rows = q("#svcRows");
     if (rows) rows.innerHTML = "";
     const inp = q("#svcQuery");
     if (inp) inp.value = "";       // leave empty to auto-detect mode
     modal.classList.add("show");
-    listServices();                  // initial list
+    listServices();                // initial list
   }
 
   function closeServices() {
@@ -206,6 +213,14 @@
     const tbody = q("#svcRows");
     if (tbody) tbody.innerHTML = "";
 
+    // Graceful notes
+    if (j && j.note === "not_connected") {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="4">No services (SSM not connected)</td>`;
+      if (tbody) tbody.appendChild(tr);
+      return;
+    }
+
     if (!j.ok) {
       if (tbody) {
         const tr = document.createElement("tr");
@@ -216,20 +231,22 @@
     }
 
     (j.services || []).forEach(svc => {
+      const name   = svc.name || svc.Name || "";
+      const disp   = svc.display || svc.displayName || svc.DisplayName || "";
+      const status = (svc.status || svc.Status || "unknown").toLowerCase();
       const tr = document.createElement("tr");
-      const status = (svc.status || "Unknown").toLowerCase();
       tr.innerHTML = `
-        <td>${svc.name || ""}</td>
-        <td>${(svc.display || svc.displayName) || ""}</td>
-        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
+        <td>${name}</td>
+        <td>${disp}</td>
+        <td><span class="badge ${status}">${status}</span></td>
         <td>
-          <button class="btn ok"   data-op="start">Start</button>
-          <button class="btn danger" data-op="stop">Stop</button>
+          <button class="btn ok"     data-op="start" type="button">Start</button>
+          <button class="btn danger" data-op="stop"  type="button">Stop</button>
         </td>
       `;
       const [btnStart, btnStop] = qq("button", tr);
-      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
+      if (btnStart) btnStart.onclick = () => changeService(iid, name, "start");
+      if (btnStop)  btnStop.onclick  = () => changeService(iid, name, "stop");
       if (btnStart && status === "running") btnStart.disabled = true;
       if (btnStop  && status === "stopped") btnStop.disabled = true;
       if (tbody) tbody.appendChild(tr);
@@ -237,6 +254,7 @@
   }
 
   async function changeService(iid, name, op) {
+    if (!name) { toast("service name missing"); return; }
     const r = await fetch(`${API}/services`, {
       method:"POST", headers: hdrs(),
       body: JSON.stringify({ instanceId: iid, op, serviceName: name })
@@ -248,9 +266,9 @@
 
   // wire modal buttons
   document.addEventListener("click", (e) => {
-    if (e.target.id === "svcClose") closeServices();
-    if (e.target.id === "svcList")  listServices();
-    if (e.target.id === "svcIIS")   iisReset();
+    if (e.target.id === "svcClose") { e.preventDefault(); closeServices(); }
+    if (e.target.id === "svcList")  { e.preventDefault(); listServices(); }
+    if (e.target.id === "svcIIS")   { e.preventDefault(); iisReset(); }
   });
 
   async function iisReset() {
