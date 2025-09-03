@@ -452,7 +452,7 @@ locals {
   target_ids = lookup(local.target_map, var.assign_profile_target, [])
 }
 
-# Attach/replace profile using AWS CLI (idempotent)
+# Attach/replace profile using AWS CLI (idempotent, now forced each apply)
 resource "null_resource" "attach_ssm_profile" {
   for_each = { for id in local.target_ids : id => id }
 
@@ -460,6 +460,8 @@ resource "null_resource" "attach_ssm_profile" {
     instance_id  = each.value
     profile_name = aws_iam_instance_profile.ec2_ssm_profile.name
     region       = var.aws_region
+    # Always re-run each apply to detach+attach
+    reapply_nonce = timestamp()
   }
 
   depends_on = [
@@ -514,11 +516,10 @@ resource "null_resource" "attach_ssm_profile" {
       fi
 
       if [[ "$CUR_ARN" == *"$TARGET_SUFFIX" ]] && [[ "$STATE" == "associated" ]]; then
-        echo "Already correct ($IID -> $PROF), skipping."
-        exit 0
+        echo "Already correct ($IID -> $PROF), but reattaching per policy..."
+      else
+        echo "Needs change ($IID): state=$STATE; current=$CUR_ARN"
       fi
-
-      echo "Needs change ($IID): state=$STATE; current=$CUR_ARN"
 
       # 1) Try REPLACE when possible (works when association is 'associated')
       set +e
@@ -596,5 +597,3 @@ resource "null_resource" "attach_ssm_profile" {
     EOT
   }
 }
-
-
