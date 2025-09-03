@@ -593,14 +593,13 @@ def lambda_handler(event, context):
     if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
     if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
 
-    # Services (unchanged contract, now tolerant to id/instanceId)
+# Services (unchanged contract; tolerant to id/instanceId)
     if path == "/services" and method == "POST":
-        # accept either instanceId or id (older UI paths sometimes send 'id')
+        # accept both, in case an older UI sends "id"
         iid = (body.get("instanceId") or body.get("id"))
         if not iid:
-            # tiny debug to help if this ever happens again
             try:
-                print("ERR /services: missing instanceId. Body snippet:", str(body)[:400])
+                print("ERR /services: missing instanceId. Body:", str(body)[:400])
             except Exception:
                 pass
             return _json(200, _err("instanceId required"))
@@ -610,12 +609,15 @@ def lambda_handler(event, context):
             mode = (body.get("mode") or "filter").lower()
             query = body.get("query") or ""
             return _json(200, list_services(iid, mode, query))
-        if op in ("start","stop"):
+        if op in ("start", "stop"):
             svc = body.get("serviceName")
-            if not svc: return _json(200, _err("serviceName required"))
+            if not svc:
+                return _json(200, _err("serviceName required"))
             return _json(200, control_service(iid, svc, op))
         if op == "iisreset":
             return _json(200, iis_reset(iid))
+        
         return _json(200, _err("unknown op"))
+
 
     return _json(404, {"error":"not_found","path":path,"method":method})
