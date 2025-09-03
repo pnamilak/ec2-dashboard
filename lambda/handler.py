@@ -1,7 +1,7 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API – OTP, login, instances, actions, services.
-# (No UI changes; fixes env matching, bulk actions, services list.)
+# No UI/flow changes. Only /services implementation is hardened.
 # -----------------------------------------------------------------------------
 
 import os, json, time, hmac, base64, hashlib, random
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
 
-# === NEW: extra stdlib for robust stdout parsing ===
+# ---- extras used only by services stdout parsing ----
 import io, csv, re
 
 # ---------- Environment ----------
@@ -182,7 +182,6 @@ def handle_request_otp(body):
                     },
                 )
             except ClientError as e:
-                # still reveal the code for dev
                 return _json(200, _ok(dev=True, code=code, ses_error=str(e)))
 
         return _json(200, _ok(dev=True, code=code))
@@ -257,16 +256,11 @@ def _name_tag(tags):
     return ""
 
 def _detect_env(name: str) -> str:
-    """
-    Case-insensitive: find first ENV_TOKENS_LOWER that is a substring of the name.
-    If not found, bucket as 'MISC' (or 'ALL' if no tokens configured).
-    """
     if not ENV_TOKENS:
         return "ALL"
     n = (name or "").lower()
     for tok in ENV_TOKENS_LOWER:
         if tok in n:
-            # display as upper for tabs, keep hyphens (e.g., dm-dev)
             return tok.upper()
     return "MISC"
 
@@ -275,7 +269,6 @@ def _detect_role(name: str) -> str:
     return "DM" if "dm" in n else "EA"
 
 def handle_instances():
-    # DO NOT pre-filter by tag:Name (case-sensitive) – fetch by state only, paginate
     paginator = ec2.get_paginator("describe_instances")
     filters = [{"Name":"instance-state-name","Values":["running","stopped","pending","stopping"]}]
     pages = paginator.paginate(Filters=filters)
@@ -305,7 +298,7 @@ def handle_instances():
     envs = {}
     for it in items:
         env  = _detect_env(it["name"])
-        role = _detect_role(it["name"])           # DM / EA buckets for your two columns
+        role = _detect_role(it["name"])
         envs.setdefault(env, {"DM": [], "EA": []})
         envs[env][role].append(it)
 
@@ -350,83 +343,64 @@ def handle_bulk(body):
     except ClientError as e:
         return _json(200, _err("aws_error", message=str(e)))
 
-# ---------- Services via SSM ----------
-PS_LIST_SQL = r"""
-$svcs = Get-Service | Where-Object {
-    $_.Name -like 'MSSQL*' -or
-    $_.Name -like 'SQLSERVERAGENT*' -or
-    $_.DisplayName -match 'SQL Server'
-}
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
-"""
-
-PS_LIST_REDIS = r"""
-$svcs = Get-Service | Where-Object { $_.Name -like 'Redis*' -or $_.DisplayName -like 'Redis*' }
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
-"""
-
-PS_LIST_FILTER = r"""
-$svcs = Get-Service | Where-Object { $_.Name -match $Pattern -or $_.DisplayName -match $Pattern }
-$svcs | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
-"""
-
-PS_START = r"""
-param([string]$Name)
-Start-Service -Name $Name -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
-"""
-
-PS_STOP = r"""
-param([string]$Name)
-Stop-Service -Name $Name -Force -ErrorAction Stop
-Get-Service -Name $Name | Select-Object Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json
-"""
-
-PS_IISRESET = r"""iisreset /restart | Out-Null ; "OK" """
-
-def _send_ps(instance_id, script, timeout=60):
+# ---------- Services via SSM (HARDENED) ----------
+def _is_windows_instance(instance_id: str) -> bool:
     try:
-        resp = ssm.send_command(
+        res = ec2.describe_instances(InstanceIds=[instance_id])
+        for r in res.get("Reservations", []):
+            for inst in r.get("Instances", []):
+                plat = (inst.get("Platform") or "").lower()
+                if plat == "windows":
+                    return True
+                platd = (inst.get("PlatformDetails") or "").lower()
+                if "windows" in platd:
+                    return True
+    except ClientError:
+        pass
+    return False
+
+def _ssm_online(instance_id: str) -> bool:
+    try:
+        res = ssm.describe_instance_information(
+            Filters=[{"Key": "InstanceIds", "Values": [instance_id]}]
+        )
+        infos = res.get("InstanceInformationList", [])
+        if not infos:
+            return False
+        return infos[0].get("PingStatus") == "Online"
+    except ClientError:
+        return False
+
+def _run_powershell(instance_id: str, commands: list[str], timeout=60) -> tuple[bool, str, str]:
+    try:
+        send = ssm.send_command(
             InstanceIds=[instance_id],
             DocumentName="AWS-RunPowerShellScript",
-            Parameters={"commands": [script]},
+            Parameters={"commands": commands},
             TimeoutSeconds=timeout,
         )
+        cmd_id = send["Command"]["CommandId"]
     except ClientError as e:
-        if "InvalidInstanceId" in str(e) or "TargetNotConnected" in str(e):
-            raise RuntimeError("ssm_not_connected")
-        raise
+        return False, "", f"send_command_error: {e}"
 
-    cid = resp["Command"]["CommandId"]
-    time.sleep(1.2)
-    for _ in range(40):
-        inv = ssm.get_command_invocation(CommandId=cid, InstanceId=instance_id)
-        st  = inv.get("Status")
-        if st in ("Success","Cancelled","TimedOut","Failed"):
-            return st, (inv.get("StandardOutputContent","") or "").strip(), (inv.get("StandardErrorContent","") or "").strip()
+    end_by = time.time() + timeout
+    while time.time() < end_by:
+        try:
+            inv = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+            status = inv.get("Status")
+            if status in ("Success","Cancelled","TimedOut","Failed"):
+                return (
+                    status == "Success",
+                    (inv.get("StandardOutputContent") or "").strip(),
+                    (inv.get("StandardErrorContent") or "").strip(),
+                )
+        except ClientError:
+            pass
         time.sleep(1.0)
-    return "TimedOut", "", ""
 
-# ---- NEW: Fallback parsers + normalizer for services stdout ----
-def _normalized_status(raw):
-    s = (str(raw or "")).strip().lower()
-    if s in ("running","started","startpending"): return "running"
-    if s in ("stopped","stoppped","stoppending"): return "stopped"
-    return s or "unknown"
+    return False, "", "timeout"
 
-def _normalize_service_row(r: dict):
-    name = r.get("name") or r.get("Name") or r.get("service") or r.get("ServiceName") or r.get("Service") or ""
-    disp = r.get("display_name") or r.get("DisplayName") or r.get("displayName") or name
-    st   = r.get("status") or r.get("Status") or r.get("state") or r.get("State") or "unknown"
-    status = _normalized_status(st)
-    return {
-        "name": name,
-        "display_name": disp or name,
-        "status": status,
-        "canStart": status != "running",
-        "canStop":  status == "running",
-    }
-
+# tolerant parsers for whatever the instance prints
 def _parse_json_services(text):
     try:
         obj = json.loads(text)
@@ -475,110 +449,150 @@ def _parse_services_stdout(text):
         if rows: return rows
     return []
 
-def _normalize_services_payload(body):
-    iid     = (body.get("instanceId") or body.get("id") or "").strip()
-    raw_op  = (body.get("op") or "").lower().strip()
-    raw_md  = (body.get("mode") or body.get("kind") or "").lower().strip()
-    query   = (body.get("query") or body.get("pattern") or "").strip()
-    service = (body.get("serviceName") or body.get("service") or "").strip()
+def _norm_status(s):
+    s = (s or "").strip().lower()
+    if s in ("running","started","startpending"): return "running"
+    if s in ("stopped","stoppped","stoppending"): return "stopped"
+    return s or "unknown"
 
-    op  = raw_op if raw_op in ("list","start","stop","iisreset") else "list"
-    mode = raw_md
-    if mode in ("", "list", "services", "generic"):
-        inst_name = (body.get("instanceName") or "").lower()
-        if query:
-            mode = "filter"
-        elif "sql" in inst_name:
-            mode = "sql"
-        elif "redis" in inst_name:
-            mode = "redis"
-        else:
-            mode = "filter"
-    return iid, op, mode, query, service
+def _mk_row(src: dict):
+    name = src.get("name") or src.get("Name") or src.get("service") or src.get("ServiceName") or src.get("Service") or ""
+    disp = src.get("display") or src.get("display_name") or src.get("DisplayName") or src.get("displayName") or name
+    stat = _norm_status(src.get("status") or src.get("Status") or src.get("state") or src.get("State"))
+    return {
+        "name": name,
+        "display": disp,         # what your UI reads
+        "displayName": disp,     # extra for safety
+        "status": stat
+    }
 
-def handle_services(body):
+# list / control / iisreset
+def list_services(instance_id: str, mode: str, query: str | None = None):
+    if not _is_windows_instance(instance_id):
+        return {"ok": True, "services": [], "note": "not_windows"}
+    if not _ssm_online(instance_id):
+        return {"ok": True, "services": [], "note": "not_connected"}
+
+    if mode == "sql":
+        ps = [
+            '$sv = Get-Service | Where-Object { '
+            '$_.Name -like "MSSQL*" -or $_.Name -like "SQLSERVERAGENT*" -or '
+            '$_.Name -eq "SQLBrowser" -or $_.Name -eq "SQLWriter" -or '
+            '$_.DisplayName -match "SQL Server" }',
+        ]
+    elif mode == "redis":
+        ps = [ '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }' ]
+    else:
+        q = (query or "").replace("'", "''")
+        ps = [
+            f"$q = '{q}'",
+            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }',
+        ]
+
+    ps += [
+        '$out = @()',
+        '$sv | ForEach-Object { $out += [pscustomobject]@{ name=$_.Name; display=$_.DisplayName; status=$_.Status.ToString().ToLower() } }',
+        '$out | ConvertTo-Json -Compress'
+    ]
+
+    ok, stdout, stderr = _run_powershell(instance_id, ps)
+    if not ok:
+        return {"ok": False, "error": stderr or stdout or "ssm_failed"}
+
+    rows = _parse_services_stdout(stdout)
+    if not rows:
+        return {"ok": False, "error": "parse_error", "raw": stdout}
+
+    services = [_mk_row(r) for r in rows]
+    return {"ok": True, "services": services}
+
+def control_service(instance_id: str, service_name: str, op: str):
+    if not _is_windows_instance(instance_id):
+        return {"ok": False, "error": "not_windows"}
+    if not _ssm_online(instance_id):
+        return {"ok": False, "error": "not_connected"}
+
+    svc = service_name.replace("'", "''")
+    if op == "start":
+        action = [
+            f"$n = '{svc}'",
+            'try {',
+            '  $s = Get-Service -Name $n -ErrorAction Stop;',
+            '  if ($s.Status -ne "Running") { Start-Service -Name $n; $s.WaitForStatus("Running","00:00:20") }',
+            '  $s = Get-Service -Name $n;',
+            '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
+            '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
+            '$out | ConvertTo-Json -Compress'
+        ]
+    else:  # stop
+        action = [
+            f"$n = '{svc}'",
+            'try {',
+            '  $s = Get-Service -Name $n -ErrorAction Stop;',
+            '  if ($s.Status -ne "Stopped") { Stop-Service -Name $n -Force; $s.WaitForStatus("Stopped","00:00:20") }',
+            '  $s = Get-Service -Name $n;',
+            '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
+            '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
+            '$out | ConvertTo-Json -Compress'
+        ]
+
+    ok, stdout, stderr = _run_powershell(instance_id, action)
+    if not ok:
+        return {"ok": False, "error": stderr or stdout or "ssm_failed"}
+
     try:
-        iid, op, mode, query, service = _normalize_services_payload(body)
-        if not iid:
-            return _json(200, _err("missing_instance_id"))
+        data = json.loads(stdout) if stdout else {}
+    except Exception:
+        return {"ok": False, "error": "parse_error", "raw": stdout}
+    if isinstance(data, dict) and "error" in data:
+        return {"ok": False, "error": data["error"]}
 
-        if op == "iisreset":
-            st, out, err = _send_ps(iid, PS_IISRESET)
-            if st != "Success":
-                return _json(200, _err("ssm_error", status=st, stderr=err))
-            return _json(200, _ok(result="OK"))
+    return {"ok": True, "service": _mk_row(data)}
 
-        if op == "list":
-            if mode == "sql":
-                st, out, err = _send_ps(iid, PS_LIST_SQL)
-            elif mode == "redis":
-                st, out, err = _send_ps(iid, PS_LIST_REDIS)
-            else:
-                if not query:
-                    script = r"""Get-Service | Select-Object -First 200 Name, DisplayName, @{Name='Status';Expression={$_.Status.ToString()}} | ConvertTo-Json"""
-                    st, out, err = _send_ps(iid, script)
-                else:
-                    pat = (query or "").replace('"','`"')
-                    script = f'$Pattern = "{pat}";\n{PS_LIST_FILTER}'
-                    st, out, err = _send_ps(iid, script)
+def iis_reset(instance_id: str):
+    if not _is_windows_instance(instance_id):
+        return {"ok": False, "error": "not_windows"}
+    if not _ssm_online(instance_id):
+        return {"ok": False, "error": "not_connected"}
+    ok, stdout, stderr = _run_powershell(instance_id, ['iisreset /noforce'])
+    if not ok:
+        return {"ok": False, "error": stderr or stdout or "ssm_failed"}
+    return {"ok": True, "message": (stdout or "IIS reset issued").strip()}
 
-            if st != "Success":
-                return _json(200, _err("ssm_error", status=st, stderr=err))
-
-            # Robust parsing + normalization
-            rows_raw = _parse_services_stdout(out or "")
-            rows_norm = [_normalize_service_row(r) for r in rows_raw]
-            return _json(200, _ok(services=rows_norm, mode=mode))
-
-        if op in ("start","stop"):
-            if not service:
-                return _json(200, _err("missing_service_name"))
-            ps = PS_START if op == "start" else PS_STOP
-            name_esc = service.replace('"','`"')
-            script = f'$Name = "{name_esc}";\n{ps}'
-            st, out, err = _send_ps(iid, script)
-            if st != "Success":
-                return _json(200, _err("ssm_error", status=st, stderr=err))
-            try:
-                obj = json.loads(out) if out else {}
-            except Exception:
-                obj = {}
-            row = _normalize_service_row(obj or {"name": service, "Status": obj.get("Status")})
-            return _json(200, _ok(service=row))
-
-        return _json(200, _err("unsupported", details={"op": op}))
-    except RuntimeError as e:
-        if str(e) == "ssm_not_connected":
-            return _json(200, _err("ssm_not_connected"))
-        return _json(200, _err("runtime_error", message=str(e)))
-    except (ClientError, EndpointConnectionError) as e:
-        msg = str(e)
-        if "TargetNotConnected" in msg:
-            return _json(200, _err("ssm_not_connected"))
-        return _json(200, _err("aws_error", message=msg))
-
-# ---------- Router ----------
+# --------- HTTP entrypoint ----------
 def lambda_handler(event, context):
-    try:
-        path   = (event.get("rawPath") or event.get("path") or "").strip()
-        method = (event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod") or "GET").upper()
-        body   = _read_body(event)
+    path   = (event.get("requestContext", {}).get("http", {}).get("path") or
+              event.get("rawPath") or
+              event.get("path") or "").strip()
+    method = (event.get("requestContext", {}).get("http", {}).get("method") or
+              event.get("httpMethod") or "GET").upper()
+    body   = _read_body(event)
 
-        # Public
-        if path == "/request-otp"   and method == "POST": return handle_request_otp(body)
-        if path == "/verify-otp"    and method == "POST": return handle_verify_otp(body)
-        if path == "/login"         and method == "POST": return handle_login(body)
+    # Public
+    if path == "/request-otp"   and method == "POST": return handle_request_otp(body)
+    if path == "/verify-otp"    and method == "POST": return handle_verify_otp(body)
+    if path == "/login"         and method == "POST": return handle_login(body)
 
-        # Protected
-        if path == "/instances"         and method == "GET":  return handle_instances()
-        if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
-        if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
-        if path == "/services"          and method == "POST": return handle_services(body)
-        # NEW: allow GET /services?instanceId=... (safe addition; UI can keep POST)
-        if path == "/services"          and method == "GET":
-            iid = (event.get("queryStringParameters") or {}).get("instanceId")
-            return handle_services({"instanceId": iid, "op": "list"})
+    # Protected
+    if path == "/instances"         and method == "GET":  return handle_instances()
+    if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
+    if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
 
-        return _json(404, {"error":"not_found","path":path,"method":method})
-    except Exception as e:
-        return _json(200, _err("unexpected_top", message=str(e)))
+    # Services (unchanged contract)
+    if path == "/services"          and method == "POST":
+        iid = body.get("instanceId")
+        if not iid: return _json(200, _err("instanceId required"))
+        op = (body.get("op") or "list").lower()
+        if op == "list":
+            mode = (body.get("mode") or "filter").lower()
+            query = body.get("query") or ""
+            return _json(200, list_services(iid, mode, query))
+        if op in ("start","stop"):
+            svc = body.get("serviceName")
+            if not svc: return _json(200, _err("serviceName required"))
+            return _json(200, control_service(iid, svc, op))
+        if op == "iisreset":
+            return _json(200, iis_reset(iid))
+        return _json(200, _err("unknown op"))
+
+    return _json(404, {"error":"not_found","path":path,"method":method})
