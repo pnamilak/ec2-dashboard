@@ -1,392 +1,278 @@
-/* html/login.js
- * No visual redesign; fixes:
- *  - case-insensitive env tabs (driven by backend)
- *  - Start all / Stop all wired to /bulk-action
- *  - Services modal lists name/displayName/status + Start/Stop works
- *  - Clear error text when SSM is not connected
- */
+// html/login.js
+// Fixed: API base resolution, JWT header, /services contract (instanceId), displayName fallback,
+// and safer StartAll/StopAll bindings.
 
-/* ---------- API helpers ---------- */
-const API_BASE =
-  window.API_BASE ||
-  (document.querySelector('meta[name="api-base"]')?.content || "").trim() ||
-  ""; // if your index.html injects this, it will be used
+(() => {
+  const API =
+    (window.__API_BASE__ || window.API_BASE || localStorage.getItem("api_base_url") || "").replace(/\/+$/,"");
+  const jwt = () => localStorage.getItem("jwt"); // token set at login page
 
-function apiUrl(p) {
-  if (/^https?:\/\//i.test(p)) return p;
-  if (API_BASE) return API_BASE.replace(/\/+$/, "") + p;
-  return p; // same origin
-}
+  const hdrs = () => ({
+    "Content-Type": "application/json",
+    ...(jwt() ? { "Authorization": "Bearer " + jwt() } : {}),
+  });
 
-function bearer() {
-  const t = localStorage.getItem("jwt") || "";
-  return t ? { Authorization: `Bearer ${t}` } : {};
-}
+  // ------------ Helpers ------------
+  const q = (sel, el=document) => el.querySelector(sel);
+  const qq = (sel, el=document) => Array.from(el.querySelectorAll(sel));
 
-async function api(path, method = "GET", body) {
-  const opt = {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...bearer(),
-    },
+  function toast(msg) {
+    console.log(msg);
+    const el = q("#toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 1800);
+  }
+
+  // ------------ Instances ------------
+  let STATE = {
+    envOrder: [],
+    envs: {},       // same shape as API: { ENV: {DM:[], EA:[]} }
+    flat: []        // all instances
   };
-  if (body) opt.body = JSON.stringify(body);
-  const r = await fetch(apiUrl(path), opt);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j?.error || r.statusText);
-  return j;
-}
 
-/* ---------- elements ---------- */
-const app = document.getElementById("app") || document.body;
-const statusBar = document.getElementById("status-text");
+  async function fetchInstances() {
+    const r = await fetch(`${API}/instances`, { method:"GET", headers: hdrs() });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "instances_failed");
+    STATE.envs = j.envs || {};
+    STATE.flat = j.instances || [];
 
-function setStatus(text, show = true) {
-  if (!statusBar) return;
-  statusBar.textContent = text || "";
-  statusBar.style.display = show && text ? "" : "none";
-}
+    // Keep tab order using keys; normalize to what API sends (already uppercased)
+    STATE.envOrder = Object.keys(STATE.envs).sort();
 
-/* ---------- tiny helpers ---------- */
-const esc = (s) => (s == null ? "" : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
-
-function chip(state) {
-  const s = (state || "").toLowerCase();
-  const color = s === "running" ? "chip-running" : s === "stopped" ? "chip-stopped" : "chip-other";
-  return `<span class="chip ${color}">${esc(s || "-")}</span>`;
-}
-
-/* ---------- state ---------- */
-let lastData = null;
-let currentEnv = null;
-
-/* ---------- render ---------- */
-function renderTabs(envs, summary) {
-  const keys = Object.keys(envs || {}).sort();
-  if (!currentEnv) currentEnv = keys[0] || "Summary";
-
-  const tabBtns =
-    `<button class="tab-btn ${currentEnv === "Summary" ? "active" : ""}" data-tab="Summary">Summary</button>` +
-    keys
-      .map((k) => `<button class="tab-btn ${currentEnv === k ? "active" : ""}" data-tab="${esc(k)}">${esc(k)}</button>`)
-      .join("");
-
-  const summaryLine = currentEnv === "Summary"
-    ? `All • Total: ${summary.total} • Running: ${summary.running} • Stopped: ${summary.stopped}`
-    : `Env: ${esc(currentEnv)} • Total: ${(envs[currentEnv]?.DM?.length || 0) + (envs[currentEnv]?.EA?.length || 0)} • Running: ${
-        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "running").length +
-        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "running").length
-      } • Stopped: ${
-        (envs[currentEnv]?.DM || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length +
-        (envs[currentEnv]?.EA || []).filter((x) => (x.state || "").toLowerCase() === "stopped").length
-      }`;
-
-  return `
-    <div class="topbar">
-      <div id="summary-text">${summaryLine}</div>
-      <button class="btn btn-refresh" id="btn-refresh-all">Refresh</button>
-    </div>
-    <div class="tabs">${tabBtns}</div>
-  `;
-}
-
-function renderGroup(title, list, groupId) {
-  const rows = (list || [])
-    .map(
-      (x) => `
-      <div class="row" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">
-        <div class="row-name">${esc(x.name || "-")} ${chip(x.state)}</div>
-        <div class="row-actions">
-          ${
-            (x.state || "").toLowerCase() === "running"
-              ? `<button class="btn btn-stop" data-op="stop" data-id="${esc(x.id)}">Stop</button>`
-              : `<button class="btn btn-start" data-op="start" data-id="${esc(x.id)}">Start</button>`
-          }
-          <button class="btn btn-svc" data-id="${esc(x.id)}" data-name="${esc(x.name || "")}">Services</button>
-        </div>
-      </div>`
-    )
-    .join("");
-
-  return `
-    <div class="card" data-group="${groupId}">
-      <div class="card-head">
-        <div class="card-title">${esc(title)}</div>
-        <div class="card-head-actions">
-          <button class="btn btn-refresh-group">Refresh</button>
-          <button class="btn btn-start-all">Start all</button>
-          <button class="btn btn-stop-all">Stop all</button>
-        </div>
-      </div>
-      <div class="card-body">${rows || `<div class="empty">No instances</div>`}</div>
-    </div>
-  `;
-}
-
-function renderEnv(envs, summary) {
-  const tabs = renderTabs(envs, summary);
-
-  if (currentEnv === "Summary") {
-    const flat = Object.values(envs || {}).flatMap((g) => [...(g.DM || []), ...(g.EA || [])]);
-    const block = renderGroup("All instances", flat, "ALL");
-    return `${tabs}<div class="grid">${block}</div>`;
+    renderTabs();
+    renderEnv(STATE.envOrder[0] || "ALL");
   }
 
-  const g = envs[currentEnv] || { DM: [], EA: [] };
-  return `${tabs}
-    <div class="grid">
-      ${renderGroup("Dream Mapper", g.DM, "DM")}
-      ${renderGroup("Encore Anywhere", g.EA, "EA")}
-    </div>
-  `;
-}
+  // ------------ Render Tabs / Panels ------------
+  function renderTabs() {
+    const tabs = q("#tabs");
+    if (!tabs) return;
+    tabs.innerHTML = "";
 
-function paint(data) {
-  lastData = data;
-  const { envs = {}, summary = { total: 0, running: 0, stopped: 0 } } = data || {};
-  app.querySelector("#main")?.remove();
-  const wrap = document.createElement("div");
-  wrap.id = "main";
-  wrap.innerHTML = renderEnv(envs, summary);
-  app.appendChild(wrap);
-}
+    const add = (label) => {
+      const b = document.createElement("button");
+      b.className = "pill";
+      b.textContent = label;
+      b.onclick = () => renderEnv(label);
+      tabs.appendChild(b);
+    };
 
-/* ---------- services modal ---------- */
-let modalEl = null;
-
-function closeModal() {
-  modalEl?.remove();
-  modalEl = null;
-}
-
-function openServicesModal(instanceId, instanceName) {
-  closeModal();
-  modalEl = document.createElement("div");
-  modalEl.className = "modal";
-  modalEl.innerHTML = `
-    <div class="modal-body" data-iid="${esc(instanceId)}" data-iname="${esc(instanceName || "")}">
-      <div class="modal-title">Services – ${esc(instanceName)} (${esc(instanceId)})</div>
-      <div class="svc-controls">
-        <input id="svc-pattern" placeholder="filter (e.g. MSSQL|SQLSERVERAGENT|Redis|W3SVC)" />
-        <button class="btn btn-svc-list">List</button>
-        <button class="btn btn-iisreset">IIS reset</button>
-      </div>
-      <div class="svc-table">
-        <div class="svc-head"><div>Name</div><div>Display Name</div><div>Status</div><div>Action</div></div>
-        <div class="svc-rows" id="svc-rows"><div class="empty">No services</div></div>
-      </div>
-      <div class="modal-actions"><button class="btn btn-close">Close</button></div>
-    </div>
-  `;
-  document.body.appendChild(modalEl);
-}
-
-function renderSvcRows(arr) {
-  const box = document.getElementById("svc-rows");
-  if (!box) return;
-  if (!arr || !arr.length) {
-    box.innerHTML = `<div class="empty">No services</div>`;
-    return;
-  }
-  box.innerHTML = arr
-    .map((s) => {
-      const run = (s.status || "").toLowerCase() === "running";
-      return `<div class="svc-row" data-svc="${esc(s.name || "")}">
-        <div>${esc(s.name || "")}</div>
-        <div>${esc(s.displayName || "")}</div>
-        <div>${chip(s.status)}</div>
-        <div>
-          <button class="btn ${run ? "btn-stop" : "btn-start"} btn-svc-op" data-op="${run ? "stop" : "start"}">${run ? "Stop" : "Start"}</button>
-        </div>
-      </div>`;
-    })
-    .join("");
-}
-
-/* ---------- actions ---------- */
-async function refreshAll() {
-  setStatus("Loading summary...", true);
-  try {
-    const r = await api("/instances", "GET");
-    paint(r);
-    setStatus("", false);
-  } catch (e) {
-    setStatus(`Failed to load: ${e.message}`, true);
-  }
-}
-
-async function actInstance(id, op) {
-  await api("/instance-action", "POST", { id, op });
-}
-
-async function actBulk(ids, op) {
-  await api("/bulk-action", "POST", { ids, op });
-}
-
-async function listServices(iid, pattern = "", nameHint = "") {
-  try {
-    const mode = pattern ? "filter" : (nameHint.toLowerCase().includes("sql") ? "sql" :
-                  nameHint.toLowerCase().includes("redis") ? "redis" : "filter");
-    const r = await api("/services", "POST", { id: iid, op: "list", mode, query: pattern });
-    if (r?.services) renderSvcRows(r.services);
-    else if (r?.error === "ssm_not_connected") {
-      renderSvcRows([]);
-      document.getElementById("svc-rows").innerHTML =
-        `<div class="empty">SSM not connected (agent/role/network). </div>`;
-    } else {
-      renderSvcRows([]);
-    }
-  } catch (e) {
-    renderSvcRows([]);
-    document.getElementById("svc-rows").innerHTML =
-      `<div class="empty">Error: ${esc(e.message)}</div>`;
-  }
-}
-
-async function opService(iid, svcName, op) {
-  const r = await api("/services", "POST", { id: iid, op, serviceName: svcName });
-  if (r?.service) {
-    // update that row only
-    const row = document.querySelector(`.svc-row[data-svc="${CSS.escape(svcName)}"]`);
-    if (row) {
-      const run = (r.service.status || "").toLowerCase() === "running";
-      row.querySelector(":scope > div:nth-child(3)").innerHTML = chip(r.service.status);
-      row.querySelector(".btn-svc-op").textContent = run ? "Stop" : "Start";
-      row.querySelector(".btn-svc-op").dataset.op = run ? "stop" : "start";
-      row.querySelector(".btn-svc-op").classList.toggle("btn-start", !run);
-      row.querySelector(".btn-svc-op").classList.toggle("btn-stop", run);
+    if (STATE.envOrder.length === 0) add("Summary");
+    else {
+      add("Summary");
+      STATE.envOrder.forEach(add);
     }
   }
-}
 
-/* ---------- events ---------- */
-document.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button");
-  if (!btn) return;
-
-  // tabs
-  if (btn.classList.contains("tab-btn")) {
-    currentEnv = btn.dataset.tab;
-    paint(lastData);
-    return;
-  }
-
-  // global refresh
-  if (btn.id === "btn-refresh-all") {
-    refreshAll();
-    return;
-  }
-
-  // per-instance start/stop
-  if (btn.classList.contains("btn-start") || btn.classList.contains("btn-stop")) {
-    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
-    const op = btn.dataset.op || (btn.classList.contains("btn-start") ? "start" : "stop");
-    if (!id) return;
-    btn.disabled = true;
-    try {
-      await actInstance(id, op);
-      await refreshAll();
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+  function instancesInEnv(env) {
+    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) {
+      return { DM: [], EA: [] };
     }
-    return;
+    return STATE.envs[env];
   }
 
-  // group Start all/Stop all
-  if (btn.classList.contains("btn-start-all") || btn.classList.contains("btn-stop-all")) {
-    const group = btn.closest(".card");
-    const ids = [...group.querySelectorAll(".row")].map((x) => x.dataset.id).filter(Boolean);
+  function renderEnv(env) {
+    const header = q("#envHeader");
+    if (header) {
+      header.textContent = `Env: ${env} • Total: ${STATE.flat.length} • `
+        + `Running: ${STATE.flat.filter(x=>x.state==='running').length} • `
+        + `Stopped: ${STATE.flat.filter(x=>x.state==='stopped').length}`;
+    }
+
+    const dm = q("#dmList"); const ea = q("#eaList");
+    if (dm) dm.innerHTML = "";
+    if (ea) ea.innerHTML = "";
+
+    const groups = instancesInEnv(env);
+    [ ["DM", dm], ["EA", ea] ].forEach(([role, mount]) => {
+      if (!mount) return;
+      (groups[role] || []).forEach(inst => mount.appendChild(instanceRow(inst)));
+    });
+
+    // wire group buttons safely (ids might be missing or duplicated elsewhere)
+    const dmStart = q("#dm-start-all");
+    const dmStop  = q("#dm-stop-all");
+    const eaStart = q("#ea-start-all");
+    const eaStop  = q("#ea-stop-all");
+    if (dmStart) dmStart.onclick = () => startAll(env, "DM");
+    if (dmStop)  dmStop.onclick  = () => stopAll(env, "DM");
+    if (eaStart) eaStart.onclick = () => startAll(env, "EA");
+    if (eaStop)  eaStop.onclick  = () => stopAll(env, "EA");
+  }
+
+  function instanceRow(inst) {
+    const row = document.createElement("div");
+    row.className = "inst-row";
+    row.innerHTML = `
+      <div class="inst-name">${inst.name || inst.id}</div>
+      <span class="badge ${inst.state}">${inst.state}</span>
+      <div class="actions">
+        <button class="btn danger" data-op="stop">Stop</button>
+        <button class="btn ok"     data-op="start">Start</button>
+        <button class="btn warn"   data-svc="1">Services</button>
+      </div>
+    `;
+    const [btnStop, btnStart, btnSvc] = qq("button", row);
+
+    if (btnStart) btnStart.onclick = () => doAction(inst.id, "start");
+    if (btnStop)  btnStop.onclick  = () => doAction(inst.id, "stop");
+    if (btnSvc)   btnSvc.onclick   = () => openServices(inst);
+
+    // disable inconsistent button by state
+    if (btnStart && (inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
+    if (btnStop && (inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
+
+    return row;
+  }
+
+  async function doAction(id, op) {
+    const r = await fetch(`${API}/instance-action`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ id, op })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "action_failed"); return; }
+    toast(`${op} requested`);
+    await fetchInstances();   // refresh
+  }
+
+  async function startAll(env, role) {
+    const ids = (instancesInEnv(env)[role] || []).map(x => x.id);
     if (!ids.length) return;
-    const op = btn.classList.contains("btn-start-all") ? "start" : "stop";
-    btn.disabled = true;
-    try {
-      await actBulk(ids, op);
-      await refreshAll();
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
+    await bulk("start", ids);
+  }
+  async function stopAll(env, role) {
+    const ids = (instancesInEnv(env)[role] || []).map(x => x.id);
+    if (!ids.length) return;
+    await bulk("stop", ids);
+  }
+  async function bulk(op, ids) {
+    const r = await fetch(`${API}/bulk-action`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ op, instanceIds: ids })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "bulk_failed"); return; }
+    toast(`${op} all requested`);
+    await fetchInstances();
+  }
+
+  // ------------ Services Modal ------------
+  function decideMode(name) {
+    const n = (name || "").toLowerCase();
+    if (n.includes("sql")) return "sql";
+    if (n.includes("redis")) return "redis";
+    return "filter";
+  }
+
+  function openServices(inst) {
+    const modal = q("#svcModal");
+    if (!modal) return;
+    modal.dataset.iid = inst.id;
+    modal.dataset.iname = inst.name || "";
+    const title = q("#svcTitle");
+    if (title) title.textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
+    const rows = q("#svcRows");
+    if (rows) rows.innerHTML = "";
+    const inp = q("#svcQuery");
+    if (inp) inp.value = "";       // leave empty to auto-detect mode
+    modal.classList.add("show");
+    listServices();                  // initial list
+  }
+
+  function closeServices() {
+    const modal = q("#svcModal");
+    if (modal) modal.classList.remove("show");
+  }
+
+  async function listServices() {
+    const modal = q("#svcModal");
+    if (!modal) return;
+    const iid   = modal.dataset.iid;
+    const iname = modal.dataset.iname;
+    const queryEl = q("#svcQuery");
+    const query = (queryEl && queryEl.value ? queryEl.value.trim() : "");
+    const mode  = decideMode(iname);
+
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ instanceId: iid, op:"list", mode, query })
+    });
+    const j = await r.json();
+
+    const tbody = q("#svcRows");
+    if (tbody) tbody.innerHTML = "";
+
+    if (!j.ok) {
+      if (tbody) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+        tbody.appendChild(tr);
+      }
+      return;
     }
-    return;
+
+    (j.services || []).forEach(svc => {
+      const tr = document.createElement("tr");
+      const status = (svc.status || "Unknown").toLowerCase();
+      tr.innerHTML = `
+        <td>${svc.name || ""}</td>
+        <td>${(svc.display || svc.displayName) || ""}</td>
+        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
+        <td>
+          <button class="btn ok"   data-op="start">Start</button>
+          <button class="btn danger" data-op="stop">Stop</button>
+        </td>
+      `;
+      const [btnStart, btnStop] = qq("button", tr);
+      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
+      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
+      if (btnStart && status === "running") btnStart.disabled = true;
+      if (btnStop  && status === "stopped") btnStop.disabled = true;
+      if (tbody) tbody.appendChild(tr);
+    });
   }
 
-  // group refresh
-  if (btn.classList.contains("btn-refresh-group")) {
-    refreshAll();
-    return;
+  async function changeService(iid, name, op) {
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ instanceId: iid, op, serviceName: name })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "svc_failed"); return; }
+    await listServices();
   }
 
-  // services open
-  if (btn.classList.contains("btn-svc")) {
-    const id = btn.dataset.id || btn.closest(".row")?.dataset.id;
-    const name = btn.dataset.name || btn.closest(".row")?.dataset.name || "";
-    openServicesModal(id, name);
-    // initial list guess based on instance name
-    const hint = name.toLowerCase();
-    const pat = hint.includes("sql") ? "MSSQL|SQLSERVERAGENT" : hint.includes("redis") ? "Redis" : "";
-    document.getElementById("svc-pattern").value = pat;
-    await listServices(id, pat, name);
-    return;
+  // wire modal buttons
+  document.addEventListener("click", (e) => {
+    if (e.target.id === "svcClose") closeServices();
+    if (e.target.id === "svcList")  listServices();
+    if (e.target.id === "svcIIS")   iisReset();
+  });
+
+  async function iisReset() {
+    const modal = q("#svcModal");
+    if (!modal) return;
+    const iid = modal.dataset.iid;
+    const r = await fetch(`${API}/services`, {
+      method:"POST", headers: hdrs(),
+      body: JSON.stringify({ instanceId: iid, op:"iisreset" })
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(j.error || "iis_failed"); return; }
+    toast("IIS restarted");
+    await listServices();
   }
 
-  // services modal actions
-  if (btn.classList.contains("btn-close")) {
-    closeModal();
-    return;
-  }
+  // ------------ Init ------------
+  window.DASH = { fetchInstances }; // tiny hook if you need it in console
 
-  if (btn.classList.contains("btn-svc-list")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    const pat = document.getElementById("svc-pattern").value || "";
-    await listServices(iid, pat, box.dataset.iname || "");
-    return;
-  }
-
-  if (btn.classList.contains("btn-iisreset")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    btn.disabled = true;
-    try {
-      await api("/services", "POST", { id: iid, op: "iisreset" });
-      alert("IIS reset kicked off.");
-    } catch (err) {
-      alert(`IIS reset failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
-    }
-    return;
-  }
-
-  if (btn.classList.contains("btn-svc-op")) {
-    const box = btn.closest(".modal-body");
-    const iid = box.dataset.iid;
-    const svcRow = btn.closest(".svc-row");
-    const svcName = svcRow?.dataset.svc || "";
-    const op = btn.dataset.op || "";
-    if (!iid || !svcName || !op) return;
-    btn.disabled = true;
-    try {
-      await opService(iid, svcName, op);
-    } catch (err) {
-      alert(`Failed: ${err.message}`);
-    } finally {
-      btn.disabled = false;
-    }
-    return;
-  }
-});
-
-/* ---------- init ---------- */
-(async function init() {
-  // require JWT
-  const t = localStorage.getItem("jwt");
-  if (!t) {
-    location.href = "/login.html";
-    return;
-  }
-  await refreshAll();
+  // start immediately after login page sets token
+  fetchInstances().catch(err => {
+    console.error(err);
+    toast("Failed to load instances");
+  });
 })();
