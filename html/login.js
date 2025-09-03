@@ -25,18 +25,14 @@
     setTimeout(() => el.classList.remove("show"), 1800);
   }
 
-  // Prevent accidental navigation to /services (some themes render <a href="/services">)
+  // Prevent accidental navigation to /services (e.g., <a href="/services">)
   document.addEventListener("click", (e) => {
     const a = e.target.closest('a[href="/services"]');
     if (a) { e.preventDefault(); e.stopPropagation(); }
   }, true);
 
   // ------------ Instances ------------
-  let STATE = {
-    envOrder: [],
-    envs: {},       // same shape as API: { ENV: {DM:[], EA:[]} }
-    flat: []        // all instances
-  };
+  let STATE = { envOrder: [], envs: {}, flat: [] };
 
   async function fetchInstances() {
     const r = await fetch(`${API}/instances`, { method:"GET", headers: hdrs() });
@@ -44,8 +40,6 @@
     if (!j.ok) throw new Error(j.error || "instances_failed");
     STATE.envs = j.envs || {};
     STATE.flat = j.instances || [];
-
-    // Keep tab order using keys; normalize to what API sends (already uppercased)
     STATE.envOrder = Object.keys(STATE.envs).sort();
 
     renderTabs();
@@ -74,9 +68,7 @@
   }
 
   function instancesInEnv(env) {
-    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) {
-      return { DM: [], EA: [] };
-    }
+    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) return { DM: [], EA: [] };
     return STATE.envs[env];
   }
 
@@ -98,7 +90,7 @@
       (groups[role] || []).forEach(inst => mount.appendChild(instanceRow(inst)));
     });
 
-    // wire group buttons safely (ids might be missing or duplicated elsewhere)
+    // wire group buttons safely
     const dmStart = q("#dm-start-all");
     const dmStop  = q("#dm-stop-all");
     const eaStart = q("#ea-start-all");
@@ -127,7 +119,6 @@
     if (btnStop)  btnStop.onclick  = () => doAction(inst.id, "stop");
     if (btnSvc)   btnSvc.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openServices(inst); });
 
-    // disable inconsistent button by state
     if (btnStart && (inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
     if (btnStop && (inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
 
@@ -142,7 +133,7 @@
     const j = await r.json();
     if (!j.ok) { toast(j.error || "action_failed"); return; }
     toast(`${op} requested`);
-    await fetchInstances();   // refresh
+    await fetchInstances();
   }
 
   async function startAll(env, role) {
@@ -185,9 +176,9 @@
     const rows = q("#svcRows");
     if (rows) rows.innerHTML = "";
     const inp = q("#svcQuery");
-    if (inp) inp.value = "";       // leave empty to auto-detect mode
+    if (inp) inp.value = "";
     modal.classList.add("show");
-    listServices();                // initial list
+    listServices();
   }
 
   function closeServices() {
@@ -213,7 +204,6 @@
     const tbody = q("#svcRows");
     if (tbody) tbody.innerHTML = "";
 
-    // Graceful notes
     if (j && j.note === "not_connected") {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td colspan="4">No services (SSM not connected)</td>`;
@@ -222,11 +212,9 @@
     }
 
     if (!j.ok) {
-      if (tbody) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
-        tbody.appendChild(tr);
-      }
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+      if (tbody) tbody.appendChild(tr);
       return;
     }
 
@@ -286,9 +274,8 @@
   }
 
   // ------------ Init ------------
-  window.DASH = { fetchInstances }; // tiny hook if you need it in console
+  window.DASH = { fetchInstances };
 
-  // start immediately after login page sets token
   fetchInstances().catch(err => {
     console.error(err);
     toast("Failed to load instances");
