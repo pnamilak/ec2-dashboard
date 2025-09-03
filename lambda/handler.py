@@ -468,57 +468,66 @@ def _mk_row(src: dict):
 
 # list / control / iisreset
 def list_services(instance_id: str, mode: str, query: str | None = None):
+    # unchanged guards
     if not _is_windows_instance(instance_id):
         return {"ok": True, "services": [], "note": "not_windows"}
-
     if not _ssm_online(instance_id):
         return {"ok": True, "services": [], "note": "not_connected"}
 
+    # Build the service filter exactly like before
     if mode == "sql":
         ps = [
             '$sv = Get-Service | Where-Object { '
             '$_.Name -like "MSSQL*" -or $_.Name -like "SQLSERVERAGENT*" -or '
             '$_.Name -eq "SQLBrowser" -or $_.Name -eq "SQLWriter" -or '
-            '$_.DisplayName -match "SQL Server" }',
+            '$_.DisplayName -match "SQL Server" }'
         ]
     elif mode == "redis":
         ps = [
-            '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }',
+            '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }'
         ]
-    else:  # filter
+    else:  # "filter"
         q = (query or "").replace("'", "''")
         ps = [
             f"$q = '{q}'",
-            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }',
+            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }'
         ]
 
-    # Emit predictable objects; UI contract unchanged
+    # 🔧 NEW: emit simple, robust pipe-delimited lines instead of JSON
     ps += [
-        '$out = @()',
-        '$sv | ForEach-Object { $out += [pscustomobject]@{ name=$_.Name; display=$_.DisplayName; status=$_.Status.ToString().ToLower() } }',
-        '$out | ConvertTo-Json -Compress'
+        '$sv | ForEach-Object {',
+        '  $n = $_.Name',
+        '  $d = $_.DisplayName',
+        '  $s = $_.Status.ToString().ToLower()',
+        '  Write-Output ("{0}|{1}|{2}" -f $n,$d,$s)',
+        '}'
     ]
 
     ok, stdout, stderr = _run_powershell(instance_id, ps)
 
-    # ---- NEW: lightweight debug so we can see what the instance actually returned
+    # short debug to CloudWatch (optional, harmless)
     try:
-        print("DBG/services/stdout:", (stdout or "")[:2000])
-        print("DBG/services/stderr:", (stderr or "")[:2000])
+        print("DBG/services/stdout:", (stdout or "")[:1000])
+        print("DBG/services/stderr:", (stderr or "")[:1000])
     except Exception:
         pass
-    # ---- END NEW
 
     if not ok:
         return {"ok": False, "error": stderr or stdout or "ssm_failed"}
 
-    # tolerant parsing (JSON/CSV/table/key:val supported elsewhere in file)
-    rows = _parse_services_stdout(stdout)
-    if not rows:
-        return {"ok": False, "error": "parse_error", "raw": stdout}
+    # Parse the pipe-delimited output into the exact fields your UI uses
+    services = []
+    for ln in (stdout or "").splitlines():
+        if "|" not in ln:
+            continue
+        parts = ln.split("|", 2)
+        if len(parts) != 3:
+            continue
+        name, display, status = [p.strip() for p in parts]
+        services.append({"name": name, "display": display or name, "status": (status or "").lower()})
 
-    services = [_mk_row(r) for r in rows]
     return {"ok": True, "services": services}
+
 
 
 def control_service(instance_id: str, service_name: str, op: str):
