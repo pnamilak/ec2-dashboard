@@ -276,14 +276,27 @@
 
   async function changeService(iid, name, op) {
     if (!name) { toast("service name missing"); return; }
+
+    const payload = {
+      // both forms so backend accepts either
+      instanceId: iid,            // new
+      id: iid,                    // old
+      op,                         // new
+      mode: op,                   // old
+      serviceName: name,          // new
+      service: name               // old
+    };
+
     const r = await fetch(`${API}/services`, {
-      method:"POST", headers: hdrs(),
-      body: JSON.stringify({ instanceId: iid, op, serviceName: name })
+      method: "POST",
+      headers: hdrs(),
+      body: JSON.stringify(payload)
     });
     const j = await r.json();
     if (!j.ok) { toast(j.error || "svc_failed"); return; }
     await listServices();
   }
+
 
   // wire modal buttons
   document.addEventListener("click", (e) => {
