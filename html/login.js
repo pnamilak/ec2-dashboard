@@ -1,6 +1,6 @@
 // html/login.js
 // Fixed: API base resolution, JWT header, /services contract (instanceId), displayName fallback,
-// and safer StartAll/StopAll bindings.
+// and safer StartAll/StopAll bindings.  (Minimal changes; UI/flow unchanged.)
 
 (() => {
   const API =
@@ -25,12 +25,14 @@
     setTimeout(() => el.classList.remove("show"), 1800);
   }
 
+  // Prevent accidental navigation to /services (e.g., <a href="/services">)
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest('a[href="/services"]');
+    if (a) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+
   // ------------ Instances ------------
-  let STATE = {
-    envOrder: [],
-    envs: {},       // same shape as API: { ENV: {DM:[], EA:[]} }
-    flat: []        // all instances
-  };
+  let STATE = { envOrder: [], envs: {}, flat: [] };
 
   async function fetchInstances() {
     const r = await fetch(`${API}/instances`, { method:"GET", headers: hdrs() });
@@ -38,8 +40,6 @@
     if (!j.ok) throw new Error(j.error || "instances_failed");
     STATE.envs = j.envs || {};
     STATE.flat = j.instances || [];
-
-    // Keep tab order using keys; normalize to what API sends (already uppercased)
     STATE.envOrder = Object.keys(STATE.envs).sort();
 
     renderTabs();
@@ -68,9 +68,7 @@
   }
 
   function instancesInEnv(env) {
-    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) {
-      return { DM: [], EA: [] };
-    }
+    if (env === "Summary" || !STATE.envs || !STATE.envs[env]) return { DM: [], EA: [] };
     return STATE.envs[env];
   }
 
@@ -92,7 +90,7 @@
       (groups[role] || []).forEach(inst => mount.appendChild(instanceRow(inst)));
     });
 
-    // wire group buttons safely (ids might be missing or duplicated elsewhere)
+    // wire group buttons safely
     const dmStart = q("#dm-start-all");
     const dmStop  = q("#dm-stop-all");
     const eaStart = q("#ea-start-all");
@@ -110,18 +108,17 @@
       <div class="inst-name">${inst.name || inst.id}</div>
       <span class="badge ${inst.state}">${inst.state}</span>
       <div class="actions">
-        <button class="btn danger" data-op="stop">Stop</button>
-        <button class="btn ok"     data-op="start">Start</button>
-        <button class="btn warn"   data-svc="1">Services</button>
+        <button class="btn danger" data-op="stop" type="button">Stop</button>
+        <button class="btn ok"     data-op="start" type="button">Start</button>
+        <button class="btn warn"   data-svc="1"    type="button">Services</button>
       </div>
     `;
     const [btnStop, btnStart, btnSvc] = qq("button", row);
 
     if (btnStart) btnStart.onclick = () => doAction(inst.id, "start");
     if (btnStop)  btnStop.onclick  = () => doAction(inst.id, "stop");
-    if (btnSvc)   btnSvc.onclick   = () => openServices(inst);
+    if (btnSvc)   btnSvc.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); openServices(inst); });
 
-    // disable inconsistent button by state
     if (btnStart && (inst.state || "").toLowerCase() === "running") btnStart.disabled = true;
     if (btnStop && (inst.state || "").toLowerCase() === "stopped") btnStop.disabled = true;
 
@@ -136,7 +133,7 @@
     const j = await r.json();
     if (!j.ok) { toast(j.error || "action_failed"); return; }
     toast(`${op} requested`);
-    await fetchInstances();   // refresh
+    await fetchInstances();
   }
 
   async function startAll(env, role) {
@@ -171,16 +168,23 @@
   function openServices(inst) {
     const modal = q("#svcModal");
     if (!modal) return;
-    modal.dataset.iid = inst.id;
+    // Always store instanceId (API contract)
+    modal.dataset.iid = inst.instanceId || inst.id;
     modal.dataset.iname = inst.name || "";
+    
+
+    // NEW: hide IIS reset on SQL/Redis instances
+    const modeForButtons = decideMode(modal.dataset.iname);
+    const iisBtn = q("#svcIIS"); if (iisBtn) iisBtn.style.display = (modeForButtons === "filter") ? "" : "none";
+
     const title = q("#svcTitle");
-    if (title) title.textContent = `Services – ${inst.name || inst.id} (${inst.id})`;
+    if (title) title.textContent = `Services – ${inst.name || inst.id} (${modal.dataset.iid})`;
     const rows = q("#svcRows");
     if (rows) rows.innerHTML = "";
     const inp = q("#svcQuery");
-    if (inp) inp.value = "";       // leave empty to auto-detect mode
+    if (inp) inp.value = "";
     modal.classList.add("show");
-    listServices();                  // initial list
+    listServices();
   }
 
   function closeServices() {
@@ -189,68 +193,145 @@
   }
 
   async function listServices() {
-    const modal = q("#svcModal");
-    if (!modal) return;
-    const iid   = modal.dataset.iid;
-    const iname = modal.dataset.iname;
-    const queryEl = q("#svcQuery");
-    const query = (queryEl && queryEl.value ? queryEl.value.trim() : "");
-    const mode  = decideMode(iname);
+  const modal = q("#svcModal");
+  if (!modal) return;
 
-    const r = await fetch(`${API}/services`, {
-      method:"POST", headers: hdrs(),
-      body: JSON.stringify({ instanceId: iid, op:"list", mode, query })
-    });
-    const j = await r.json();
+  const iid   = modal.dataset.iid;
+  const iname = modal.dataset.iname;
+  const queryEl = q("#svcQuery");
+  const query = (queryEl && queryEl.value ? queryEl.value.trim() : "");
+  const mode  = decideMode(iname);
 
-    const tbody = q("#svcRows");
-    if (tbody) tbody.innerHTML = "";
+  // Hide IIS Reset for SQL/Redis instances
+  const iisBtn = q("#svcIIS");
+  if (iisBtn) iisBtn.style.display = (mode === "filter") ? "" : "none";
 
-    if (!j.ok) {
-      if (tbody) {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
-        tbody.appendChild(tr);
-      }
-      return;
-    }
+  const r = await fetch(`${API}/services`, {
+    method: "POST",
+    headers: hdrs(),
+    body: JSON.stringify({ instanceId: iid, op: "list", mode, query })
+  });
+  const j = await r.json();
 
-    (j.services || []).forEach(svc => {
+  const tbody = q("#svcRows");
+  if (tbody) tbody.innerHTML = "";
+
+  if (!j.ok) {
+    if (tbody) {
       const tr = document.createElement("tr");
-      const status = (svc.status || "Unknown").toLowerCase();
-      tr.innerHTML = `
-        <td>${svc.name || ""}</td>
-        <td>${(svc.display || svc.displayName) || ""}</td>
-        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
-        <td>
-          <button class="btn ok"   data-op="start">Start</button>
-          <button class="btn danger" data-op="stop">Stop</button>
-        </td>
-      `;
-      const [btnStart, btnStop] = qq("button", tr);
-      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
-      if (btnStart && status === "running") btnStart.disabled = true;
-      if (btnStop  && status === "stopped") btnStop.disabled = true;
-      if (tbody) tbody.appendChild(tr);
-    });
+      tr.innerHTML = `<td colspan="4">${j.error || "error"}</td>`;
+      tbody.appendChild(tr);
+    }
+    return;
   }
 
-  async function changeService(iid, name, op) {
+  // One-time delegated handler for Start/Stop buttons (survives re-renders)
+  if (tbody && !tbody._bound) {
+    tbody.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-op]");
+      if (!b) return;
+
+      const tr = b.closest("tr");
+      const svcName = tr?.dataset.name || tr?.querySelector("td")?.textContent?.trim();
+      const modalNow = q("#svcModal");
+      const iidNow   = modalNow?.dataset.iid;
+      const inameNow = modalNow?.dataset.iname || "";
+
+      if (!svcName) { toast("service name missing"); return; }
+      changeService(iidNow, svcName, b.dataset.op, inameNow);
+    });
+    tbody._bound = true;
+  }
+
+  // --- normalize each row into {name, display, status} ---
+  const rows = (j.services || []).map(raw => {
+    if (typeof raw === "string") {
+      const [n = "", d = "", s = ""] = raw.split("|");
+      return { name: n, display: d, status: (s || "unknown").toLowerCase() };
+    }
+    const name =
+      raw.name ?? raw.Name ?? raw.service ?? raw.Service ?? raw.ServiceName ?? "";
+    const display =
+      raw.display ?? raw.displayName ?? raw.Display ?? raw.DisplayName ?? name;
+    const status =
+      (raw.status ?? raw.Status ?? raw.state ?? raw.State ?? "unknown").toLowerCase();
+    return { name, display, status };
+  });
+
+  // --- render ---
+  rows.forEach((svc) => {
+    const tr = document.createElement("tr");
+
+    const name    = svc.name || "-";
+    const display = svc.display || svc.displayName || "-";
+
+    // Store for delegated click handler
+    tr.dataset.name = name;
+
+    const norm = (v) => {
+      if (typeof v === "number") return ({ 1: "stopped", 4: "running" }[v]) || "unknown";
+      return String(v || "unknown").toLowerCase();
+    };
+    const statusStr  = norm(svc.status);
+    const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
+
+    let btns = "";
+    if (statusStr === "running") {
+      btns = `<button class="btn danger" data-op="stop"  type="button">Stop</button>`;
+    } else if (statusStr === "stopped") {
+      btns = `<button class="btn ok"     data-op="start" type="button">Start</button>`;
+    } else {
+      btns = `<button class="btn ok"     data-op="start" type="button">Start</button>
+              <button class="btn danger" data-op="stop"  type="button">Stop</button>`;
+    }
+
+    tr.innerHTML = `
+      <td>${name}</td>
+      <td>${display}</td>
+      <td><span class="badge ${statusStr}">${showStatus}</span></td>
+      <td>${btns}</td>
+    `;
+
+    // Optional: visual disable for already-running/stopped
+    const btnStart = tr.querySelector('button[data-op="start"]');
+    const btnStop  = tr.querySelector('button[data-op="stop"]');
+    if (btnStart && statusStr === "running") btnStart.disabled = true;
+    if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
+
+    tbody && tbody.appendChild(tr);
+  });
+}
+
+
+  async function changeService(iid, name, op, iname) {
+    if (!name) { toast("service name missing"); return; }
+
+    const payload = {
+      // both forms so backend accepts either
+      instanceId: iid,            // new
+      id: iid,                    // old
+      op,                         // new
+      mode: op,                   // old
+      serviceName: name,          // new
+      service: name,              // old
+      instanceName: iname || ""   // helpful for logging/rules
+    };
+
     const r = await fetch(`${API}/services`, {
-      method:"POST", headers: hdrs(),
-      body: JSON.stringify({ instanceId: iid, op, serviceName: name })
+      method: "POST",
+      headers: hdrs(),
+      body: JSON.stringify(payload)
     });
     const j = await r.json();
-    if (!j.ok) { toast(j.error || "svc_failed"); return; }
+    if (!j.ok) { console.error("Service action failed:", j); toast(j.error || "svc_failed"); return; }
     await listServices();
   }
 
   // wire modal buttons
   document.addEventListener("click", (e) => {
-    if (e.target.id === "svcClose") closeServices();
-    if (e.target.id === "svcList")  listServices();
-    if (e.target.id === "svcIIS")   iisReset();
+    if (e.target.id === "svcClose") { e.preventDefault(); closeServices(); }
+    if (e.target.id === "svcList")  { e.preventDefault(); listServices(); }
+    if (e.target.id === "svcIIS")   { e.preventDefault(); iisReset(); }
   });
 
   async function iisReset() {
@@ -268,9 +349,8 @@
   }
 
   // ------------ Init ------------
-  window.DASH = { fetchInstances }; // tiny hook if you need it in console
+  window.DASH = { fetchInstances };
 
-  // start immediately after login page sets token
   fetchInstances().catch(err => {
     console.error(err);
     toast("Failed to load instances");

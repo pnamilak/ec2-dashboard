@@ -102,6 +102,7 @@
   </div>
 </div>
 
+<!-- Services dialog (your original markup) -->
 <dialog id="svcDlg">
   <form method="dialog">
     <h3 style="margin:6px 0 12px">Services – <span id="svcInst"></span></h3>
@@ -257,36 +258,46 @@ async function refresh(){
 }
 $("btnRefreshTop").onclick = refresh;
 
-/* -------- Services modal -------- */
+/* -------- Services modal logic (wrapped as a proper function) -------- */
 function openServices(it){
   const dlg = $("svcDlg");
-  $("svcInst").textContent = it.name + ' ('+it.id+')';
-  const nm = (it.name||"").toLowerCase();
+  if (!dlg) return;
 
-  // Looser detection so names like "naqa6dmweb01" are picked up
-  const type =
-    nm.includes('sql')   ? 'sql'   :
-    nm.includes('redis') ? 'redis' :
-    (nm.includes('svc') || nm.includes('web')) ? 'svcweb' : 'generic';
+  const inst = $("svcInst");
+  if (inst) inst.textContent = it.name || it.id;
 
-  // Show filter + IIS reset only for SVC/WEB
-  const controls = $("svcControls");
-  controls.style.display = (type === 'svcweb') ? 'flex' : 'none';
-  $("btnIIS").style.display = (type === 'svcweb') ? 'inline-block' : 'none';
-  $("svcBody").innerHTML = '';
-  $("svcMsg").textContent = '';
+  // Decide type from instance name (sql/redis/filter)
+  const nm = (it.name || "").toLowerCase();
+  let type = "filter";
+  if (nm.includes("sql")) type = "sql";
+  else if (nm.includes("redis")) type = "redis";
+
+  $("svcMsg").textContent = "";
+  $("svcBody").innerHTML = "";
+  const f = $("svcFilter"); if (f) f.value = "";
 
   async function list(){
-    let payload = { id: it.id, mode:'list', instanceName: it.name, kind:type };
-    if (type === 'svcweb') {
+    // Map whatever we used to pass to API "mode"
+    const toMode = t => {
+      t = (t || "").toLowerCase();
+      if (t.includes("sql"))   return "sql";
+      if (t.includes("redis")) return "redis";
+      return "filter"; // web/filter case
+    };
+
+    const mode = toMode(type);
+    let payload = { instanceId: it.id, op: "list", mode };
+
+    if (mode === "filter") {
       const pat = $("svcFilter").value.trim();
       if (pat.length < 2) {
         $("svcBody").innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.pattern = pat;
+      payload.query = pat; // new field name ("pattern" -> "query")
     }
+
     try{
       const r = await http('/services','POST', payload);
       const items = r.services || [];
@@ -298,17 +309,20 @@ function openServices(it){
       $("svcMsg").textContent = '';
       items.forEach(s=>{
         const tr=document.createElement('tr');
-        const disp = `<span class="chip">${s.DisplayName||''}</span>`;
-        tr.innerHTML = `<td>${s.Name||''}</td><td>${disp}</td><td>${s.Status||''}</td>`;
+        const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
+        const name = s.Name || s.name || '';
+        const st   = s.Status || s.status || '';
+        tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
         const td=document.createElement('td');
         const a=document.createElement('button');
-        a.className = (s.Status==='Running'?'btn btn-stop':'btn btn-start');
-        a.textContent = (s.Status==='Running'?'Stop':'Start');
+        const isRun = (st==='Running' || st==='running');
+        a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
+        a.textContent = (isRun ? 'Stop' : 'Start');
         a.onclick = async ()=>{ a.disabled=true;
           try{
             await http('/services','POST',{
-              id:it.id, mode:(s.Status==='Running'?'stop':'start'),
-              service:s.Name, instanceName: it.name
+              id:it.id, mode:(isRun?'stop':'start'),
+              service:name, instanceName: it.name
             });
             await list();
           } finally{ a.disabled=false; }
