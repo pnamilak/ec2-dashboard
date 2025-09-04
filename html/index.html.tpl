@@ -102,6 +102,7 @@
   </div>
 </div>
 
+<!-- Services dialog (your original markup) -->
 <dialog id="svcDlg">
   <form method="dialog">
     <h3 style="margin:6px 0 12px">Services – <span id="svcInst"></span></h3>
@@ -257,48 +258,26 @@ async function refresh(){
 }
 $("btnRefreshTop").onclick = refresh;
 
-<!-- Services Modal -->
-<div id="svcModal" class="modal hidden">
-  <div class="modal-content">
-    <div class="modal-header">
-      <h3 id="svcTitle">Services</h3>
-      <button id="svcClose" class="btn ghost" type="button">Close</button>
-    </div>
+/* -------- Services modal logic (wrapped as a proper function) -------- */
+function openServices(it){
+  const dlg = $("svcDlg");
+  if (!dlg) return;
 
-    <div class="modal-toolbar">
-      <!-- Filter input (was: svcFilter) -->
-      <input id="svcQuery" type="text" placeholder="Filter (e.g. SQL, Redis, IIS)..."
-             class="input" />
-      <div class="toolbar-actions">
-        <!-- List & IIS reset (JS listens on these IDs) -->
-        <button id="svcList" class="btn warn" type="button">List</button>
-        <button id="svcIIS"  class="btn"      type="button">IIS Reset</button>
-      </div>
-    </div>
+  const inst = $("svcInst");
+  if (inst) inst.textContent = it.name || it.id;
 
-    <!-- Optional message line (your choice) -->
-    <div id="svcMsg" class="muted small" style="min-height: 1em;"></div>
+  // Decide type from instance name (sql/redis/filter)
+  const nm = (it.name || "").toLowerCase();
+  let type = "filter";
+  if (nm.includes("sql")) type = "sql";
+  else if (nm.includes("redis")) type = "redis";
 
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th style="width: 24%">Name</th>
-            <th style="width: 46%">Display Name</th>
-            <th style="width: 15%">Status</th>
-            <th style="width: 15%">Action</th>
-          </tr>
-        </thead>
-        <!-- tbody ID changed from svcBody -> svcRows -->
-        <tbody id="svcRows"></tbody>
-      </table>
-    </div>
-  </div>
-</div>
-<!-- /Services Modal -->
+  $("svcMsg").textContent = "";
+  $("svcBody").innerHTML = "";
+  const f = $("svcFilter"); if (f) f.value = "";
 
   async function list(){
-// Map whatever we used to pass (e.g. "sql", "svcsql", "redis", "svcredis", "svcweb") to API "mode"
+    // Map whatever we used to pass to API "mode"
     const toMode = t => {
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
@@ -330,17 +309,20 @@ $("btnRefreshTop").onclick = refresh;
       $("svcMsg").textContent = '';
       items.forEach(s=>{
         const tr=document.createElement('tr');
-        const disp = `<span class="chip">${s.DisplayName||''}</span>`;
-        tr.innerHTML = `<td>${s.Name||''}</td><td>${disp}</td><td>${s.Status||''}</td>`;
+        const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
+        const name = s.Name || s.name || '';
+        const st   = s.Status || s.status || '';
+        tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
         const td=document.createElement('td');
         const a=document.createElement('button');
-        a.className = (s.Status==='Running'?'btn btn-stop':'btn btn-start');
-        a.textContent = (s.Status==='Running'?'Stop':'Start');
+        const isRun = (st==='Running' || st==='running');
+        a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
+        a.textContent = (isRun ? 'Stop' : 'Start');
         a.onclick = async ()=>{ a.disabled=true;
           try{
             await http('/services','POST',{
-              id:it.id, mode:(s.Status==='Running'?'stop':'start'),
-              service:s.Name, instanceName: it.name
+              id:it.id, mode:(isRun?'stop':'start'),
+              service:name, instanceName: it.name
             });
             await list();
           } finally{ a.disabled=false; }
