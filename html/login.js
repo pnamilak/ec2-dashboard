@@ -232,46 +232,47 @@
     });
 
     // --- render ---
-    rows.forEach(svc => {
-      const tr = document.createElement("tr");
-      // Pick dashes if value is blank
-      const name = svc.name || "-";
-      const display = svc.display || "-";
-      const statusStr = (svc.status || "unknown").toLowerCase();
-      const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
+  rows.forEach((svc) => {
+    const tr = document.createElement("tr");
 
-      // Show only the correct enabled action button
-      let btns = "";
-      if (statusStr === "running") {
-        btns = `<button class="btn danger" data-op="stop">Stop</button>`;
-      } else if (statusStr === "stopped") {
-        btns = `<button class="btn ok" data-op="start">Start</button>`;
-      } else {
-        btns = `<button class="btn ok" data-op="start">Start</button>
-                <button class="btn danger" data-op="stop">Stop</button>`;
-      }
+    const name    = svc.name || "-";
+    const display = svc.display || svc.displayName || "-";
 
-      tr.innerHTML = `
-        <td>${name}</td>
-        <td>${display}</td>
-        <td><span class="badge ${statusStr}">${showStatus}</span></td>
-        <td>${btns}</td>
-      `;
+    const norm = (v) => {
+      if (typeof v === "number") return ({ 1: "stopped", 4: "running" }[v]) || "unknown";
+      return String(v || "unknown").toLowerCase();
+    };
+    const statusStr  = norm(svc.status);
+    const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
 
-      // Button event(s)
-      const btnStart = tr.querySelector('button[data-op="start"]');
-      const btnStop = tr.querySelector('button[data-op="stop"]');
-      if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-      if (btnStop ) btnStop .onclick = () => changeService(iid, svc.name, "stop");
+    let btns = "";
+    if (statusStr === "running") {
+      btns = `<button class="btn danger" data-op="stop">Stop</button>`;
+    } else if (statusStr === "stopped") {
+      btns = `<button class="btn ok" data-op="start">Start</button>`;
+    } else {
+      btns = `<button class="btn ok" data-op="start">Start</button>
+              <button class="btn danger" data-op="stop">Stop</button>`;
+    }
 
-      // Optionally: disable if already running/stopped (defensive)
-      if (btnStart && statusStr === "running") btnStart.disabled = true;
-      if (btnStop && statusStr === "stopped") btnStop.disabled = true;
+    tr.innerHTML = `
+      <td>${name}</td>
+      <td>${display}</td>
+      <td><span class="badge ${statusStr}">${showStatus}</span></td>
+      <td>${btns}</td>
+    `;
 
-      tbody && tbody.appendChild(tr);
-    });
+    const btnStart = tr.querySelector('button[data-op="start"]');
+    const btnStop  = tr.querySelector('button[data-op="stop"]');
+    if (btnStart) btnStart.onclick = () => changeService(iid, name, "start");
+    if (btnStop ) btnStop .onclick = () => changeService(iid, name, "stop");
 
+    if (btnStart && statusStr === "running") btnStart.disabled = true;
+    if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
 
+    tbody && tbody.appendChild(tr);
+  });
+}
 
   async function changeService(iid, name, op) {
     if (!name) { toast("service name missing"); return; }
