@@ -192,17 +192,16 @@
     if (modal) modal.classList.remove("show");
   }
 
-  async function listServices() {
+async function listServices() {
   const modal = q("#svcModal");
   if (!modal) return;
-
   const iid   = modal.dataset.iid;
   const iname = modal.dataset.iname;
   const queryEl = q("#svcQuery");
   const query = (queryEl && queryEl.value ? queryEl.value.trim() : "");
   const mode  = decideMode(iname);
 
-  // Hide IIS Reset for SQL/Redis instances
+  // Hide IIS Reset for SQL/Redis
   const iisBtn = q("#svcIIS");
   if (iisBtn) iisBtn.style.display = (mode === "filter") ? "" : "none";
 
@@ -225,17 +224,19 @@
     return;
   }
 
-  // One-time delegated handler for Start/Stop buttons (survives re-renders)
+  // One-time delegated handler (survives re-renders)
   if (tbody && !tbody._bound) {
     tbody.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-op]");
+      const b = e.target.closest("#svcRows button[data-op]");
       if (!b) return;
+      e.preventDefault();
+      e.stopPropagation();
 
       const tr = b.closest("tr");
       const svcName = tr?.dataset.name || tr?.querySelector("td")?.textContent?.trim();
-      const modalNow = q("#svcModal");
-      const iidNow   = modalNow?.dataset.iid;
-      const inameNow = modalNow?.dataset.iname || "";
+      const m = q("#svcModal");
+      const iidNow   = m?.dataset.iid;
+      const inameNow = m?.dataset.iname || "";
 
       if (!svcName) { toast("service name missing"); return; }
       changeService(iidNow, svcName, b.dataset.op, inameNow);
@@ -243,7 +244,7 @@
     tbody._bound = true;
   }
 
-  // --- normalize each row into {name, display, status} ---
+  // Normalize to {name, display, status}
   const rows = (j.services || []).map(raw => {
     if (typeof raw === "string") {
       const [n = "", d = "", s = ""] = raw.split("|");
@@ -258,7 +259,7 @@
     return { name, display, status };
   });
 
-  // --- render ---
+  // Render
   rows.forEach((svc) => {
     const tr = document.createElement("tr");
 
@@ -292,9 +293,12 @@
       <td>${btns}</td>
     `;
 
-    // Optional: visual disable for already-running/stopped
+    // Keep your existing per-row handlers (safe)
     const btnStart = tr.querySelector('button[data-op="start"]');
     const btnStop  = tr.querySelector('button[data-op="stop"]');
+    if (btnStart) btnStart.onclick = () => changeService(iid, name, "start", iname);
+    if (btnStop ) btnStop .onclick = () => changeService(iid, name, "stop",  iname);
+
     if (btnStart && statusStr === "running") btnStart.disabled = true;
     if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
 
@@ -303,29 +307,38 @@
 }
 
 
+
   async function changeService(iid, name, op, iname) {
-    if (!name) { toast("service name missing"); return; }
+  if (!name) { toast("service name missing"); return; }
 
-    const payload = {
-      // both forms so backend accepts either
-      instanceId: iid,            // new
-      id: iid,                    // old
-      op,                         // new
-      mode: op,                   // old
-      serviceName: name,          // new
-      service: name,              // old
-      instanceName: iname || ""   // helpful for logging/rules
-    };
+  // Build payload the way the Lambda expects:
+  // - start/stop => "mode"
+  // - others (iisreset, etc.) => "op"
+  const isStartStop = (op === "start" || op === "stop");
 
-    const r = await fetch(`${API}/services`, {
-      method: "POST",
-      headers: hdrs(),
-      body: JSON.stringify(payload)
-    });
-    const j = await r.json();
-    if (!j.ok) { console.error("Service action failed:", j); toast(j.error || "svc_failed"); return; }
-    await listServices();
+  const payload = {
+    instanceId: iid,            // new
+    id: iid,                    // old
+    serviceName: name,          // new
+    service: name,              // old
+    instanceName: iname || ""
+  };
+  if (isStartStop) {
+    payload.mode = op;          // <- service action path
+  } else {
+    payload.op = op;            // <- non-service ops (e.g., iisreset)
   }
+
+  const r = await fetch(`${API}/services`, {
+    method: "POST",
+    headers: hdrs(),
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!j.ok) { console.error("Service action failed:", j); toast(j.error || "svc_failed"); return; }
+  await listServices();
+}
+
 
   // wire modal buttons
   document.addEventListener("click", (e) => {
