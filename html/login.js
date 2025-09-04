@@ -234,24 +234,43 @@
     // --- render ---
     rows.forEach(svc => {
       const tr = document.createElement("tr");
-      const status = (svc.status || "unknown").toLowerCase();
+      // Pick dashes if value is blank
+      const name = svc.name || "-";
+      const display = svc.display || "-";
+      const statusStr = (svc.status || "unknown").toLowerCase();
+      const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
+
+      // Show only the correct enabled action button
+      let btns = "";
+      if (statusStr === "running") {
+        btns = `<button class="btn danger" data-op="stop">Stop</button>`;
+      } else if (statusStr === "stopped") {
+        btns = `<button class="btn ok" data-op="start">Start</button>`;
+      } else {
+        btns = `<button class="btn ok" data-op="start">Start</button>
+                <button class="btn danger" data-op="stop">Stop</button>`;
+      }
+
       tr.innerHTML = `
-        <td>${svc.name || ""}</td>
-        <td>${svc.display || ""}</td>
-        <td><span class="badge ${status}">${svc.status || "Unknown"}</span></td>
-        <td>
-          <button class="btn ok"     data-op="start">Start</button>
-          <button class="btn danger" data-op="stop">Stop</button>
-        </td>
+        <td>${name}</td>
+        <td>${display}</td>
+        <td><span class="badge ${statusStr}">${showStatus}</span></td>
+        <td>${btns}</td>
       `;
-      const [btnStart, btnStop] = qq("button", tr);
+
+      // Button event(s)
+      const btnStart = tr.querySelector('button[data-op="start"]');
+      const btnStop = tr.querySelector('button[data-op="stop"]');
       if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
-      if (btnStart && status === "running") btnStart.disabled = true;
-      if (btnStop  && status === "stopped") btnStop.disabled = true;
+      if (btnStop ) btnStop .onclick = () => changeService(iid, svc.name, "stop");
+
+      // Optionally: disable if already running/stopped (defensive)
+      if (btnStart && statusStr === "running") btnStart.disabled = true;
+      if (btnStop && statusStr === "stopped") btnStop.disabled = true;
+
       tbody && tbody.appendChild(tr);
     });
-  }
+
 
 
   async function changeService(iid, name, op) {
