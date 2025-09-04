@@ -171,6 +171,7 @@
     // Always store instanceId (API contract)
     modal.dataset.iid = inst.instanceId || inst.id;
     modal.dataset.iname = inst.name || "";
+    
 
     // NEW: hide IIS reset on SQL/Redis instances
     const modeForButtons = decideMode(modal.dataset.iname);
@@ -252,13 +253,14 @@
 
       let btns = "";
       if (statusStr === "running") {
-        btns = `<button class="btn danger" data-op="stop">Stop</button>`;
+        btns = `<button class="btn danger" data-op="stop"  type="button">Stop</button>`;
       } else if (statusStr === "stopped") {
-        btns = `<button class="btn ok" data-op="start">Start</button>`;
+        btns = `<button class="btn ok"     data-op="start" type="button">Start</button>`;
       } else {
-        btns = `<button class="btn ok" data-op="start">Start</button>
-                <button class="btn danger" data-op="stop">Stop</button>`;
+        btns = `<button class="btn ok"     data-op="start" type="button">Start</button>
+                <button class="btn danger" data-op="stop"  type="button">Stop</button>`;
       }
+
 
       tr.innerHTML = `
         <td>${name}</td>
@@ -271,6 +273,7 @@
       const btnStop  = tr.querySelector('button[data-op="stop"]');
       if (btnStart) btnStart.onclick = () => changeService(iid, name, "start", iname);
       if (btnStop ) btnStop .onclick = () => changeService(iid, name, "stop",  iname);
+
 
       if (btnStart && statusStr === "running") btnStart.disabled = true;
       if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
