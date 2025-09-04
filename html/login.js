@@ -308,26 +308,18 @@ async function listServices() {
 
 
 
-  async function changeService(iid, name, op, iname) {
+async function changeService(iid, name, op, iname) {
   if (!name) { toast("service name missing"); return; }
 
-  // Build payload the way the Lambda expects:
-  // - start/stop => "mode"
-  // - others (iisreset, etc.) => "op"
-  const isStartStop = (op === "start" || op === "stop");
-
+  // Send op=start/stop (as proved by your PowerShell test).
   const payload = {
-    instanceId: iid,            // new
-    id: iid,                    // old
-    serviceName: name,          // new
-    service: name,              // old
+    instanceId: iid,
+    id: iid,                    // legacy, harmless
+    op,                         // <-- KEY: start/stop goes in `op`
+    serviceName: name,
+    service: name,              // legacy, harmless
     instanceName: iname || ""
   };
-  if (isStartStop) {
-    payload.mode = op;          // <- service action path
-  } else {
-    payload.op = op;            // <- non-service ops (e.g., iisreset)
-  }
 
   const r = await fetch(`${API}/services`, {
     method: "POST",
@@ -335,9 +327,14 @@ async function listServices() {
     body: JSON.stringify(payload)
   });
   const j = await r.json();
-  if (!j.ok) { console.error("Service action failed:", j); toast(j.error || "svc_failed"); return; }
+  if (!j.ok) {
+    console.error("Service action failed:", j);
+    toast(j.error || "svc_failed");
+    return;
+  }
   await listServices();
 }
+
 
 
   // wire modal buttons
