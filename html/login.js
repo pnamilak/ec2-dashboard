@@ -171,6 +171,11 @@
     // Always store instanceId (API contract)
     modal.dataset.iid = inst.instanceId || inst.id;
     modal.dataset.iname = inst.name || "";
+
+    // NEW: hide IIS reset on SQL/Redis instances
+    const modeForButtons = decideMode(modal.dataset.iname);
+    const iisBtn = q("#svcIIS"); if (iisBtn) iisBtn.style.display = (modeForButtons === "filter") ? "" : "none";
+
     const title = q("#svcTitle");
     if (title) title.textContent = `Services – ${inst.name || inst.id} (${modal.dataset.iid})`;
     const rows = q("#svcRows");
@@ -232,49 +237,49 @@
     });
 
     // --- render ---
-  rows.forEach((svc) => {
-    const tr = document.createElement("tr");
+    rows.forEach((svc) => {
+      const tr = document.createElement("tr");
 
-    const name    = svc.name || "-";
-    const display = svc.display || svc.displayName || "-";
+      const name    = svc.name || "-";
+      const display = svc.display || svc.displayName || "-";
 
-    const norm = (v) => {
-      if (typeof v === "number") return ({ 1: "stopped", 4: "running" }[v]) || "unknown";
-      return String(v || "unknown").toLowerCase();
-    };
-    const statusStr  = norm(svc.status);
-    const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
+      const norm = (v) => {
+        if (typeof v === "number") return ({ 1: "stopped", 4: "running" }[v]) || "unknown";
+        return String(v || "unknown").toLowerCase();
+      };
+      const statusStr  = norm(svc.status);
+      const showStatus = statusStr.charAt(0).toUpperCase() + statusStr.slice(1);
 
-    let btns = "";
-    if (statusStr === "running") {
-      btns = `<button class="btn danger" data-op="stop">Stop</button>`;
-    } else if (statusStr === "stopped") {
-      btns = `<button class="btn ok" data-op="start">Start</button>`;
-    } else {
-      btns = `<button class="btn ok" data-op="start">Start</button>
-              <button class="btn danger" data-op="stop">Stop</button>`;
-    }
+      let btns = "";
+      if (statusStr === "running") {
+        btns = `<button class="btn danger" data-op="stop">Stop</button>`;
+      } else if (statusStr === "stopped") {
+        btns = `<button class="btn ok" data-op="start">Start</button>`;
+      } else {
+        btns = `<button class="btn ok" data-op="start">Start</button>
+                <button class="btn danger" data-op="stop">Stop</button>`;
+      }
 
-    tr.innerHTML = `
-      <td>${name}</td>
-      <td>${display}</td>
-      <td><span class="badge ${statusStr}">${showStatus}</span></td>
-      <td>${btns}</td>
-    `;
+      tr.innerHTML = `
+        <td>${name}</td>
+        <td>${display}</td>
+        <td><span class="badge ${statusStr}">${showStatus}</span></td>
+        <td>${btns}</td>
+      `;
 
-    const btnStart = tr.querySelector('button[data-op="start"]');
-    const btnStop  = tr.querySelector('button[data-op="stop"]');
-    if (btnStart) btnStart.onclick = () => changeService(iid, name, "start");
-    if (btnStop ) btnStop .onclick = () => changeService(iid, name, "stop");
+      const btnStart = tr.querySelector('button[data-op="start"]');
+      const btnStop  = tr.querySelector('button[data-op="stop"]');
+      if (btnStart) btnStart.onclick = () => changeService(iid, name, "start", iname);
+      if (btnStop ) btnStop .onclick = () => changeService(iid, name, "stop",  iname);
 
-    if (btnStart && statusStr === "running") btnStart.disabled = true;
-    if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
+      if (btnStart && statusStr === "running") btnStart.disabled = true;
+      if (btnStop  && statusStr === "stopped") btnStop.disabled  = true;
 
-    tbody && tbody.appendChild(tr);
-  });
-}
+      tbody && tbody.appendChild(tr);
+    });
+  }
 
-  async function changeService(iid, name, op) {
+  async function changeService(iid, name, op, iname) {
     if (!name) { toast("service name missing"); return; }
 
     const payload = {
@@ -284,7 +289,8 @@
       op,                         // new
       mode: op,                   // old
       serviceName: name,          // new
-      service: name               // old
+      service: name,              // old
+      instanceName: iname || ""   // helpful for logging/rules
     };
 
     const r = await fetch(`${API}/services`, {
@@ -293,10 +299,9 @@
       body: JSON.stringify(payload)
     });
     const j = await r.json();
-    if (!j.ok) { toast(j.error || "svc_failed"); return; }
+    if (!j.ok) { console.error("Service action failed:", j); toast(j.error || "svc_failed"); return; }
     await listServices();
   }
-
 
   // wire modal buttons
   document.addEventListener("click", (e) => {
