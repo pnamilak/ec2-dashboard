@@ -257,24 +257,45 @@ async function refresh(){
 }
 $("btnRefreshTop").onclick = refresh;
 
-/* -------- Services modal -------- */
-function openServices(it){
-  const dlg = $("svcDlg");
-  $("svcInst").textContent = it.name + ' ('+it.id+')';
-  const nm = (it.name||"").toLowerCase();
+<!-- Services Modal -->
+<div id="svcModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="svcTitle">Services</h3>
+      <button id="svcClose" class="btn ghost" type="button">Close</button>
+    </div>
 
-  // Looser detection so names like "naqa6dmweb01" are picked up
-  const type =
-    nm.includes('sql')   ? 'sql'   :
-    nm.includes('redis') ? 'redis' :
-    (nm.includes('svc') || nm.includes('web')) ? 'svcweb' : 'generic';
+    <div class="modal-toolbar">
+      <!-- Filter input (was: svcFilter) -->
+      <input id="svcQuery" type="text" placeholder="Filter (e.g. SQL, Redis, IIS)..."
+             class="input" />
+      <div class="toolbar-actions">
+        <!-- List & IIS reset (JS listens on these IDs) -->
+        <button id="svcList" class="btn warn" type="button">List</button>
+        <button id="svcIIS"  class="btn"      type="button">IIS Reset</button>
+      </div>
+    </div>
 
-  // Show filter + IIS reset only for SVC/WEB
-  const controls = $("svcControls");
-  controls.style.display = (type === 'svcweb') ? 'flex' : 'none';
-  $("btnIIS").style.display = (type === 'svcweb') ? 'inline-block' : 'none';
-  $("svcBody").innerHTML = '';
-  $("svcMsg").textContent = '';
+    <!-- Optional message line (your choice) -->
+    <div id="svcMsg" class="muted small" style="min-height: 1em;"></div>
+
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th style="width: 24%">Name</th>
+            <th style="width: 46%">Display Name</th>
+            <th style="width: 15%">Status</th>
+            <th style="width: 15%">Action</th>
+          </tr>
+        </thead>
+        <!-- tbody ID changed from svcBody -> svcRows -->
+        <tbody id="svcRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<!-- /Services Modal -->
 
   async function list(){
 // Map whatever we used to pass (e.g. "sql", "svcsql", "redis", "svcredis", "svcweb") to API "mode"
