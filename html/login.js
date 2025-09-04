@@ -258,27 +258,19 @@
         <td>${btns}</td>
       `;
 
-  // Button event(s)
-  const btnStart = tr.querySelector('button[data-op="start"]');
-  const btnStop = tr.querySelector('button[data-op="stop"]');
-  if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-  if (btnStop ) btnStop .onclick = () => changeService(iid, svc.name, "stop");
-
-  // Optionally: disable if already running/stopped (defensive)
-  if (btnStart && statusStr === "running") btnStart.disabled = true;
-  if (btnStop && statusStr === "stopped") btnStop.disabled = true;
-
-  tbody && tbody.appendChild(tr);
-});
-
-      const [btnStart, btnStop] = qq("button", tr);
+      // Button event(s)
+      const btnStart = tr.querySelector('button[data-op="start"]');
+      const btnStop = tr.querySelector('button[data-op="stop"]');
       if (btnStart) btnStart.onclick = () => changeService(iid, svc.name, "start");
-      if (btnStop)  btnStop.onclick  = () => changeService(iid, svc.name, "stop");
-      if (btnStart && status === "running") btnStart.disabled = true;
-      if (btnStop  && status === "stopped") btnStop.disabled = true;
+      if (btnStop ) btnStop .onclick = () => changeService(iid, svc.name, "stop");
+
+      // Optionally: disable if already running/stopped (defensive)
+      if (btnStart && statusStr === "running") btnStart.disabled = true;
+      if (btnStop && statusStr === "stopped") btnStop.disabled = true;
+
       tbody && tbody.appendChild(tr);
     });
-  }
+
 
 
   async function changeService(iid, name, op) {
