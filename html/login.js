@@ -227,7 +227,8 @@ async function listServices() {
   // One-time delegated handler (survives re-renders)
   if (tbody && !tbody._bound) {
     tbody.addEventListener("click", (e) => {
-      const b = e.target.closest("#svcRows button[data-op]");
+      // FIX: only match the button itself (or its ancestors), not a descendant selector
+      const b = e.target.closest("button[data-op]");
       if (!b) return;
       e.preventDefault();
       e.stopPropagation();
@@ -293,7 +294,7 @@ async function listServices() {
       <td>${btns}</td>
     `;
 
-    // Keep your existing per-row handlers (safe)
+    // Keep your existing per-row handlers (defensive; OK to leave)
     const btnStart = tr.querySelector('button[data-op="start"]');
     const btnStop  = tr.querySelector('button[data-op="stop"]');
     if (btnStart) btnStart.onclick = () => changeService(iid, name, "start", iname);
@@ -305,6 +306,7 @@ async function listServices() {
     tbody && tbody.appendChild(tr);
   });
 }
+
 
 
 
