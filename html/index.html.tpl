@@ -321,12 +321,20 @@ function openServices(it){
         a.onclick = async ()=>{ a.disabled=true;
           try{
             await http('/services','POST',{
-              id:it.id, mode:(isRun?'stop':'start'),
-              service:name, instanceName: it.name
+              // new API contract for service actions
+              instanceId: it.id,
+              op: (s.Status === 'Running' ? 'stop' : 'start'),
+              serviceName: s.Name,
+
+              // keep legacy fields for safety
+              id: it.id,
+              service: s.Name,
+              instanceName: it.name
             });
             await list();
-          } finally{ a.disabled=false; }
+          } finally { a.disabled = false; }
         };
+
         td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
       });
     }catch(e){
@@ -335,10 +343,27 @@ function openServices(it){
     }
   }
 
-  $("btnFilter").onclick = (e)=>{ e.preventDefault(); list(); };
-  $("btnIIS").onclick    = async (e)=>{ e.preventDefault();
-    try { await http('/services','POST',{ id:it.id, mode:'iisreset', instanceName: it.name}); $("svcMsg").textContent="IIS reset sent."; }
-    catch(err){ $("svcMsg").textContent = "IIS reset error: " + err.message; }
+  $("btnFilter").onclick = (e) => { 
+  e.preventDefault(); 
+  list(); 
+  };
+
+  $("btnIIS").onclick = async (e) => { 
+    e.preventDefault();
+    try {
+      await http('/services', 'POST', {
+        // new contract
+        instanceId: it.id,
+        op: 'iisreset',
+
+        // legacy fields (harmless; keep for compatibility)
+        id: it.id,
+        instanceName: it.name
+      });
+      $("svcMsg").textContent = "IIS reset sent.";
+    } catch (err) {
+      $("svcMsg").textContent = "IIS reset error: " + (err?.message || err);
+    }
   };
 
   // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
