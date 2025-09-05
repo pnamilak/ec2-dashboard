@@ -8,26 +8,19 @@
     :root{
       --bg:#0e1624; --ink:#e6e9ef; --mut:#9aa4b2; --panel:#121b2b; --card:#162338;
       --tab:#1a243b; --tabA:#2a395e;
-
-      /* mild summary colors */
       --m-total-1:#bed3ff; --m-total-2:#97bdff; --m-total-text:#0e1a2e;
       --m-run-1:#c9f2da;  --m-run-2:#9fe2bf;  --m-run-text:#0d281a;
       --m-stop-1:#e9eef6; --m-stop-2:#ced8e7; --m-stop-text:#0e1a2e;
     }
     body{margin:0;background:radial-gradient(1100px 680px at 70% -240px,#263557 5%,#0e1624 58%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
-
     header{display:flex;align-items:center;justify-content:center;padding:26px 18px}
     .brand{font-weight:900;font-size:34px;letter-spacing:.4px;text-shadow:0 4px 14px rgba(0,0,0,.45)}
     #logout{position:absolute;right:18px;top:18px}
-
     .wrap{max-width:1120px;margin:0 auto;padding:0 16px 40px}
     .card{background:rgba(18,27,43,.96);border-radius:18px;padding:18px;box-shadow:0 12px 70px rgba(0,0,0,.45)}
-
     label{font-size:12px;color:#bcd}
     input,button{font:inherit}
     input[type=text],input[type=password],input[type=email],input[type=number]{width:100%;margin-top:6px;margin-bottom:12px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
-
-    /* Buttons */
     .btn{padding:10px 16px;border-radius:999px;border:0;font-weight:800;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease}
     .btn:active{transform:translateY(2px)}
     .btn.mono{background:#1a2a45;color:#cfe6ff;border:1px solid #2c3e64;box-shadow:0 4px 0 #12213a, 0 10px 20px rgba(0,0,0,.25)}
@@ -35,15 +28,12 @@
     .btn-start{background:linear-gradient(180deg,#bff3d1,#93dfb7); color:#0e2a1b; box-shadow:0 6px 0 #0d7d57, 0 14px 22px rgba(0,0,0,.18)}
     .btn-stop{background:linear-gradient(180deg,#ffd0c9,#ff8d80); color:#401212; box-shadow:0 6px 0 #a02323, 0 14px 22px rgba(0,0,0,.18)}
     .btn-svc{background:linear-gradient(180deg,#fff1b3,#ffcc63); color:#3a2500; box-shadow:0 6px 0 #b47a1a, 0 14px 22px rgba(0,0,0,.16)}
-
     .mut{color:var(--mut);font-size:12px}
     .err{color:#ffaaaa;font-size:12px;min-height:16px;margin-top:6px}
-
     .tabs{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
     .tab{padding:9px 14px;border-radius:12px;background:var(--tab);border:1px solid #223356;cursor:pointer}
     .tab.active{background:var(--tabA)}
     .tab:first-child{font-weight:800}
-
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .block{border:1px solid #2a3a62;border-radius:14px;background:var(--card)}
     .block h3{margin:0;padding:12px 12px;border-bottom:1px solid #2a3a62;display:flex;align-items:center;justify-content:space-between}
@@ -51,19 +41,15 @@
     .row{display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px dashed #2b3d63}
     .row:last-child{border-bottom:0}
     .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,#2a3d6b,#2e415f);color:#bfe1ff;margin-left:6px}
-
     dialog{background:#0f172a;color:#e6e9ef;border:1px solid #2a3a62;border-radius:12px;max-width:820px;width:92%}
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #223356;padding:8px;text-align:left}
     .chip{background:linear-gradient(90deg,#a4b8ff,#a4ffd4); color:#061a22; padding:4px 8px; border-radius:10px; display:inline-block}
     .controls{display:flex; gap:8px; align-items:center}
-
-    /* Summary tiles — vertical list (mild) */
     .vstats{display:flex;flex-direction:column;gap:12px}
     .stat{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-radius:14px;border:1px solid #223356;box-shadow:0 8px 22px rgba(0,0,0,.20)}
     .stat .label{font-weight:800;letter-spacing:.4px}
     .stat .num{font-size:30px;font-weight:900}
-
     .s-total{background:linear-gradient(180deg,var(--m-total-1),var(--m-total-2)); color:var(--m-total-text)}
     .s-run{background:linear-gradient(180deg,var(--m-run-1),var(--m-run-2)); color:var(--m-run-text)}
     .s-stop{background:linear-gradient(180deg,var(--m-stop-1),var(--m-stop-2)); color:var(--m-stop-text)}
@@ -76,7 +62,6 @@
 </header>
 
 <div class="wrap">
-  <!-- OTP card -->
   <div id="otpCard" class="card" style="max-width:520px; margin:40px auto; display:none;">
     <div style="font-weight:800;font-size:20px;margin-bottom:6px;text-align:center">Verify your email</div>
     <div class="mut" style="margin-bottom:12px;text-align:center">Allowed domain: <b id="dom" style="margin-left:6px"></b></div>
@@ -90,7 +75,6 @@
     <div id="otpMsg" class="err" style="text-align:center"></div>
   </div>
 
-  <!-- Dashboard -->
   <div id="dash" style="display:none">
     <div class="card" style="margin:14px 0; display:flex; align-items:center; justify-content:space-between;">
       <div id="summary" class="mut">Loading summary…</div>
@@ -102,7 +86,7 @@
   </div>
 </div>
 
-<!-- Services dialog (your original markup) -->
+<!-- Services dialog -->
 <dialog id="svcDlg">
   <form method="dialog">
     <h3 style="margin:6px 0 12px">Services – <span id="svcInst"></span></h3>
@@ -175,7 +159,6 @@ async function bulk(block, action){
   await refresh();
 }
 
-/* -------- Summary + Env renders -------- */
 function computeEnvTotals(envKey){
   const e = lastData.envs[envKey] || {DM:[],EA:[]};
   const items = [...(e.DM||[]), ...(e.EA||[])];
@@ -258,125 +241,114 @@ async function refresh(){
 }
 $("btnRefreshTop").onclick = refresh;
 
-/* -------- Services modal logic (wrapped as a proper function) -------- */
-/* -------- Services modal logic (wrapped as a proper function) -------- */
+/* -------- Services modal logic -------- */
 function openServices(it){
   const dlg = $("svcDlg");
   if (!dlg) return;
 
-  // Title
   const inst = $("svcInst");
   if (inst) inst.textContent = it.name || it.id;
 
-  // Persist instance info for subsequent actions
-  dlg.dataset.iid   = it.id  || "";
+  // store for delegated actions
+  dlg.dataset.iid   = it.id || "";
   dlg.dataset.iname = it.name || "";
 
   // Decide type from instance name (sql/redis/filter)
   const nm = (it.name || "").toLowerCase();
   let type = "filter";
-  if (nm.includes("sql"))   type = "sql";
+  if (nm.includes("sql")) type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
-  // Hide IIS reset for SQL/Redis; keep it for generic WEB/SVC
+  // hide IIS reset on sql/redis
   const iisBtn = $("btnIIS");
   if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
 
-  // Also hide the filter input + List button for SQL/Redis
-  const filterInput = $("svcFilter");
-  const listBtn     = $("btnFilter");
-  if (filterInput) filterInput.style.display = (type === "filter") ? "" : "none";
-  if (listBtn)     listBtn.style.display     = (type === "filter") ? "" : "none";
-
-  // Reset UI
   $("svcMsg").textContent = "";
-  const body = $("svcBody"); if (body) body.innerHTML = "";
-  if (filterInput) filterInput.value = "";
+  $("svcBody").innerHTML = "";
+  const f = $("svcFilter"); if (f) f.value = "";
 
-  // Inner: list services
   async function list(){
-    // Map to API "mode" for listing only
     const toMode = t => {
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
       if (t.includes("redis")) return "redis";
       return "filter";
     };
-    const mode = toMode(type);
 
-    const payload = { instanceId: dlg.dataset.iid, op: "list", mode };
+    const mode = toMode(type);
+    let payload = { instanceId: it.id, op: "list", mode };
+
     if (mode === "filter") {
-      const q = (filterInput && filterInput.value || "").trim();
-      if (q.length < 2) {
-        if (body) body.innerHTML = "";
+      const pat = $("svcFilter").value.trim();
+      if (pat.length < 2) {
+        $("svcBody").innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.query = q;
+      payload.query = pat;
     }
 
-    const r = await http('/services', 'POST', payload);
-    const items = r.services || [];
-    if (body) body.innerHTML = "";
-    if (!items.length) {
-      $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
-      return;
+    try{
+      const r = await http('/services','POST', payload);
+      const items = r.services || [];
+      const body = $("svcBody"); body.innerHTML='';
+
+      if (!items.length){
+        $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
+        return;
+      }
+
+      $("svcMsg").textContent = '';
+      items.forEach(s=>{
+        const tr=document.createElement('tr');
+        const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
+        const name = s.Name || s.name || '';
+        const st   = s.Status || s.status || '';
+        const isRun = String(st).toLowerCase() === 'running';
+
+        tr.dataset.name = name;
+        tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
+
+        const td=document.createElement('td');
+        const a=document.createElement('button');
+        a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
+        a.textContent = (isRun ? 'Stop' : 'Start');
+        a.type = "button";
+        a.onclick = async () => {
+          a.disabled = true;
+          const op = (String((s.Status||s.status)||'').toLowerCase() === 'running') ? 'stop' : 'start';
+          try {
+            await http('/services','POST', {
+              instanceId: it.id,
+              op,
+              serviceName: name,
+              id: it.id,               // legacy compatibility
+              service: name,
+              instanceName: it.name
+            });
+            await list();
+          } finally {
+            a.disabled = false;
+          }
+        };
+        td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
+      });
+    }catch(e){
+      $("svcBody").innerHTML = "";
+      $("svcMsg").textContent = "Error: " + e.message;
     }
-    $("svcMsg").textContent = "";
-
-    items.forEach(s => {
-      const name = s.Name || s.name || "";
-      const disp = s.DisplayName || s.display || "";
-      const st   = (s.Status || s.status || "").toString().toLowerCase();
-      const isRun = st === "running";
-
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${name}</td>
-        <td><span class="chip">${disp}</span></td>
-        <td>${st}</td>
-        <td>
-          <button class="btn ${isRun ? "btn-stop" : "btn-start"}"
-                  data-op="${isRun ? "stop" : "start"}"
-                  type="button">${isRun ? "Stop" : "Start"}</button>
-        </td>
-      `;
-
-      const btn = tr.querySelector("button[data-op]");
-      if (btn) btn.onclick = async () => {
-        btn.disabled = true;
-        try {
-          // IMPORTANT: use "op" for start/stop (NOT "mode")
-          await http('/services','POST', {
-            instanceId: dlg.dataset.iid,
-            op: btn.dataset.op,
-            serviceName: name,
-            // legacy fields for compatibility
-            id: dlg.dataset.iid,
-            service: name,
-            instanceName: dlg.dataset.iname
-          });
-          await list();
-        } finally {
-          btn.disabled = false;
-        }
-      };
-
-      if (body) body.appendChild(tr);
-    });
   }
 
-  // Wire “List” and “IIS reset” buttons for the opened instance
   $("btnFilter").onclick = (e) => { e.preventDefault(); list(); };
-  $("btnIIS").onclick    = async (e) => {
+
+  $("btnIIS").onclick = async (e) => {
     e.preventDefault();
     try {
-      await http('/services','POST', {
-        instanceId: dlg.dataset.iid,
+      await http('/services', 'POST', {
+        instanceId: it.id,
         op: 'iisreset',
-        // legacy fields (ok to include)
-        id: dlg.dataset.iid,
-        instanceName: dlg.dataset.iname
+        id: it.id,               // legacy
+        instanceName: it.name
       });
       $("svcMsg").textContent = "IIS reset sent.";
     } catch (err) {
@@ -384,51 +356,40 @@ function openServices(it){
     }
   };
 
-  // Auto-list for SQL/Redis; WEB/SVC waits for user filter
-  if (type === "sql" || type === "redis") list();
-
-  dlg.showModal();
-}
-
-
-  // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
   if (type==='sql' || type==='redis') list();
-
   dlg.showModal();
 }
 
 /* --- Delegated Start/Stop handler (survives re-renders) --- */
-(() => {
+(function bindSvcDelegation(){
   const tbody = document.getElementById('svcBody');
   const dlg = document.getElementById('svcDlg');
   if (!tbody || !dlg || tbody._delegateBound) return;
 
   tbody.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button[data-op], button');
+    const btn = e.target.closest('button');
     if (!btn) return;
 
-    // infer op from button label if data-op is absent
-    const op = (btn.dataset.op || btn.textContent || '').trim().toLowerCase() === 'stop' ? 'stop' : 'start';
+    const label = (btn.textContent || '').trim().toLowerCase();
+    const op = (label === 'stop') ? 'stop' : (label === 'start' ? 'start' : '');
+    if (!op) return;
+
     const tr = btn.closest('tr');
-    const svcName = tr?.dataset?.name || tr?.querySelector('td')?.textContent?.trim() || '';
+    const svcName = tr && (tr.dataset.name || (tr.querySelector('td')?.textContent || '')).trim();
     const iid = dlg.dataset.iid || '';
     const iname = dlg.dataset.iname || '';
-
-    // only act on Start/Stop
-    if (!svcName || (op !== 'start' && op !== 'stop')) return;
+    if (!svcName || !iid) return;
 
     btn.disabled = true;
     try {
-      await http('/services','POST', {
+      await http('/services','POST',{
         instanceId: iid,
         op,
         serviceName: svcName,
-        // legacy
-        id: iid,
+        id: iid,               // legacy
         service: svcName,
         instanceName: iname
       });
-      // refresh list by clicking "List" programmatically if available or re-open routine
       const filterBtn = document.getElementById('btnFilter');
       if (filterBtn) filterBtn.click();
     } finally {
