@@ -8,19 +8,26 @@
     :root{
       --bg:#0e1624; --ink:#e6e9ef; --mut:#9aa4b2; --panel:#121b2b; --card:#162338;
       --tab:#1a243b; --tabA:#2a395e;
+
+      /* mild summary colors */
       --m-total-1:#bed3ff; --m-total-2:#97bdff; --m-total-text:#0e1a2e;
       --m-run-1:#c9f2da;  --m-run-2:#9fe2bf;  --m-run-text:#0d281a;
       --m-stop-1:#e9eef6; --m-stop-2:#ced8e7; --m-stop-text:#0e1a2e;
     }
     body{margin:0;background:radial-gradient(1100px 680px at 70% -240px,#263557 5%,#0e1624 58%);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",sans-serif}
+
     header{display:flex;align-items:center;justify-content:center;padding:26px 18px}
     .brand{font-weight:900;font-size:34px;letter-spacing:.4px;text-shadow:0 4px 14px rgba(0,0,0,.45)}
     #logout{position:absolute;right:18px;top:18px}
+
     .wrap{max-width:1120px;margin:0 auto;padding:0 16px 40px}
     .card{background:rgba(18,27,43,.96);border-radius:18px;padding:18px;box-shadow:0 12px 70px rgba(0,0,0,.45)}
+
     label{font-size:12px;color:#bcd}
     input,button{font:inherit}
     input[type=text],input[type=password],input[type=email],input[type=number]{width:100%;margin-top:6px;margin-bottom:12px;background:#0f1a2e;border:1px solid #243355;color:#e6e9ef;border-radius:10px;padding:10px 12px}
+
+    /* Buttons */
     .btn{padding:10px 16px;border-radius:999px;border:0;font-weight:800;cursor:pointer;transition:transform .08s ease, box-shadow .08s ease}
     .btn:active{transform:translateY(2px)}
     .btn.mono{background:#1a2a45;color:#cfe6ff;border:1px solid #2c3e64;box-shadow:0 4px 0 #12213a, 0 10px 20px rgba(0,0,0,.25)}
@@ -28,12 +35,15 @@
     .btn-start{background:linear-gradient(180deg,#bff3d1,#93dfb7); color:#0e2a1b; box-shadow:0 6px 0 #0d7d57, 0 14px 22px rgba(0,0,0,.18)}
     .btn-stop{background:linear-gradient(180deg,#ffd0c9,#ff8d80); color:#401212; box-shadow:0 6px 0 #a02323, 0 14px 22px rgba(0,0,0,.18)}
     .btn-svc{background:linear-gradient(180deg,#fff1b3,#ffcc63); color:#3a2500; box-shadow:0 6px 0 #b47a1a, 0 14px 22px rgba(0,0,0,.16)}
+
     .mut{color:var(--mut);font-size:12px}
     .err{color:#ffaaaa;font-size:12px;min-height:16px;margin-top:6px}
+
     .tabs{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
     .tab{padding:9px 14px;border-radius:12px;background:var(--tab);border:1px solid #223356;cursor:pointer}
     .tab.active{background:var(--tabA)}
     .tab:first-child{font-weight:800}
+
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .block{border:1px solid #2a3a62;border-radius:14px;background:var(--card)}
     .block h3{margin:0;padding:12px 12px;border-bottom:1px solid #2a3a62;display:flex;align-items:center;justify-content:space-between}
@@ -41,15 +51,19 @@
     .row{display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px dashed #2b3d63}
     .row:last-child{border-bottom:0}
     .tag{font-size:11px;padding:2px 6px;border-radius:8px;background:linear-gradient(90deg,#2a3d6b,#2e415f);color:#bfe1ff;margin-left:6px}
+
     dialog{background:#0f172a;color:#e6e9ef;border:1px solid #2a3a62;border-radius:12px;max-width:820px;width:92%}
     table{width:100%;border-collapse:collapse}
     th,td{border-bottom:1px solid #223356;padding:8px;text-align:left}
     .chip{background:linear-gradient(90deg,#a4b8ff,#a4ffd4); color:#061a22; padding:4px 8px; border-radius:10px; display:inline-block}
     .controls{display:flex; gap:8px; align-items:center}
+
+    /* Summary tiles — vertical list (mild) */
     .vstats{display:flex;flex-direction:column;gap:12px}
     .stat{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-radius:14px;border:1px solid #223356;box-shadow:0 8px 22px rgba(0,0,0,.20)}
     .stat .label{font-weight:800;letter-spacing:.4px}
     .stat .num{font-size:30px;font-weight:900}
+
     .s-total{background:linear-gradient(180deg,var(--m-total-1),var(--m-total-2)); color:var(--m-total-text)}
     .s-run{background:linear-gradient(180deg,var(--m-run-1),var(--m-run-2)); color:var(--m-run-text)}
     .s-stop{background:linear-gradient(180deg,var(--m-stop-1),var(--m-stop-2)); color:var(--m-stop-text)}
@@ -62,6 +76,7 @@
 </header>
 
 <div class="wrap">
+  <!-- OTP card -->
   <div id="otpCard" class="card" style="max-width:520px; margin:40px auto; display:none;">
     <div style="font-weight:800;font-size:20px;margin-bottom:6px;text-align:center">Verify your email</div>
     <div class="mut" style="margin-bottom:12px;text-align:center">Allowed domain: <b id="dom" style="margin-left:6px"></b></div>
@@ -75,6 +90,7 @@
     <div id="otpMsg" class="err" style="text-align:center"></div>
   </div>
 
+  <!-- Dashboard -->
   <div id="dash" style="display:none">
     <div class="card" style="margin:14px 0; display:flex; align-items:center; justify-content:space-between;">
       <div id="summary" class="mut">Loading summary…</div>
@@ -159,6 +175,7 @@ async function bulk(block, action){
   await refresh();
 }
 
+/* -------- Summary + Env renders -------- */
 function computeEnvTotals(envKey){
   const e = lastData.envs[envKey] || {DM:[],EA:[]};
   const items = [...(e.DM||[]), ...(e.EA||[])];
@@ -259,15 +276,22 @@ function openServices(it){
   if (nm.includes("sql")) type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
-  // hide IIS reset on sql/redis
-  const iisBtn = $("btnIIS");
-  if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
+  // NEW: show/hide filter controls & IIS button by type
+  const filterInput = $("svcFilter");
+  const filterBtn   = $("btnFilter");
+  const iisBtn      = $("btnIIS");
+  const showFilter  = (type === "filter");
+
+  if (filterInput) filterInput.style.display = showFilter ? "" : "none";
+  if (filterBtn)   filterBtn.style.display   = showFilter ? "" : "none";
+  if (iisBtn)      iisBtn.style.display      = showFilter ? "" : "none";
 
   $("svcMsg").textContent = "";
   $("svcBody").innerHTML = "";
-  const f = $("svcFilter"); if (f) f.value = "";
+  if (filterInput) filterInput.value = "";
 
   async function list(){
+    // Map to API "mode"
     const toMode = t => {
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
@@ -279,7 +303,7 @@ function openServices(it){
     let payload = { instanceId: it.id, op: "list", mode };
 
     if (mode === "filter") {
-      const pat = $("svcFilter").value.trim();
+      const pat = (filterInput && filterInput.value ? filterInput.value.trim() : "");
       if (pat.length < 2) {
         $("svcBody").innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
@@ -292,37 +316,33 @@ function openServices(it){
       const r = await http('/services','POST', payload);
       const items = r.services || [];
       const body = $("svcBody"); body.innerHTML='';
-
       if (!items.length){
         $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
         return;
       }
-
       $("svcMsg").textContent = '';
       items.forEach(s=>{
         const tr=document.createElement('tr');
         const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
         const name = s.Name || s.name || '';
         const st   = s.Status || s.status || '';
-        const isRun = String(st).toLowerCase() === 'running';
-
         tr.dataset.name = name;
         tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
-
         const td=document.createElement('td');
         const a=document.createElement('button');
+        const isRun = (String(st).toLowerCase() === 'running');
         a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
         a.textContent = (isRun ? 'Stop' : 'Start');
         a.type = "button";
         a.onclick = async () => {
           a.disabled = true;
-          const op = (String((s.Status||s.status)||'').toLowerCase() === 'running') ? 'stop' : 'start';
+          const op = isRun ? 'stop' : 'start';
           try {
             await http('/services','POST', {
               instanceId: it.id,
               op,
               serviceName: name,
-              id: it.id,               // legacy compatibility
+              id: it.id,               // legacy (safe)
               service: name,
               instanceName: it.name
             });
@@ -347,7 +367,7 @@ function openServices(it){
       await http('/services', 'POST', {
         instanceId: it.id,
         op: 'iisreset',
-        id: it.id,               // legacy
+        id: it.id,                 // legacy (ok)
         instanceName: it.name
       });
       $("svcMsg").textContent = "IIS reset sent.";
@@ -356,48 +376,68 @@ function openServices(it){
     }
   };
 
+  // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
   if (type==='sql' || type==='redis') list();
+
   dlg.showModal();
 }
 
 /* --- Delegated Start/Stop handler (survives re-renders) --- */
-(function bindSvcDelegation(){
+(() => {
   const tbody = document.getElementById('svcBody');
   const dlg = document.getElementById('svcDlg');
   if (!tbody || !dlg || tbody._delegateBound) return;
 
   tbody.addEventListener('click', async (e) => {
-    const btn = e.target.closest('button');
+    const btn = e.target.closest('button[data-op], button');
     if (!btn) return;
 
-    const label = (btn.textContent || '').trim().toLowerCase();
-    const op = (label === 'stop') ? 'stop' : (label === 'start' ? 'start' : '');
-    if (!op) return;
-
+    const op = (btn.dataset.op || btn.textContent || '').trim().toLowerCase() === 'stop' ? 'stop' : 'start';
     const tr = btn.closest('tr');
-    const svcName = tr && (tr.dataset.name || (tr.querySelector('td')?.textContent || '')).trim();
+    const svcName = tr?.dataset?.name || tr?.querySelector('td')?.textContent?.trim() || '';
     const iid = dlg.dataset.iid || '';
     const iname = dlg.dataset.iname || '';
-    if (!svcName || !iid) return;
+    if (!svcName || (op !== 'start' && op !== 'stop')) return;
 
     btn.disabled = true;
     try {
-      await http('/services','POST',{
+      await http('/services','POST', {
         instanceId: iid,
         op,
         serviceName: svcName,
-        id: iid,               // legacy
+        id: iid,
         service: svcName,
         instanceName: iname
       });
       const filterBtn = document.getElementById('btnFilter');
-      if (filterBtn) filterBtn.click();
+      if (filterBtn && filterBtn.offsetParent !== null) filterBtn.click();
+      else openServices({ id: iid, name: iname }); // refresh for sql/redis
     } finally {
       btn.disabled = false;
     }
   }, true);
 
   tbody._delegateBound = true;
+})();
+
+/* -------- Auto-logout on idle (no UI changes) -------- */
+// NEW: logs out after 15 minutes of no user activity.
+(function setupIdleLogout(){
+  const IDLE_MS = 15 * 60 * 1000; // 15 minutes
+  let last = Date.now();
+  const bump = () => { last = Date.now(); };
+  ["mousemove","mousedown","keydown","touchstart","scroll","click"].forEach(ev =>
+    document.addEventListener(ev, bump, true)
+  );
+  setInterval(() => {
+    if (Date.now() - last > IDLE_MS) {
+      try { alert("Session idle for 15 minutes. Please log in again."); } catch(e){}
+      localStorage.removeItem('jwt');
+      localStorage.removeItem('role');
+      localStorage.removeItem('user');
+      location.reload();
+    }
+  }, 30000);
 })();
 
 /* -------- session / login -------- */
