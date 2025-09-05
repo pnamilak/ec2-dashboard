@@ -259,120 +259,137 @@ async function refresh(){
 $("btnRefreshTop").onclick = refresh;
 
 /* -------- Services modal logic (wrapped as a proper function) -------- */
+/* -------- Services modal logic (wrapped as a proper function) -------- */
 function openServices(it){
   const dlg = $("svcDlg");
   if (!dlg) return;
 
+  // Title
   const inst = $("svcInst");
   if (inst) inst.textContent = it.name || it.id;
 
-  // store for delegated actions
-  dlg.dataset.iid   = it.id || "";
+  // Persist instance info for subsequent actions
+  dlg.dataset.iid   = it.id  || "";
   dlg.dataset.iname = it.name || "";
 
   // Decide type from instance name (sql/redis/filter)
   const nm = (it.name || "").toLowerCase();
   let type = "filter";
-  if (nm.includes("sql")) type = "sql";
+  if (nm.includes("sql"))   type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
-  // hide IIS reset on sql/redis
+  // Hide IIS reset for SQL/Redis; keep it for generic WEB/SVC
   const iisBtn = $("btnIIS");
   if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
 
-  $("svcMsg").textContent = "";
-  $("svcBody").innerHTML = "";
-  const f = $("svcFilter"); if (f) f.value = "";
+  // Also hide the filter input + List button for SQL/Redis
+  const filterInput = $("svcFilter");
+  const listBtn     = $("btnFilter");
+  if (filterInput) filterInput.style.display = (type === "filter") ? "" : "none";
+  if (listBtn)     listBtn.style.display     = (type === "filter") ? "" : "none";
 
+  // Reset UI
+  $("svcMsg").textContent = "";
+  const body = $("svcBody"); if (body) body.innerHTML = "";
+  if (filterInput) filterInput.value = "";
+
+  // Inner: list services
   async function list(){
-    // Map to API "mode"
+    // Map to API "mode" for listing only
     const toMode = t => {
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
       if (t.includes("redis")) return "redis";
-      return "filter"; // web/filter case
+      return "filter";
     };
-
     const mode = toMode(type);
-    let payload = { instanceId: it.id, op: "list", mode };
 
+    const payload = { instanceId: dlg.dataset.iid, op: "list", mode };
     if (mode === "filter") {
-      const pat = $("svcFilter").value.trim();
-      if (pat.length < 2) {
-        $("svcBody").innerHTML = "";
+      const q = (filterInput && filterInput.value || "").trim();
+      if (q.length < 2) {
+        if (body) body.innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.query = pat; // new field name
+      payload.query = q;
     }
 
-    try{
-      const r = await http('/services','POST', payload);
-      const items = r.services || [];
-      const body = $("svcBody"); body.innerHTML='';
-      if (!items.length){
-        $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
-        return;
-      }
-      $("svcMsg").textContent = '';
-      items.forEach(s=>{
-        const tr=document.createElement('tr');
-        const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
-        const name = s.Name || s.name || '';
-        const st   = s.Status || s.status || '';
-        tr.dataset.name = name;   /* for delegated handler */
-        tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
-        const td=document.createElement('td');
-        const a=document.createElement('button');
-        const isRun = (String(st).toLowerCase() === 'running');
-        a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
-        a.textContent = (isRun ? 'Stop' : 'Start');
-        a.type = "button";
-        a.onclick = async () => {
-          a.disabled = true;
-          const op = isRun ? 'stop' : 'start';
-          try {
-            await http('/services','POST', {
-              // new contract
-              instanceId: it.id,
-              op,
-              serviceName: name,
-
-              // legacy fields (harmless compatibility)
-              id: it.id,
-              service: name,
-              instanceName: it.name
-            });
-            await list();
-          } finally {
-            a.disabled = false;
-          }
-        };
-        td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
-      });
-    }catch(e){
-      $("svcBody").innerHTML = "";
-      $("svcMsg").textContent = "Error: " + e.message;
+    const r = await http('/services', 'POST', payload);
+    const items = r.services || [];
+    if (body) body.innerHTML = "";
+    if (!items.length) {
+      $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
+      return;
     }
+    $("svcMsg").textContent = "";
+
+    items.forEach(s => {
+      const name = s.Name || s.name || "";
+      const disp = s.DisplayName || s.display || "";
+      const st   = (s.Status || s.status || "").toString().toLowerCase();
+      const isRun = st === "running";
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${name}</td>
+        <td><span class="chip">${disp}</span></td>
+        <td>${st}</td>
+        <td>
+          <button class="btn ${isRun ? "btn-stop" : "btn-start"}"
+                  data-op="${isRun ? "stop" : "start"}"
+                  type="button">${isRun ? "Stop" : "Start"}</button>
+        </td>
+      `;
+
+      const btn = tr.querySelector("button[data-op]");
+      if (btn) btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          // IMPORTANT: use "op" for start/stop (NOT "mode")
+          await http('/services','POST', {
+            instanceId: dlg.dataset.iid,
+            op: btn.dataset.op,
+            serviceName: name,
+            // legacy fields for compatibility
+            id: dlg.dataset.iid,
+            service: name,
+            instanceName: dlg.dataset.iname
+          });
+          await list();
+        } finally {
+          btn.disabled = false;
+        }
+      };
+
+      if (body) body.appendChild(tr);
+    });
   }
 
+  // Wire “List” and “IIS reset” buttons for the opened instance
   $("btnFilter").onclick = (e) => { e.preventDefault(); list(); };
-
-  $("btnIIS").onclick = async (e) => {
+  $("btnIIS").onclick    = async (e) => {
     e.preventDefault();
     try {
-      await http('/services', 'POST', {
-        instanceId: it.id,
+      await http('/services','POST', {
+        instanceId: dlg.dataset.iid,
         op: 'iisreset',
-        // legacy (ok to include)
-        id: it.id,
-        instanceName: it.name
+        // legacy fields (ok to include)
+        id: dlg.dataset.iid,
+        instanceName: dlg.dataset.iname
       });
       $("svcMsg").textContent = "IIS reset sent.";
     } catch (err) {
       $("svcMsg").textContent = "IIS reset error: " + (err?.message || err);
     }
   };
+
+  // Auto-list for SQL/Redis; WEB/SVC waits for user filter
+  if (type === "sql" || type === "redis") list();
+
+  dlg.showModal();
+}
+
 
   // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
   if (type==='sql' || type==='redis') list();
