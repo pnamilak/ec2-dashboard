@@ -102,7 +102,7 @@
   </div>
 </div>
 
-<!-- Services dialog (your original markup) -->
+<!-- Services dialog -->
 <dialog id="svcDlg">
   <form method="dialog">
     <h3 style="margin:6px 0 12px">Services – <span id="svcInst"></span></h3>
@@ -258,7 +258,7 @@ async function refresh(){
 }
 $("btnRefreshTop").onclick = refresh;
 
-/* -------- Services modal logic (wrapped as a proper function) -------- */
+/* -------- Services modal logic -------- */
 function openServices(it){
   const dlg = $("svcDlg");
   if (!dlg) return;
@@ -276,13 +276,19 @@ function openServices(it){
   if (nm.includes("sql")) type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
-  // hide IIS reset on sql/redis
-  const iisBtn = $("btnIIS");
-  if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
+  // NEW: show/hide filter controls & IIS button by type
+  const filterInput = $("svcFilter");
+  const filterBtn   = $("btnFilter");
+  const iisBtn      = $("btnIIS");
+  const showFilter  = (type === "filter");
+
+  if (filterInput) filterInput.style.display = showFilter ? "" : "none";
+  if (filterBtn)   filterBtn.style.display   = showFilter ? "" : "none";
+  if (iisBtn)      iisBtn.style.display      = showFilter ? "" : "none";
 
   $("svcMsg").textContent = "";
   $("svcBody").innerHTML = "";
-  const f = $("svcFilter"); if (f) f.value = "";
+  if (filterInput) filterInput.value = "";
 
   async function list(){
     // Map to API "mode"
@@ -290,20 +296,20 @@ function openServices(it){
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
       if (t.includes("redis")) return "redis";
-      return "filter"; // web/filter case
+      return "filter";
     };
 
     const mode = toMode(type);
     let payload = { instanceId: it.id, op: "list", mode };
 
     if (mode === "filter") {
-      const pat = $("svcFilter").value.trim();
+      const pat = (filterInput && filterInput.value ? filterInput.value.trim() : "");
       if (pat.length < 2) {
         $("svcBody").innerHTML = "";
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.query = pat; // new field name
+      payload.query = pat;
     }
 
     try{
@@ -320,7 +326,7 @@ function openServices(it){
         const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
         const name = s.Name || s.name || '';
         const st   = s.Status || s.status || '';
-        tr.dataset.name = name;   /* for delegated handler */
+        tr.dataset.name = name;
         tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
         const td=document.createElement('td');
         const a=document.createElement('button');
@@ -333,13 +339,10 @@ function openServices(it){
           const op = isRun ? 'stop' : 'start';
           try {
             await http('/services','POST', {
-              // new contract
               instanceId: it.id,
               op,
               serviceName: name,
-
-              // legacy fields (harmless compatibility)
-              id: it.id,
+              id: it.id,               // legacy (safe)
               service: name,
               instanceName: it.name
             });
@@ -364,8 +367,7 @@ function openServices(it){
       await http('/services', 'POST', {
         instanceId: it.id,
         op: 'iisreset',
-        // legacy (ok to include)
-        id: it.id,
+        id: it.id,                 // legacy (ok)
         instanceName: it.name
       });
       $("svcMsg").textContent = "IIS reset sent.";
@@ -390,14 +392,11 @@ function openServices(it){
     const btn = e.target.closest('button[data-op], button');
     if (!btn) return;
 
-    // infer op from button label if data-op is absent
     const op = (btn.dataset.op || btn.textContent || '').trim().toLowerCase() === 'stop' ? 'stop' : 'start';
     const tr = btn.closest('tr');
     const svcName = tr?.dataset?.name || tr?.querySelector('td')?.textContent?.trim() || '';
     const iid = dlg.dataset.iid || '';
     const iname = dlg.dataset.iname || '';
-
-    // only act on Start/Stop
     if (!svcName || (op !== 'start' && op !== 'stop')) return;
 
     btn.disabled = true;
@@ -406,20 +405,39 @@ function openServices(it){
         instanceId: iid,
         op,
         serviceName: svcName,
-        // legacy
         id: iid,
         service: svcName,
         instanceName: iname
       });
-      // refresh list by clicking "List" programmatically if available or re-open routine
       const filterBtn = document.getElementById('btnFilter');
-      if (filterBtn) filterBtn.click();
+      if (filterBtn && filterBtn.offsetParent !== null) filterBtn.click();
+      else openServices({ id: iid, name: iname }); // refresh for sql/redis
     } finally {
       btn.disabled = false;
     }
   }, true);
 
   tbody._delegateBound = true;
+})();
+
+/* -------- Auto-logout on idle (no UI changes) -------- */
+// NEW: logs out after 15 minutes of no user activity.
+(function setupIdleLogout(){
+  const IDLE_MS = 5 * 60 * 1000; // 15 minutes
+  let last = Date.now();
+  const bump = () => { last = Date.now(); };
+  ["mousemove","mousedown","keydown","touchstart","scroll","click"].forEach(ev =>
+    document.addEventListener(ev, bump, true)
+  );
+  setInterval(() => {
+    if (Date.now() - last > IDLE_MS) {
+      try { alert("Session idle for 15 minutes. Please log in again."); } catch(e){}
+      localStorage.removeItem('jwt');
+      localStorage.removeItem('role');
+      localStorage.removeItem('user');
+      location.reload();
+    }
+  }, 30000);
 })();
 
 /* -------- session / login -------- */
