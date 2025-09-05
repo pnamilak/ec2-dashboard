@@ -263,26 +263,124 @@ function openServices(it){
   const dlg = $("svcDlg");
   if (!dlg) return;
 
+  // Title
   const inst = $("svcInst");
   if (inst) inst.textContent = it.name || it.id;
 
-  // store for delegated actions
-  dlg.dataset.iid   = it.id || "";
+  // Persist instance info for subsequent actions
+  dlg.dataset.iid   = it.id  || "";
   dlg.dataset.iname = it.name || "";
 
   // Decide type from instance name (sql/redis/filter)
   const nm = (it.name || "").toLowerCase();
   let type = "filter";
-  if (nm.includes("sql")) type = "sql";
+  if (nm.includes("sql"))   type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
-  // hide IIS reset on sql/redis
+  // Hide IIS reset for SQL/Redis; keep it for generic WEB/SVC
   const iisBtn = $("btnIIS");
   if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
 
+  // (Optional) also hide the filter input + List button for SQL/Redis
+  const filterInput = $("svcFilter");
+  const listBtn     = $("btnFilter");
+  if (filterInput) filterInput.style.display = (type === "filter") ? "" : "none";
+  if (listBtn)     listBtn.style.display     = (type === "filter") ? "" : "none";
+
+  // Reset UI
   $("svcMsg").textContent = "";
-  $("svcBody").innerHTML = "";
-  const f = $("svcFilter"); if (f) f.value = "";
+  const body = $("svcBody"); if (body) body.innerHTML = "";
+  if (filterInput) filterInput.value = "";
+
+  // Inner: list services
+  async function list(){
+    const payload = { instanceId: dlg.dataset.iid, op: "list", mode: type };
+    if (type === "filter") {
+      const q = (filterInput && filterInput.value || "").trim();
+      if (q.length < 2) {
+        if (body) body.innerHTML = "";
+        $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
+        return;
+      }
+      payload.query = q;
+    }
+
+    const r = await http('/services','POST', payload);
+    const items = r.services || [];
+    if (body) body.innerHTML = "";
+
+    if (!items.length) {
+      $("svcMsg").textContent = r.error ? `No services (${r.error})` : "No matching services.";
+      return;
+    }
+    $("svcMsg").textContent = "";
+
+    items.forEach(s => {
+      const name = s.Name || s.name || "";
+      const disp = s.DisplayName || s.display || "";
+      const st   = (s.Status || s.status || "").toString().toLowerCase();
+      const isRun = st === "running";
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${name}</td>
+        <td><span class="chip">${disp}</span></td>
+        <td>${st}</td>
+        <td>
+          <button class="btn ${isRun ? "btn-stop" : "btn-start"}"
+                  data-op="${isRun ? "stop" : "start"}"
+                  type="button">${isRun ? "Stop" : "Start"}</button>
+        </td>
+      `;
+
+      const btn = tr.querySelector("button[data-op]");
+      if (btn) btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          // IMPORTANT: use "op" for start/stop (not "mode")
+          await http('/services','POST', {
+            instanceId: dlg.dataset.iid,
+            op: btn.dataset.op,
+            serviceName: name,
+            // legacy fields for compatibility
+            id: dlg.dataset.iid,
+            service: name,
+            instanceName: dlg.dataset.iname
+          });
+          await list();
+        } finally {
+          btn.disabled = false;
+        }
+      };
+
+      if (body) body.appendChild(tr);
+    });
+  }
+
+  // Wire “List” and “IIS reset” buttons for the opened instance
+  $("btnFilter").onclick = (e) => { e.preventDefault(); list(); };
+  $("btnIIS").onclick    = async (e) => {
+    e.preventDefault();
+    try {
+      await http('/services','POST', {
+        instanceId: dlg.dataset.iid,
+        op: 'iisreset',
+        // legacy/compatibility fields
+        id: dlg.dataset.iid,
+        instanceName: dlg.dataset.iname
+      });
+      $("svcMsg").textContent = "IIS reset sent.";
+    } catch (err) {
+      $("svcMsg").textContent = "IIS reset error: " + (err?.message || err);
+    }
+  };
+
+  // Auto-list for SQL/Redis; WEB/SVC waits for user filter
+  if (type === "sql" || type === "redis") list();
+
+  dlg.showModal();
+}
+
 
   async function list(){
     // Map to API "mode"
