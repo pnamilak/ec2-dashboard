@@ -423,7 +423,7 @@ function openServices(it){
 /* -------- Auto-logout on idle (no UI changes) -------- */
 // NEW: logs out after 15 minutes of no user activity.
 (function setupIdleLogout(){
-  const IDLE_MS = 15 * 60 * 1000; // 15 minutes
+  const IDLE_MS = 5 * 60 * 1000; // 15 minutes
   let last = Date.now();
   const bump = () => { last = Date.now(); };
   ["mousemove","mousedown","keydown","touchstart","scroll","click"].forEach(ev =>
