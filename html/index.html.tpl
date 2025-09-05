@@ -266,18 +266,26 @@ function openServices(it){
   const inst = $("svcInst");
   if (inst) inst.textContent = it.name || it.id;
 
+  // store for delegated actions
+  dlg.dataset.iid   = it.id || "";
+  dlg.dataset.iname = it.name || "";
+
   // Decide type from instance name (sql/redis/filter)
   const nm = (it.name || "").toLowerCase();
   let type = "filter";
   if (nm.includes("sql")) type = "sql";
   else if (nm.includes("redis")) type = "redis";
 
+  // hide IIS reset on sql/redis
+  const iisBtn = $("btnIIS");
+  if (iisBtn) iisBtn.style.display = (type === "filter") ? "" : "none";
+
   $("svcMsg").textContent = "";
   $("svcBody").innerHTML = "";
   const f = $("svcFilter"); if (f) f.value = "";
 
   async function list(){
-    // Map whatever we used to pass to API "mode"
+    // Map to API "mode"
     const toMode = t => {
       t = (t || "").toLowerCase();
       if (t.includes("sql"))   return "sql";
@@ -295,7 +303,7 @@ function openServices(it){
         $("svcMsg").textContent = "Enter 2+ letters to list services (for SVC/WEB).";
         return;
       }
-      payload.query = pat; // new field name ("pattern" -> "query")
+      payload.query = pat; // new field name
     }
 
     try{
@@ -312,20 +320,33 @@ function openServices(it){
         const disp = `<span class="chip">${s.DisplayName || s.display || ''}</span>`;
         const name = s.Name || s.name || '';
         const st   = s.Status || s.status || '';
+        tr.dataset.name = name;   /* for delegated handler */
         tr.innerHTML = `<td>${name}</td><td>${disp}</td><td>${st}</td>`;
         const td=document.createElement('td');
         const a=document.createElement('button');
-        const isRun = (st==='Running' || st==='running');
+        const isRun = (String(st).toLowerCase() === 'running');
         a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
         a.textContent = (isRun ? 'Stop' : 'Start');
-        a.onclick = async ()=>{ a.disabled=true;
-          try{
-            await http('/services','POST',{
-              id:it.id, mode:(isRun?'stop':'start'),
-              service:name, instanceName: it.name
+        a.type = "button";
+        a.onclick = async () => {
+          a.disabled = true;
+          const op = isRun ? 'stop' : 'start';
+          try {
+            await http('/services','POST', {
+              // new contract
+              instanceId: it.id,
+              op,
+              serviceName: name,
+
+              // legacy fields (harmless compatibility)
+              id: it.id,
+              service: name,
+              instanceName: it.name
             });
             await list();
-          } finally{ a.disabled=false; }
+          } finally {
+            a.disabled = false;
+          }
         };
         td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
       });
@@ -335,10 +356,22 @@ function openServices(it){
     }
   }
 
-  $("btnFilter").onclick = (e)=>{ e.preventDefault(); list(); };
-  $("btnIIS").onclick    = async (e)=>{ e.preventDefault();
-    try { await http('/services','POST',{ id:it.id, mode:'iisreset', instanceName: it.name}); $("svcMsg").textContent="IIS reset sent."; }
-    catch(err){ $("svcMsg").textContent = "IIS reset error: " + err.message; }
+  $("btnFilter").onclick = (e) => { e.preventDefault(); list(); };
+
+  $("btnIIS").onclick = async (e) => {
+    e.preventDefault();
+    try {
+      await http('/services', 'POST', {
+        instanceId: it.id,
+        op: 'iisreset',
+        // legacy (ok to include)
+        id: it.id,
+        instanceName: it.name
+      });
+      $("svcMsg").textContent = "IIS reset sent.";
+    } catch (err) {
+      $("svcMsg").textContent = "IIS reset error: " + (err?.message || err);
+    }
   };
 
   // For SQL/Redis we can list immediately; SVC/WEB waits for user filter
@@ -346,6 +379,48 @@ function openServices(it){
 
   dlg.showModal();
 }
+
+/* --- Delegated Start/Stop handler (survives re-renders) --- */
+(() => {
+  const tbody = document.getElementById('svcBody');
+  const dlg = document.getElementById('svcDlg');
+  if (!tbody || !dlg || tbody._delegateBound) return;
+
+  tbody.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-op], button');
+    if (!btn) return;
+
+    // infer op from button label if data-op is absent
+    const op = (btn.dataset.op || btn.textContent || '').trim().toLowerCase() === 'stop' ? 'stop' : 'start';
+    const tr = btn.closest('tr');
+    const svcName = tr?.dataset?.name || tr?.querySelector('td')?.textContent?.trim() || '';
+    const iid = dlg.dataset.iid || '';
+    const iname = dlg.dataset.iname || '';
+
+    // only act on Start/Stop
+    if (!svcName || (op !== 'start' && op !== 'stop')) return;
+
+    btn.disabled = true;
+    try {
+      await http('/services','POST', {
+        instanceId: iid,
+        op,
+        serviceName: svcName,
+        // legacy
+        id: iid,
+        service: svcName,
+        instanceName: iname
+      });
+      // refresh list by clicking "List" programmatically if available or re-open routine
+      const filterBtn = document.getElementById('btnFilter');
+      if (filterBtn) filterBtn.click();
+    } finally {
+      btn.disabled = false;
+    }
+  }, true);
+
+  tbody._delegateBound = true;
+})();
 
 /* -------- session / login -------- */
 function isLoggedIn(){ return !!localStorage.getItem('jwt'); }
