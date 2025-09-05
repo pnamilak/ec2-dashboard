@@ -318,22 +318,27 @@ function openServices(it){
         const isRun = (st==='Running' || st==='running');
         a.className = (isRun ? 'btn btn-stop' : 'btn btn-start');
         a.textContent = (isRun ? 'Stop' : 'Start');
-        a.onclick = async ()=>{ a.disabled=true;
-          try{
-            await http('/services','POST',{
-              // new API contract for service actions
+        a.onclick = async () => {
+          a.disabled = true;
+          const op = (String(s.Status).toLowerCase() === 'running') ? 'stop' : 'start';
+          try {
+            await http('/services','POST', {
+              // new contract
               instanceId: it.id,
-              op: (s.Status === 'Running' ? 'stop' : 'start'),
+              op,
               serviceName: s.Name,
 
-              // keep legacy fields for safety
+              // legacy fields (harmless compatibility)
               id: it.id,
               service: s.Name,
               instanceName: it.name
             });
             await list();
-          } finally { a.disabled = false; }
+          } finally {
+            a.disabled = false;
+          }
         };
+
 
         td.appendChild(a); tr.appendChild(td); body.appendChild(tr);
       });
