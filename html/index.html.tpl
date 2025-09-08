@@ -73,6 +73,8 @@
 <header>
   <div class="brand">EC2 Dashboard</div>
   <button id="logout" class="btn mono">Logout</button>
+  <!-- ADD: Profile trigger (keeps Logout untouched) -->
+  <button id="profileBtn" class="btn" type="button" style="margin-left:8px">Profile</button>
 </header>
 
 <div class="wrap">
@@ -121,6 +123,69 @@
     <div style="text-align:right;margin-top:12px"><button class="btn mono">Close</button></div>
   </form>
 </dialog>
+
+<!-- ADD: Profile modal (self-contained; minimal inline styles) -->
+<div id="profileModal" style="position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:9999;">
+  <div style="width:360px;max-width:90vw;background:#121b2b;color:#e6e9ef;border-radius:16px;padding:18px;box-shadow:0 12px 50px rgba(0,0,0,.5);">
+    <h3 style="margin:0 0 10px 0;font-size:18px;">Profile</h3>
+    <div style="display:flex;gap:8px;margin:6px 0;font-size:14px;"><div style="width:80px;color:#9aa4b2;">Name</div><div id="pfName">—</div></div>
+    <div style="display:flex;gap:8px;margin:6px 0;font-size:14px;"><div style="width:80px;color:#9aa4b2;">Email</div><div id="pfEmail">—</div></div>
+    <div style="display:flex;gap:8px;margin:6px 0;font-size:14px;"><div style="width:80px;color:#9aa4b2;">Access</div><div id="pfRole">—</div></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+      <button class="btn" id="pfClose" type="button">Close</button>
+      <button class="btn danger" id="pfLogout" type="button">Logout</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD: tiny inline script to wire Profile modal -->
+<script>
+(function(){
+  function decodeJwt(t){
+    try{
+      var p=(t||'').split('.');
+      if(p.length<2) return {};
+      var s=p[1].replace(/-/g,'+').replace(/_/g,'/');
+      return JSON.parse(atob(s))||{};
+    }catch(e){return {};}
+  }
+  function getProfile(){
+    var tok=localStorage.getItem('jwt')||'';
+    var payload=decodeJwt(tok);
+    var rawUser=localStorage.getItem('user') || payload.sub || '';
+    try{ if(rawUser && rawUser[0]==='{') rawUser=(JSON.parse(rawUser)||{}).username||payload.sub||''; }catch(e){}
+    var isEmail=/@/.test(rawUser);
+    var email=isEmail?rawUser:(/@/.test(payload.sub||'')?(payload.sub||''):'');
+    var name='';
+    if(isEmail) name=rawUser.split('@')[0];
+    else if(rawUser.includes('\\')) name=rawUser.split('\\').pop();
+    else name=rawUser || (email?email.split('@')[0]:'');
+    if(name) name=name.charAt(0).toUpperCase()+name.slice(1);
+    var role=(localStorage.getItem('role')||payload.role||'user')+'';
+    return {name:name||'—', email:email||'—', role:role||'user'};
+  }
+  function showProfile(){
+    var m=document.getElementById('profileModal'); if(!m) return;
+    var p=getProfile();
+    var n=document.getElementById('pfName'), e=document.getElementById('pfEmail'), r=document.getElementById('pfRole');
+    if(n) n.textContent=p.name; if(e) e.textContent=p.email; if(r) r.textContent=p.role;
+    m.style.display='flex';
+  }
+  function closeProfile(){ var m=document.getElementById('profileModal'); if(m) m.style.display='none'; }
+  function doLogout(){
+    localStorage.removeItem('jwt');
+    localStorage.removeItem('role');
+    localStorage.removeItem('user');
+    window.location.href='./';
+  }
+  document.addEventListener('click', function(ev){
+    var id=ev.target && ev.target.id;
+    if(id==='profileBtn'){ ev.preventDefault(); showProfile(); }
+    if(id==='pfClose'){ ev.preventDefault(); closeProfile(); }
+    if(id==='pfLogout'){ ev.preventDefault(); doLogout(); }
+  });
+})();
+</script>
 
 <script>
 const API = (localStorage.getItem("api_base_url") || "${api_base_url}");
