@@ -12,7 +12,7 @@
     ...(jwt() ? { "Authorization": "Bearer " + jwt() } : {}),
   });
 
-  // ========= ADDITIVE: Profile UI (compact CSS + modal + helpers) =========
+  // ========= ADDITIVE: Profile UI (dropdown + modal + helpers) =========
   (function injectProfileUI(){
     try {
       const css = `
@@ -30,25 +30,53 @@
         .profile-row { display:flex; gap:8px; margin: 6px 0; font-size: 14px; }
         .profile-row .k { width: 80px; color:#9aa4b2; }
         .profile-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+
+        /* Dropdown */
+        .profile-menu {
+          position:absolute; min-width: 180px; background:#121b2b; color:#e6e9ef;
+          border:1px solid #2a3a62; border-radius:12px; padding:6px;
+          box-shadow:0 12px 40px rgba(0,0,0,.45); z-index:10000; display:none;
+        }
+        .profile-menu.show { display:block; }
+        .profile-item {
+          width:100%; display:block; text-align:left; background:transparent; border:0;
+          color:#e6e9ef; padding:8px 10px; border-radius:8px; cursor:pointer; font:inherit;
+        }
+        .profile-item:hover { background:#1a243b; }
       `;
       const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
 
-      const tpl = document.createElement('div');
-      tpl.id = "profileModal";
-      tpl.className = "profile-modal";
-      tpl.innerHTML = `
-        <div class="profile-card">
-          <h3>Profile</h3>
-          <div class="profile-row"><div class="k">Name</div><div id="pfName">—</div></div>
-          <div class="profile-row"><div class="k">Email</div><div id="pfEmail">—</div></div>
-          <div class="profile-row"><div class="k">Access</div><div id="pfRole">—</div></div>
-          <div class="profile-actions">
-            <button class="btn" id="pfClose" type="button">Close</button>
-            <button class="btn danger" id="pfLogout" type="button">Logout</button>
+      // Modal (profile details)
+      if (!document.getElementById("profileModal")) {
+        const tpl = document.createElement('div');
+        tpl.id = "profileModal";
+        tpl.className = "profile-modal";
+        tpl.innerHTML = `
+          <div class="profile-card">
+            <h3>Profile</h3>
+            <div class="profile-row"><div class="k">Name</div><div id="pfName">—</div></div>
+            <div class="profile-row"><div class="k">Email</div><div id="pfEmail">—</div></div>
+            <div class="profile-row"><div class="k">Access</div><div id="pfRole">—</div></div>
+            <div class="profile-actions">
+              <button class="btn" id="pfClose" type="button">Close</button>
+              <button class="btn danger" id="pfLogout" type="button">Logout</button>
+            </div>
           </div>
-        </div>
-      `;
-      document.body.appendChild(tpl);
+        `;
+        document.body.appendChild(tpl);
+      }
+
+      // Dropdown container
+      if (!document.getElementById("pfMenu")) {
+        const m = document.createElement('div');
+        m.id = "pfMenu";
+        m.className = "profile-menu";
+        m.innerHTML = `
+          <button class="profile-item" id="pfMenuProfile" type="button">Profile</button>
+          <button class="profile-item" id="pfMenuLogout"  type="button">Sign out</button>
+        `;
+        document.body.appendChild(m);
+      }
     } catch {}
   })();
 
@@ -93,6 +121,7 @@
     if (e) e.textContent = email;
     if (r) r.textContent = role;
     m.classList.add("show");
+    pf_hideMenu();
   }
   function pf_closeProfile(){ const m = document.getElementById("profileModal"); if (m) m.classList.remove("show"); }
   function pf_logout(){
@@ -102,80 +131,60 @@
     window.location.href = "./";
   }
 
+  // Dropdown helpers
+  function pf_hideMenu(){ const d=document.getElementById('pfMenu'); if(d) d.classList.remove('show'); }
+  function pf_toggleMenu(anchor){
+    const d = document.getElementById('pfMenu');
+    if (!d || !anchor) return;
+    const r = anchor.getBoundingClientRect();
+    // place below, right-aligned to button
+    d.style.top = (window.scrollY + r.bottom + 8) + "px";
+    d.style.left = (window.scrollX + r.right - Math.max(180, d.offsetWidth||180)) + "px";
+    d.classList.toggle('show');
+  }
+
   document.addEventListener("click", (e)=>{
     if (e.target && e.target.id === "pfClose")  { e.preventDefault(); pf_closeProfile(); }
     if (e.target && e.target.id === "pfLogout") { e.preventDefault(); pf_logout(); }
-    if (e.target && e.target.id === "profileBtn"){ e.preventDefault(); pf_showProfile(); }
+    if (e.target && e.target.id === "pfMenuProfile"){ e.preventDefault(); pf_showProfile(); }
+    if (e.target && e.target.id === "pfMenuLogout"){ e.preventDefault(); pf_logout(); }
   });
 
-  // Robust repurposing of an existing "Logout" button to "Profile"
-  function pf_tryRepurposeLogout(){
-    try {
-      // 1) common selectors
-      const selList = [
-        '#logout', '.logout', 'button#logout', 'a#logout',
-        'button[data-action="logout"]', 'a[data-action="logout"]'
-      ];
-      for (const sel of selList) {
-        const el = document.querySelector(sel);
-        if (el) { pf_rewireToProfile(el); return true; }
-      }
-      // 2) find by visible text content "Logout"
-      const allBtns = Array.from(document.querySelectorAll('button, a'));
-      for (const el of allBtns) {
-        const txt = (el.textContent || '').trim().toLowerCase();
-        if (txt === 'logout') { pf_rewireToProfile(el); return true; }
-      }
-      return false;
-    } catch { return false; }
-  }
+  // Click-outside to close dropdown
+  document.addEventListener("click", (e)=>{
+    const menu = document.getElementById('pfMenu');
+    const btn  = document.getElementById('logout'); // repurposed as Profile button
+    if (!menu) return;
+    if (menu.contains(e.target) || (btn && btn.contains(e.target))) return;
+    pf_hideMenu();
+  }, true);
 
-  function pf_rewireToProfile(btn){
+  // Repurpose the existing Logout button into a Profile menu trigger
+  function pf_wireTopRight(){
     try {
-      btn.id = "profileBtn";
+      // Hide any extra Profile button from HTML (keep DOM, just hide)
+      const extra = document.getElementById('profileBtn');
+      if (extra) extra.style.display = 'none';
+
+      const btn = document.getElementById('logout');
+      if (!btn) return;
+      // Rename and hook as a menu trigger
       btn.textContent = "Profile";
-      btn.classList.add("xs");
-      btn.removeAttribute('href'); // avoid navigation if it was an <a>
-      btn.onclick = (e)=>{ e.preventDefault(); pf_showProfile(); };
+      btn.onclick = (e)=>{ e.preventDefault(); pf_toggleMenu(btn); };
     } catch {}
   }
 
-  function pf_initProfileButton(){
-    // First attempt immediately (in case button is already present)
-    if (pf_tryRepurposeLogout()) return;
-
-    // Fallback: if no Logout found, create a floating Profile button (non-destructive)
-    const floating = document.getElementById("profileBtn");
-    if (!floating) {
-      const b = document.createElement("button");
-      b.id = "profileBtn";
-      b.className = "btn xs";
-      b.textContent = "Profile";
-      b.style.position = "fixed";
-      b.style.top = "10px";
-      b.style.right = "10px";
-      b.style.zIndex = "9999";
-      b.onclick = (e)=>{ e.preventDefault(); pf_showProfile(); };
-      document.body.appendChild(b);
-    }
-
-    // Also observe DOM mutations (handles SPA loads / late renders)
-    const obs = new MutationObserver((_muts)=>{
-      pf_tryRepurposeLogout();
-    });
-    obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
-    // Give it a few periodic retries too (defensive)
-    let tries = 0;
-    const t = setInterval(()=>{
-      if (pf_tryRepurposeLogout() || (++tries > 10)) clearInterval(t);
-    }, 500);
-  }
-
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", pf_initProfileButton);
+    document.addEventListener("DOMContentLoaded", pf_wireTopRight);
   } else {
-    pf_initProfileButton();
+    pf_wireTopRight();
   }
+
+  // Also keep support for the inline Profile button (if present)
+  document.addEventListener("click", (e)=>{
+    if (e.target && e.target.id === "profileBtn"){ e.preventDefault(); pf_toggleMenu(document.getElementById('logout') || e.target); }
+  });
+
   // ========= /ADDITIVE: Profile UI =========
 
   // ------------ Helpers ------------
