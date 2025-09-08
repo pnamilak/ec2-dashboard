@@ -12,6 +12,126 @@
     ...(jwt() ? { "Authorization": "Bearer " + jwt() } : {}),
   });
 
+  // ========= ADDITIVE: Profile UI (compact CSS + modal + helpers) =========
+  (function injectProfileUI(){
+    try {
+      const css = `
+        .btn.xs { padding: 4px 8px !important; font-size: 11px !important; border-radius: 8px !important; }
+        .profile-modal {
+          position: fixed; inset: 0; display:none; align-items:center; justify-content:center;
+          background: rgba(0,0,0,.45); z-index: 9999;
+        }
+        .profile-modal.show { display:flex; }
+        .profile-card {
+          width: 360px; max-width: 90vw; background: #121b2b; color: #e6e9ef;
+          border-radius: 16px; padding: 18px; box-shadow: 0 12px 50px rgba(0,0,0,.5);
+        }
+        .profile-card h3 { margin: 0 0 10px 0; font-size: 18px; }
+        .profile-row { display:flex; gap:8px; margin: 6px 0; font-size: 14px; }
+        .profile-row .k { width: 80px; color:#9aa4b2; }
+        .profile-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+      `;
+      const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s);
+
+      const tpl = document.createElement('div');
+      tpl.id = "profileModal";
+      tpl.className = "profile-modal";
+      tpl.innerHTML = `
+        <div class="profile-card">
+          <h3>Profile</h3>
+          <div class="profile-row"><div class="k">Name</div><div id="pfName">—</div></div>
+          <div class="profile-row"><div class="k">Email</div><div id="pfEmail">—</div></div>
+          <div class="profile-row"><div class="k">Access</div><div id="pfRole">—</div></div>
+          <div class="profile-actions">
+            <button class="btn" id="pfClose" type="button">Close</button>
+            <button class="btn danger" id="pfLogout" type="button">Logout</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(tpl);
+    } catch {}
+  })();
+
+  function pf_decodeJwtPayload(t){
+    try {
+      const parts = (t||"").split(".");
+      if (parts.length < 2) return {};
+      const json = atob(parts[1].replace(/-/g,"+").replace(/_/g,"/"));
+      return JSON.parse(json)||{};
+    } catch { return {}; }
+  }
+
+  function pf_getProfile(){
+    const tok = localStorage.getItem("jwt") || "";
+    const role = (localStorage.getItem("role") || "").toLowerCase();
+    const payload = pf_decodeJwtPayload(tok);
+    let rawUser = localStorage.getItem("user") || payload.sub || "";
+    try {
+      if (rawUser && rawUser.startsWith("{")) {
+        rawUser = (JSON.parse(rawUser)||{}).username || payload.sub || "";
+      }
+    } catch {}
+
+    const isEmail = /@/.test(rawUser);
+    const email = isEmail ? rawUser : (/@/.test(payload.sub||"") ? (payload.sub||"") : "");
+    let name = "";
+    if (isEmail) name = rawUser.split("@")[0];
+    else if (rawUser.includes("\\")) name = rawUser.split("\\").pop();
+    else name = rawUser || (email ? email.split("@")[0] : "");
+    if (name) name = name.charAt(0).toUpperCase() + name.slice(1);
+    return { name: name || "—", email: email || "—", role: role || payload.role || "user" };
+  }
+
+  function pf_showProfile(){
+    const m = document.getElementById("profileModal");
+    if (!m) return;
+    const {name, email, role} = pf_getProfile();
+    const n = document.getElementById("pfName");
+    const e = document.getElementById("pfEmail");
+    const r = document.getElementById("pfRole");
+    if (n) n.textContent = name;
+    if (e) e.textContent = email;
+    if (r) r.textContent = role;
+    m.classList.add("show");
+  }
+  function pf_closeProfile(){ const m = document.getElementById("profileModal"); if (m) m.classList.remove("show"); }
+  function pf_logout(){
+    localStorage.removeItem("jwt");
+    localStorage.removeItem("role");
+    localStorage.removeItem("user");
+    window.location.href = "./";
+  }
+
+  document.addEventListener("click", (e)=>{
+    if (e.target && e.target.id === "pfClose")  { e.preventDefault(); pf_closeProfile(); }
+    if (e.target && e.target.id === "pfLogout") { e.preventDefault(); pf_logout(); }
+    if (e.target && e.target.id === "profileBtn"){ e.preventDefault(); pf_showProfile(); }
+  });
+
+  function pf_initProfileButton(){
+    try {
+      // Create a dedicated Profile button (non-destructive; we don't repurpose any existing element)
+      if (!document.getElementById("profileBtn")) {
+        const b = document.createElement("button");
+        b.id = "profileBtn";
+        b.className = "btn xs";
+        b.textContent = "Profile";
+        b.style.position = "fixed";
+        b.style.top = "10px";
+        b.style.right = "10px";
+        b.style.zIndex = "9999";
+        document.body.appendChild(b);
+      }
+    } catch {}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", pf_initProfileButton);
+  } else {
+    pf_initProfileButton();
+  }
+  // ========= /ADDITIVE: Profile UI =========
+
   // ------------ Helpers ------------
   const q = (sel, el=document) => el.querySelector(sel);
   const qq = (sel, el=document) => Array.from(el.querySelectorAll(sel));
