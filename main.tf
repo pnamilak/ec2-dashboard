@@ -438,10 +438,34 @@ data "aws_instances" "stopped" {
   }
 }
 
+# >>> NEW: resolve instances explicitly by Name (when provided via var.target_instance_names)
+data "aws_instances" "names_running" {
+  count = length(try(var.target_instance_names, [])) > 0 ? 1 : 0
+  instance_state_names = ["running"]
+  filter {
+    name   = "tag:Name"
+    values = var.target_instance_names
+  }
+}
+
+data "aws_instances" "names_stopped" {
+  count = length(try(var.target_instance_names, [])) > 0 ? 1 : 0
+  instance_state_names = ["stopped"]
+  filter {
+    name   = "tag:Name"
+    values = var.target_instance_names
+  }
+}
+
 locals {
   running_ids = try(data.aws_instances.running.ids, [])
   stopped_ids = try(data.aws_instances.stopped.ids, [])
   both_ids    = distinct(concat(local.running_ids, local.stopped_ids))
+
+  # >>> NEW: ids from explicit Name targets (if provided)
+  names_running_ids = length(try(var.target_instance_names, [])) > 0 ? try(data.aws_instances.names_running[0].ids, []) : []
+  names_stopped_ids = length(try(var.target_instance_names, [])) > 0 ? try(data.aws_instances.names_stopped[0].ids, []) : []
+  names_ids         = distinct(concat(local.names_running_ids, local.names_stopped_ids))
 
   target_map = {
     running = local.running_ids
@@ -450,7 +474,8 @@ locals {
     none    = []
   }
 
-  target_ids = lookup(local.target_map, var.assign_profile_target, [])
+  # >>> NEW: union of existing selection and explicit names (keeps both behaviors)
+  target_ids = distinct(concat(lookup(local.target_map, var.assign_profile_target, []), local.names_ids))
 }
 
 # Attach/replace profile using AWS CLI (idempotent, now forced each apply)

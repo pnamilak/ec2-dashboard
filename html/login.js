@@ -108,21 +108,67 @@
     if (e.target && e.target.id === "profileBtn"){ e.preventDefault(); pf_showProfile(); }
   });
 
-  function pf_initProfileButton(){
+  // Robust repurposing of an existing "Logout" button to "Profile"
+  function pf_tryRepurposeLogout(){
     try {
-      // Create a dedicated Profile button (non-destructive; we don't repurpose any existing element)
-      if (!document.getElementById("profileBtn")) {
-        const b = document.createElement("button");
-        b.id = "profileBtn";
-        b.className = "btn xs";
-        b.textContent = "Profile";
-        b.style.position = "fixed";
-        b.style.top = "10px";
-        b.style.right = "10px";
-        b.style.zIndex = "9999";
-        document.body.appendChild(b);
+      // 1) common selectors
+      const selList = [
+        '#logout', '.logout', 'button#logout', 'a#logout',
+        'button[data-action="logout"]', 'a[data-action="logout"]'
+      ];
+      for (const sel of selList) {
+        const el = document.querySelector(sel);
+        if (el) { pf_rewireToProfile(el); return true; }
       }
+      // 2) find by visible text content "Logout"
+      const allBtns = Array.from(document.querySelectorAll('button, a'));
+      for (const el of allBtns) {
+        const txt = (el.textContent || '').trim().toLowerCase();
+        if (txt === 'logout') { pf_rewireToProfile(el); return true; }
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  function pf_rewireToProfile(btn){
+    try {
+      btn.id = "profileBtn";
+      btn.textContent = "Profile";
+      btn.classList.add("xs");
+      btn.removeAttribute('href'); // avoid navigation if it was an <a>
+      btn.onclick = (e)=>{ e.preventDefault(); pf_showProfile(); };
     } catch {}
+  }
+
+  function pf_initProfileButton(){
+    // First attempt immediately (in case button is already present)
+    if (pf_tryRepurposeLogout()) return;
+
+    // Fallback: if no Logout found, create a floating Profile button (non-destructive)
+    const floating = document.getElementById("profileBtn");
+    if (!floating) {
+      const b = document.createElement("button");
+      b.id = "profileBtn";
+      b.className = "btn xs";
+      b.textContent = "Profile";
+      b.style.position = "fixed";
+      b.style.top = "10px";
+      b.style.right = "10px";
+      b.style.zIndex = "9999";
+      b.onclick = (e)=>{ e.preventDefault(); pf_showProfile(); };
+      document.body.appendChild(b);
+    }
+
+    // Also observe DOM mutations (handles SPA loads / late renders)
+    const obs = new MutationObserver((_muts)=>{
+      pf_tryRepurposeLogout();
+    });
+    obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    // Give it a few periodic retries too (defensive)
+    let tries = 0;
+    const t = setInterval(()=>{
+      if (pf_tryRepurposeLogout() || (++tries > 10)) clearInterval(t);
+    }, 500);
   }
 
   if (document.readyState === "loading") {

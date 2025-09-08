@@ -32,6 +32,12 @@ variable "app_users" {
   type    = map(string)
   default = {}
 }
+# NEW: Specific instance names (supports wildcards like "NAQA6*"). Leave empty to ignore.
+variable "target_instance_names" {
+  description = "Attach SSM profile to these EC2 Name tags in addition to assign_profile_target selection."
+  type        = list(string)
+  default     = []
+}
 
 # Attach SSM instance profile to: none|running|stopped|both
 variable "assign_profile_target" {
