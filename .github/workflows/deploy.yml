@@ -24,11 +24,11 @@ on:
       ALLOWED_EMAIL_DOMAIN:
         description: "Allowed email domain for OTP/login (deploy only)"
         required: false
-        default: "philips.com"
+        default: "gmail.com"
       SES_SENDER_EMAIL:
         description: "SES verified sender address (deploy only)"
         required: false
-        default: "pranaykumar.namilakonda@philips.com"
+        default: "noreplyzingamazigle@gmail.com"
       ASSIGN_PROFILE_TARGET:
         description: "Attach SSM instance profile to which EC2s?"
         required: true
@@ -46,7 +46,7 @@ on:
       ALLOWED_VIEWER_IPS:
         description: 'Comma-separated viewer IPs/CIDRs to ALLOW at CloudFront (e.g. "203.0.113.10,198.51.100.0/24")'
         required: false
-        default: "18.224.131.147/32"
+        default: "102.129.145.86/32"
 
 
 jobs:
