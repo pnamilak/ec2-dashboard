@@ -15,7 +15,7 @@ variable "website_bucket_name" {
 variable "env_names" {
   description = "Environment tokens to match in EC2 Name tag (tabs)."
   type        = list(string)
-  default     = ["naqa1","naqa2","naqa3","naqa6","apqa1","euqa1","dm-dev","dm-qa"]
+  default     = ["naqa1","naqa2","naqa3","naqa6","apqa1","euqa1","dm-dev","dm-qa","cnqa1"]
 }
 
 variable "allowed_email_domain" {
@@ -41,4 +41,11 @@ variable "assign_profile_target" {
     condition     = contains(["none","running","stopped","both"], var.assign_profile_target)
     error_message = "assign_profile_target must be one of none|running|stopped|both"
   }
+}
+
+# NEW: WAF allow-list input (IPv4 CIDRs)
+variable "allowed_ip_cidrs" {
+  description = "List of client IPv4 CIDRs allowed to access the CloudFront URL (empty list disables WAF)."
+  type        = list(string)
+  default     = []
 }

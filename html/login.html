@@ -60,12 +60,22 @@
     var ovt = localStorage.getItem("ovt")||"";
     $("msg").textContent="";
     http("/login","POST",{username:u,password:p,ovt:ovt}).then(function(res){
+      if (!res || res.ok === false) {
+        throw new Error((res && res.error) || "Login failed");
+      }
+      var tok = res.jwt || res.token || "";
+      if (!tok) throw new Error("Login did not return a token");
+
       localStorage.removeItem("ovt"); localStorage.removeItem("ovt_exp");
-      localStorage.setItem("jwt", res.token);
-      localStorage.setItem("role", res.role);
-      localStorage.setItem("user", JSON.stringify(res.user));
+      localStorage.setItem("jwt", tok);
+      localStorage.setItem("role", res.role || "user");
+      localStorage.setItem("user", typeof res.user === "string" ? res.user : JSON.stringify(res.user || ""));
+
       window.location.href = "./";
-    }).catch(function(e){ $("msg").textContent=e.message; });
+    }).catch(function(e){
+      $("msg").textContent = e.message || "Login failed";
+    });
+
   };
 </script>
 </body>

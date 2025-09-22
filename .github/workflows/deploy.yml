@@ -12,7 +12,7 @@ on:
       ENVIRONMENT:
         description: "GitHub Environment name (must exist)"
         required: true
-        default: "mypersonalAWS"
+        default: "AWS1057"
       AWS_REGION:
         description: "AWS Region"
         required: true
@@ -24,15 +24,15 @@ on:
       ALLOWED_EMAIL_DOMAIN:
         description: "Allowed email domain for OTP/login (deploy only)"
         required: false
-        default: "gmail.com"
+        default: "philips.com"
       SES_SENDER_EMAIL:
         description: "SES verified sender address (deploy only)"
         required: false
-        default: "noreplyzingamazigle@gmail.com"
+        default: "pranaykumar.namilakonda@philips.com"
       ASSIGN_PROFILE_TARGET:
         description: "Attach SSM instance profile to which EC2s?"
         required: true
-        default: "both"
+        default: "none"
         type: choice
         options: [none, running, stopped, both]
       TF_BACKEND_BUCKET:
@@ -43,6 +43,11 @@ on:
         description: "(Optional) Pre-existing DynamoDB lock table. Leave blank to auto-create."
         required: false
         default: ""
+      ALLOWED_VIEWER_IPS:
+        description: 'Comma-separated viewer IPs/CIDRs to ALLOW at CloudFront (e.g. "203.0.113.10,198.51.100.0/24")'
+        required: false
+        default: "18.224.131.147/32"
+
 
 jobs:
   run:
@@ -160,7 +165,28 @@ jobs:
             -backend-config="region=${{ inputs.AWS_REGION }}" \
             -backend-config="dynamodb_table=${{ steps.backend.outputs.table }}"
 
-      # -------------------- DEPLOY --------------------
+      - name: Normalize ALLOWED_VIEWER_IPS -> TF_VAR_allowed_ip_cidrs
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="${{ inputs.ALLOWED_VIEWER_IPS }}"
+          echo "$RAW" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d' > /tmp/ips.txt
+
+          arr=()
+          while IFS= read -r line; do arr+=("$line"); done < /tmp/ips.txt
+
+          json="["; first=1
+          for v in "${arr[@]}"; do
+            esc=${v//\\/\\\\}; esc=${esc//\"/\\\"}
+            if [ $first -eq 1 ]; then json="$json\"$esc\""; first=0; else json="$json, \"$esc\""; fi
+          done
+          json="$json]"
+
+          echo "TF_VAR_allowed_ip_cidrs=$json" >> $GITHUB_ENV
+
+
+      
+            # -------------------- DEPLOY --------------------
       - name: Terraform Apply
         if: ${{ inputs.ACTION == 'deploy' }}
         env:

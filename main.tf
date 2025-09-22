@@ -2,12 +2,21 @@
 # main.tf  — EC2 Dashboard (site + API + SSM attach)
 #############################################
 
+# CLOUDFRONT-scope WAF must be managed via us-east-1
+provider "aws" {
+  alias  = "global"
+  region = "us-east-1"
+}
+
 locals {
   site_bucket_name = var.website_bucket_name != "" ? var.website_bucket_name : "${var.project_name}-${random_id.site.hex}-site"
   name_filters     = [for e in var.env_names : "*${e}*"]
-  account_id     = data.aws_caller_identity.current.account_id
-  users_path_arn = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/users/*"
-  jwt_param_arn  = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/jwt-secret"
+  account_id       = data.aws_caller_identity.current.account_id
+  users_path_arn   = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/users/*"
+  jwt_param_arn    = "arn:aws:ssm:${var.aws_region}:${local.account_id}:parameter/${var.project_name}/jwt-secret"
+
+  # NEW: enable WAF when any CIDRs are supplied
+  waf_enabled      = length(try(var.allowed_ip_cidrs, [])) > 0
 }
 
 # Who am I? (used to build ARNs without "*")
@@ -19,26 +28,19 @@ resource "random_id" "site" {
 
 # ----------------------- Ensure SSM service-linked role exists (idempotent) -----------------------
 resource "null_resource" "ensure_ssm_slr" {
-  triggers = {
-    region = var.aws_region
-  }
+  triggers = { region = var.aws_region }
 
   provisioner "local-exec" {
     when        = create
-    interpreter = ["/bin/bash", "-lc"]
-    command     = <<-EOT
-      set -euo pipefail
-      aws iam get-role --role-name AWSServiceRoleForAmazonSSM >/dev/null 2>&1 || \
-      aws iam create-service-linked-role --aws-service-name ssm.amazonaws.com >/dev/null
-      echo "SSM service-linked role is present."
-    EOT
+    interpreter = ["/usr/bin/env", "bash", "-c"]
+    command     = "aws iam get-role --role-name AWSServiceRoleForAmazonSSM >/dev/null 2>&1 || aws iam create-service-linked-role --aws-service-name ssm.amazonaws.com >/dev/null; echo 'SSM service-linked role is present.'"
   }
 }
 
 # ----------------------- S3 Website -----------------------
 resource "aws_s3_bucket" "website" {
   bucket        = local.site_bucket_name
-  force_destroy = false
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_ownership_controls" "site" {
@@ -52,9 +54,9 @@ resource "aws_s3_bucket_ownership_controls" "site" {
 resource "aws_s3_bucket_public_access_block" "site" {
   bucket                  = aws_s3_bucket.website.id
   block_public_acls       = true
-  block_public_policy     = true     # changed to true
+  block_public_policy     = true
   ignore_public_acls      = true
-  restrict_public_buckets = true     # changed to true
+  restrict_public_buckets = true
 }
 
 # ----------------------- CloudFront (OAC) -----------------------
@@ -66,6 +68,58 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   signing_protocol                  = "sigv4"
 }
 
+# NEW: WAF allow-list (IP set + Web ACL). Counted so it's optional.
+resource "aws_wafv2_ip_set" "cf_allowlist" {
+  provider           = aws.global
+  count              = local.waf_enabled ? 1 : 0
+  name               = "${var.project_name}-cf-allow-ips"
+  description        = "Allowed client IPs for CloudFront"
+  scope              = "CLOUDFRONT"
+  ip_address_version = "IPV4"
+  addresses          = var.allowed_ip_cidrs
+}
+
+resource "aws_wafv2_web_acl" "cf_acl" {
+  provider    = aws.global
+  count       = local.waf_enabled ? 1 : 0
+  name        = "${var.project_name}-cf-acl"
+  description = "Restrict CloudFront to allowed IPs"
+  scope       = "CLOUDFRONT"
+
+  # Required at the top level
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "EC2DashboardWebACL"
+    sampled_requests_enabled   = true
+  }
+
+  default_action {
+    block {}
+  }
+
+  rule {
+    name     = "AllowListedIPs"
+    priority = 1
+
+    action {
+      allow {}
+    }
+
+    statement {
+      ip_set_reference_statement {
+        arn = aws_wafv2_ip_set.cf_allowlist[0].arn
+      }
+    }
+
+    # Required inside every rule
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowListedIPs"
+      sampled_requests_enabled   = true
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "site" {
   enabled             = true
   comment             = "${var.project_name} static site"
@@ -73,6 +127,9 @@ resource "aws_cloudfront_distribution" "site" {
   is_ipv6_enabled     = false
   price_class         = "PriceClass_All"
   wait_for_deployment = true
+
+  # NEW: attach Web ACL when enabled
+  web_acl_id = local.waf_enabled ? aws_wafv2_web_acl.cf_acl[0].arn : null
 
   origin {
     domain_name              = aws_s3_bucket.website.bucket_regional_domain_name
@@ -175,6 +232,13 @@ data "archive_file" "auth_zip" {
   output_path = "lambda/authorizer.zip"
 }
 
+# Package for create-user Lambda
+data "archive_file" "create_user_zip" {
+  type        = "zip"
+  source_file = "lambda/create_user.py"
+  output_path = "lambda/create_user.zip"
+}
+
 # ----------------------- Lambda Role -----------------------
 resource "aws_iam_role" "lambda_exec" {
   name = "${var.project_name}-lambda-exec"
@@ -198,10 +262,15 @@ resource "aws_iam_role_policy" "lambda_policy" {
     Statement = [
       # CloudWatch Logs
       {
-        Effect   = "Allow",
-        Action   = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
-        Resource = "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*"
+        Effect = "Allow",
+        Action = ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],
+        Resource = [
+          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.api.function_name}:*",
+          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.authorizer.function_name}:*",
+          "arn:aws:logs:${var.aws_region}:${local.account_id}:log-group:/aws/lambda/${aws_lambda_function.create_user.function_name}:*",
+        ]
       },
+
 
       # DynamoDB OTP table
       {
@@ -238,7 +307,7 @@ resource "aws_iam_role_policy" "lambda_policy" {
         Resource = "arn:aws:ses:${var.aws_region}:${local.account_id}:identity/*"
       },
 
-      # >>> NEW: EC2 read (for /instances)
+      # >>> EC2 read (for /instances)
       {
         Effect   = "Allow",
         Action   = [
@@ -249,16 +318,22 @@ resource "aws_iam_role_policy" "lambda_policy" {
         Resource = "*"
       },
 
-      # >>> NEW: EC2 instance actions (for /instance-action and /bulk-action)
+      # >>> EC2 instance actions (for /instance-action and /bulk-action)
       {
         Effect   = "Allow",
         Action   = ["ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances"],
         Resource = "arn:aws:ec2:${var.aws_region}:${local.account_id}:instance/*"
+      },
+
+      # SSM PutParameter for create-user Lambda
+      {
+        Effect = "Allow",
+        Action = ["ssm:PutParameter"],
+        Resource = local.users_path_arn
       }
     ]
   })
 }
-
 
 # ----------------------- Lambdas -----------------------
 resource "aws_lambda_function" "api" {
@@ -266,8 +341,10 @@ resource "aws_lambda_function" "api" {
   role          = aws_iam_role.lambda_exec.arn
   runtime       = "python3.12"
   handler       = "handler.lambda_handler"
-  filename      = data.archive_file.api_zip.output_path
-  timeout       = 30
+  filename         = data.archive_file.api_zip.output_path
+  source_code_hash = data.archive_file.api_zip.output_base64sha256
+  timeout          = 30
+
 
   environment {
     variables = {
@@ -287,13 +364,33 @@ resource "aws_lambda_function" "authorizer" {
   role          = aws_iam_role.lambda_exec.arn
   runtime       = "python3.12"
   handler       = "authorizer.lambda_handler"
-  filename      = data.archive_file.auth_zip.output_path
-  timeout       = 10
+  filename         = data.archive_file.auth_zip.output_path
+  source_code_hash = data.archive_file.auth_zip.output_base64sha256
+  timeout          = 10
+
 
   environment {
     variables = {
       REGION    = var.aws_region
       JWT_PARAM = aws_ssm_parameter.jwt_secret.name
+    }
+  }
+}
+
+resource "aws_lambda_function" "create_user" {
+  function_name = "${var.project_name}-create-user"
+  role          = aws_iam_role.lambda_exec.arn
+  runtime       = "python3.12"
+  handler       = "create_user.handler"
+  filename         = data.archive_file.create_user_zip.output_path
+  source_code_hash = data.archive_file.create_user_zip.output_base64sha256
+  timeout          = 10
+
+
+  environment {
+    variables = {
+      REGION            = var.aws_region
+      PARAM_USER_PREFIX = "/${var.project_name}/users"
     }
   }
 }
@@ -326,6 +423,21 @@ resource "aws_apigatewayv2_authorizer" "auth" {
   authorizer_payload_format_version = "2.0"
   enable_simple_responses           = true
   authorizer_result_ttl_in_seconds  = 300
+}
+
+resource "aws_apigatewayv2_integration" "create_user_lm" {
+  api_id                 = aws_apigatewayv2_api.api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.create_user.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "r_create_user" {
+  api_id             = aws_apigatewayv2_api.api.id
+  route_key          = "POST /create-user"
+  target             = "integrations/${aws_apigatewayv2_integration.create_user_lm.id}"
+  authorization_type = "CUSTOM"
+  authorizer_id      = aws_apigatewayv2_authorizer.auth.id
 }
 
 # Public routes
@@ -393,6 +505,14 @@ resource "aws_lambda_permission" "apigw_invoke_auth" {
   statement_id  = "AllowAPIGInvokeAuth"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.authorizer.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "apigw_invoke_create_user" {
+  statement_id  = "AllowAPIGInvokeCreateUser"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.create_user.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }
@@ -494,7 +614,7 @@ resource "null_resource" "attach_ssm_profile" {
         aws ec2 describe-iam-instance-profile-associations \
           --filters Name=instance-id,Values="$IID" \
           --region "$REGION" \
-          --query "IamInstanceProfileAssociations[?State==\`associated\`][0].$1" \
+          --query "IamInstanceProfileAssociations[?State==\\\`associated\\\`][0].$1" \
           --output text 2>/dev/null || true
       }
 

@@ -1,14 +1,17 @@
 # lambda/handler.py
 # -----------------------------------------------------------------------------
 # EC2 Dashboard API – OTP, login, instances, actions, services.
-# No UI/flow changes. Only /services implementation is hardened.
+# No UI/flow changes. /services now supports Windows (PowerShell) AND Linux (systemd).
+# Also: IIS reset is blocked for SQL/Redis/Rabbit instances (name heuristic).
+# + Linux services fallback for redis/rabbit when first pass returns no rows.
 # -----------------------------------------------------------------------------
-
-import os, json, time, hmac, base64, hashlib, random
+import json, re, shlex, subprocess
+import os, time, hmac, base64, hashlib, random
 from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
+
 
 # ---- extras used only by services stdout parsing ----
 import io, csv, re
@@ -44,9 +47,34 @@ def _ok(ok=True, **k):  return {"ok": ok, **k}
 def _err(code, **k):    return {"ok": False, "error": code, **k}
 
 def _json(status, body, headers=None):
-    h = {"Content-Type":"application/json","Access-Control-Allow-Origin":"*"}
-    if headers: h.update(headers)
-    return {"statusCode":status,"headers":h,"body":json.dumps(body, default=str)}
+    h = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "authorization, Authorization, content-type, Content-Type",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    }
+    if headers:
+        h.update(headers)
+    return {
+        "statusCode": status,
+        "headers": h,
+        "body": json.dumps(body, default=str),
+    }
+
+
+# --- RBAC helpers ---
+def _auth_ctx(event):
+    a = (event.get("requestContext") or {}).get("authorizer") or {}
+    return a.get("lambda") or a
+
+def _caller_role(event) -> str:
+    return (_auth_ctx(event).get("role") or "").lower()
+
+def _require_admin(event):
+    role = _caller_role(event)
+    if role not in ("admin", "owner"):
+        return _json(403, {"ok": False, "error": "forbidden (readonly user)"})
+    return None
 
 def _read_body(event):
     body = event.get("body")
@@ -95,6 +123,7 @@ def _get_user_record(username):
                     "password": obj.get("password") or obj.get("hash"),
                     "role": (obj.get("role") or "user").strip() or "user",
                     "email": (obj.get("email") or "").strip().lower() or None,
+                    "name": (obj.get("name") or obj.get("displayName") or "").strip() or None,
                 }
             else:
                 rec = {"username": username, "password": raw, "role": "user", "email": None}
@@ -107,7 +136,9 @@ def _get_user_record(username):
             except ClientError: role = "user"
             try: email = (_ssm_get(f"{base}/email", False) or "").strip().lower() or None
             except ClientError: email = None
-            rec = {"username": username, "password": pwd, "role": role, "email": email}
+            try: name = (_ssm_get(f"{base}/name", False) or "").strip() or None
+            except ClientError: pass
+            rec = {"username": username, "password": pwd, "role": role, "email": email, "name": name if "name" in locals() else None}
         except ClientError:
             rec = None
 
@@ -219,17 +250,33 @@ def handle_verify_otp(body):
 
 def handle_login(body):
     try:
-        # Mode A: OTP
+        # ---------------- Mode A: OTP ----------------
         email = (body.get("email") or "").strip().lower()
         code  = (body.get("code") or "").strip()
         if email and code:
             res = ddb.Table(OTP_TABLE_NAME).get_item(Key={"email": email}).get("Item")
-            if not res or res.get("code") != code or int(res.get("expires",0)) < int(time.time()):
+            if (not res) or (res.get("code") != code) or (int(res.get("expires", 0)) < int(time.time())):
                 return _json(200, _err("invalid_login"))
-            token = _sign_jwt({"sub": email, "role":"user"})
-            return _json(200, _ok(token=token, role="user", user={"username": email}))
 
-        # Mode B: user/pass (+ optional OVT)
+            # Name = local-part of email
+            otp_name = email.split("@")[0]
+
+            token = _sign_jwt({
+                "sub": email,
+                "username": email,
+                "role": "user",
+                "access": "user",
+                "email": email,
+                "name": otp_name
+            })
+
+            return _json(200, _ok(
+                token=token,
+                role="user",
+                user={"username": email, "email": email, "name": otp_name}
+            ))
+
+        # ------------- Mode B: user/pass (+ optional OVT) -------------
         username = (body.get("username") or "").strip()
         password = (body.get("password") or "")
         ovt      = (body.get("ovt") or "").strip()
@@ -240,13 +287,30 @@ def handle_login(body):
             return _json(200, _err("ovt_invalid"))
 
         rec = _get_user_record(username)
-        if not rec or not _verify_password(rec.get("password",""), password):
+        if not rec or not _verify_password(rec.get("password", ""), password):
             return _json(200, _err("invalid_login"))
 
-        token = _sign_jwt({"sub": username, "role": rec.get("role","user")})
-        return _json(200, _ok(token=token, role=rec.get("role","user"), user={"username": username}))
+        role  = (rec.get("access") or rec.get("role") or "user")
+        email = (rec.get("email") or "")
+        name  = (rec.get("name")  or username)
+
+        token = _sign_jwt({
+                "sub": username,
+                "username": username,
+                "role": role,
+                "access": role,
+                "email": email,
+                "name": name
+        })
+
+        return _json(200, _ok(
+            token=token,
+            role=role,
+            user={"username": username, "email": email, "name": name}
+        ))
     except Exception as e:
         return _json(200, _err("unexpected", message=str(e)))
+
 
 # ---------- EC2 ----------
 def _name_tag(tags):
@@ -343,21 +407,57 @@ def handle_bulk(body):
     except ClientError as e:
         return _json(200, _err("aws_error", message=str(e)))
 
-# ---------- Services via SSM (HARDENED) ----------
+# ---------- Services via SSM (Windows + Linux) ----------
 def _is_windows_instance(instance_id: str) -> bool:
+    """
+    Decide Windows vs Linux/mac. Prefer SSM (PlatformType), then fall back to EC2 metadata.
+    """
+    # 1) SSM is authoritative when the agent is registered
+    try:
+        info = ssm.describe_instance_information(
+            Filters=[{"Key": "InstanceIds", "Values": [instance_id]}]
+        )
+        lst = info.get("InstanceInformationList") or []
+        if lst:
+            ptype = (lst[0].get("PlatformType") or "").lower()   # "windows" | "linux" | "macos"
+            # tiny debug breadcrumb in logs
+            try: print(f"DBG/osdetect SSM PlatformType for {instance_id}: {ptype}")
+            except: pass
+            if ptype:
+                return ptype == "windows"
+    except ClientError:
+        pass
+
+    # 2) Fallback to EC2 fields (older images sometimes don’t set Platform)
     try:
         res = ec2.describe_instances(InstanceIds=[instance_id])
         for r in res.get("Reservations", []):
             for inst in r.get("Instances", []):
-                plat = (inst.get("Platform") or "").lower()
-                if plat == "windows":
-                    return True
-                platd = (inst.get("PlatformDetails") or "").lower()
-                if "windows" in platd:
+                plat = (inst.get("Platform") or "").lower()                 # "windows" or ""
+                platd = (inst.get("PlatformDetails") or "").lower()         # e.g. "linux/unix", "windows"
+                try: print(f"DBG/osdetect EC2 Platform='{plat}' PlatformDetails='{platd}' for {instance_id}")
+                except: pass
+                if plat == "windows" or "windows" in platd:
                     return True
     except ClientError:
         pass
+
+    # default assume non-Windows
     return False
+
+
+def _instance_name(instance_id: str) -> str:
+    """Best-effort EC2 Name tag lookup (empty if not found)."""
+    try:
+        res = ec2.describe_instances(InstanceIds=[instance_id])
+        for r in res.get("Reservations", []):
+            for inst in r.get("Instances", []):
+                for t in inst.get("Tags", []) or []:
+                    if t.get("Key") == "Name":
+                        return t.get("Value") or ""
+    except ClientError:
+        pass
+    return ""
 
 def _ssm_online(instance_id: str) -> bool:
     try:
@@ -399,6 +499,77 @@ def _run_powershell(instance_id: str, commands: list[str], timeout=60) -> tuple[
         time.sleep(1.0)
 
     return False, "", "timeout"
+def parse_services_text(txt: str):
+    """
+    Convert text like:
+      Name: redis-sentinel.service
+      DisplayName: Advanced key-value store
+      Status: failed
+      Name: redis-server.service
+      DisplayName: Advanced key-value store
+      Status: active
+    into: [{'name':..., 'display':..., 'status':...}, ...]
+    """
+    if not txt:
+        return []
+    items, cur = [], {}
+    for raw in txt.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+
+        m = re.search(r'Name\s*:\s*(.+)$', s, re.I)
+        if m:
+            if cur:
+                items.append(cur)
+            cur = {'name': m.group(1).strip()}
+            continue
+
+        m = re.search(r'DisplayName\s*:\s*(.+)$', s, re.I)
+        if m:
+            cur['display'] = m.group(1).strip()
+            continue
+
+        m = re.search(r'Status\s*:\s*(.+)$', s, re.I)
+        if m:
+            st = m.group(1).strip().lower()
+            if st in ('failed', 'inactive', 'dead'):
+                st = 'stopped'
+            cur['status'] = st
+            continue
+
+    if cur:
+        items.append(cur)
+    return items
+
+def _run_shell(instance_id: str, commands: list[str], timeout=60) -> tuple[bool, str, str]:
+    """Run POSIX shell commands via SSM on Linux instances."""
+    try:
+        send = ssm.send_command(
+            InstanceIds=[instance_id],
+            DocumentName="AWS-RunShellScript",
+            Parameters={"commands": commands},
+            TimeoutSeconds=timeout,
+        )
+        cmd_id = send["Command"]["CommandId"]
+    except ClientError as e:
+        return False, "", f"send_command_error: {e}"
+
+    end_by = time.time() + timeout
+    while time.time() < end_by:
+        try:
+            inv = ssm.get_command_invocation(CommandId=cmd_id, InstanceId=instance_id)
+            status = inv.get("Status")
+            if status in ("Success","Cancelled","TimedOut","Failed"):
+                return (
+                    status == "Success",
+                    (inv.get("StandardOutputContent") or "").strip(),
+                    (inv.get("StandardErrorContent") or "").strip(),
+                )
+        except ClientError:
+            pass
+        time.sleep(1.0)
+    return False, "", "timeout"
 
 # tolerant parsers for whatever the instance prints
 def _parse_json_services(text):
@@ -412,23 +583,44 @@ def _parse_json_services(text):
 
 def _parse_csv_services(text):
     try:
+        # Only treat as CSV if the first non-empty line contains a comma
+        first = next((ln for ln in (text or "").splitlines() if ln.strip()), "")
+        if "," not in first:
+            return []
         f = io.StringIO(text)
         rdr = csv.DictReader(f)
+        # Must have at least two headers to be meaningful CSV
+        if not rdr.fieldnames or len(rdr.fieldnames) < 2:
+            return []
         rows = [{(k or "").strip(): (v or "").strip() for k, v in row.items()} for row in rdr]
-        return rows or []
+        return rows if rows else []
     except Exception:
         return []
 
+
 def _parse_keyvals_services(text):
-    blocks = re.split(r"\r?\n\s*\r?\n", (text or "").strip())
-    out = []
-    for b in blocks:
-        row = {}
-        for ln in b.splitlines():
-            m = re.match(r"^\s*([A-Za-z][\w ]+)\s*[:=]\s*(.+?)\s*$", ln)
-            if m: row[m.group(1).strip()] = m.group(2).strip()
-        if row: out.append(row)
+    lines = (text or "").splitlines()
+    out, row = [], {}
+
+    for ln in lines:
+        m = re.match(r"^\s*([A-Za-z][\w ]+)\s*[:=]\s*(.+?)\s*$", ln)
+        if not m:
+            continue
+        key, val = m.group(1).strip(), m.group(2).strip()
+
+        # start a new record whenever we see "Name:" again
+        if key.lower() == "name" and row:
+            out.append(row)
+            row = {}
+
+        row[key] = val
+
+    if row:
+        out.append(row)
     return out
+
+
+
 
 def _parse_table_services(text):
     lines = [ln for ln in (text or "").splitlines() if ln.strip()]
@@ -444,21 +636,24 @@ def _parse_table_services(text):
     return out
 
 def _parse_services_stdout(text):
-    for fn in (_parse_json_services, _parse_csv_services, _parse_keyvals_services, _parse_table_services):
+    # Prefer our key:value blocks first; CSV last to avoid false positives
+    for fn in (_parse_json_services, _parse_keyvals_services, _parse_table_services, _parse_csv_services):
         rows = fn(text)
-        if rows: return rows
+        if rows:
+            return rows
     return []
+
 
 def _norm_status(s):
     s = (s or "").strip().lower()
-    if s in ("running","started","startpending"): return "running"
-    if s in ("stopped","stoppped","stoppending"): return "stopped"
+    if s in ("running","started","startpending","active","activating"): return "running"
+    if s in ("stopped","stoppped","stoppending","inactive","failed","deactivating"): return "stopped"
     return s or "unknown"
 
 def _mk_row(src: dict):
     name = src.get("name") or src.get("Name") or src.get("service") or src.get("ServiceName") or src.get("Service") or ""
-    disp = src.get("display") or src.get("display_name") or src.get("DisplayName") or src.get("displayName") or name
-    stat = _norm_status(src.get("status") or src.get("Status") or src.get("state") or src.get("State"))
+    disp = src.get("display") or src.get("display_name") or src.get("DisplayName") or src.get("displayName") or src.get("Description") or name
+    stat = _norm_status(src.get("status") or src.get("Status") or src.get("state") or src.get("State") or src.get("ActiveState"))
     return {
         "name": name,
         "display": disp,         # what your UI reads
@@ -466,158 +661,376 @@ def _mk_row(src: dict):
         "status": stat
     }
 
-# list / control / iisreset
+# ---- Windows service listing (existing behavior) ----
+def _ps_list(mode: str, query: str):
+    if mode == "sql":
+        return [
+            '$sv = Get-Service | Where-Object { '
+            '$_.Name -like "MSSQL*" -or '
+            '$_.Name -like "SQLSERVERAGENT*" -or '
+            '$_.Name -like "SQLAgent*" -or '
+            '$_.Name -eq "SQLBrowser" -or '
+            '$_.Name -eq "SQLWriter" -or '
+            '$_.DisplayName -match "SQL Server" }',
+        ]
+    elif mode == "redis":
+        return [
+            '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }',
+        ]
+    elif mode == "rabbit":
+        return [
+            '$sv = Get-Service | Where-Object { $_.Name -match "rabbit" -or $_.DisplayName -match "rabbit" }',
+        ]
+    else:
+        q = (query or "").replace("'", "''")
+        return [
+            f"$q = '{q}'",
+            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }',
+        ]
+def _linux_candidates(mode: str, query: str) -> list[str]:
+    q = (query or "")
+    want_redis  = (mode == "redis")  or re.search(r"redis", q, re.I) is not None
+    want_rabbit = (mode == "rabbit") or re.search(r"^ra|rabbit|rabbitmq|\bmq\b", q, re.I) is not None
+    cands: list[str] = []
+    if want_redis:
+        cands += ["redis-server.service", "redis.service", "redis-sentinel.service"]
+    if want_rabbit:
+        cands += ["rabbitmq-server.service", "rabbitmq.service"]
+    # as a last resort, try both families
+    if not cands:
+        cands = [
+            "redis-server.service", "redis.service", "redis-sentinel.service",
+            "rabbitmq-server.service", "rabbitmq.service",
+        ]
+    return cands
+
+
+def _linux_probe_script(units: list[str]) -> str:
+    # Tries systemd first; if missing, tries legacy sysvinit `service ... status`
+    # Prints key:value blocks that our tolerant parser already supports.
+    quoted = " ".join(shlex.quote(u) for u in units)
+    return r"""#!/bin/sh
+set +e
+
+_print_row () {
+  U="$1"; DESC="$2"; STATE="$3"
+  [ -n "$STATE" ] || return 0
+  printf "Name: %s\n" "$U"
+  printf "DisplayName: %s\n" "${DESC:-$U}"
+  printf "Status: %s\n\n" "$STATE"
+}
+
+have_systemctl=0
+if command -v systemctl >/dev/null 2>&1; then have_systemctl=1; fi
+
+for U in {UNITS}; do
+  [ -n "$U" ] || continue
+  UNIT="$U"
+  case "$UNIT" in
+    *.service) S="$UNIT" ;;
+    *) S="$UNIT.service" ;;
+  esac
+
+  STATE=""; DESC=""
+  if [ "$have_systemctl" -eq 1 ]; then
+    STATE=$(systemctl show -p ActiveState "$S" 2>/dev/null | sed 's/^ActiveState=//')
+    DESC=$(systemctl show -p Description "$S" 2>/dev/null | sed 's/^Description=//')
+  fi
+
+  # If systemctl didn't return anything, try old `service` style (best-effort)
+  if [ -z "$STATE" ] && command -v service >/dev/null 2>&1; then
+    NAME="${S%.service}"
+    OUT=$(service "$NAME" status 2>/dev/null)
+    case "$OUT" in
+      *"is running"*|*"start/running"*|*"active (running)"*) STATE="running" ;;
+      *"is stopped"*|*"stop/waiting"*|*"inactive (dead)"*|*"not running"*) STATE="stopped" ;;
+      *) STATE="" ;;
+    esac
+    [ -z "$DESC" ] && DESC="$NAME"
+  fi
+
+  if [ -n "$STATE" ]; then
+    _print_row "$S" "$DESC" "$STATE"
+  fi
+done
+
+exit 0
+""".replace("{UNITS}", quoted)
+
+# ---- Linux (systemd) service listing ----
+def _sh_list(mode: str, query: str):
+    # unchanged from your latest version
+    if mode == "redis":
+        grep_expr = "redis|redis-server"
+    elif mode == "rabbit":
+        grep_expr = "rabbit|rabbitmq|rabbitmq-server"
+    else:
+        grep_expr = (query or "").strip()
+
+    grep_cmd = ""
+    if grep_expr:
+        grep_cmd = f" | grep -iE {shlex.quote(grep_expr)} || true"
+
+    return [r"""#!/bin/sh
+set +e
+if ! command -v systemctl >/dev/null 2>&1; then
+  exit 0
+fi
+
+LIST=$(systemctl list-unit-files --type=service --no-legend --no-pager | awk '{print $1}'""" + (grep_cmd or "") + r""")
+ACTIVE=$(systemctl list-units --type=service --all --no-legend --no-pager | awk '{print $1}'""" + (grep_cmd or "") + r""")
+
+COMBINED=$(printf "%s\n%s\n" "$LIST" "$ACTIVE" | awk 'NF' | sort -u)
+
+IFS='
+'
+for S in $COMBINED; do
+  case "$S" in
+    *.service) UNIT="$S" ;;
+    *) UNIT="$S.service" ;;
+  esac
+
+  DESC=$(systemctl show -p Description "$UNIT" 2>/dev/null | sed 's/^Description=//')
+  STATE=$(systemctl show -p ActiveState  "$UNIT" 2>/dev/null | sed 's/^ActiveState=//')
+
+  if [ -n "$STATE" ]; then
+    printf "Name: %s\n" "$UNIT"
+    printf "DisplayName: %s\n" "${DESC:-$UNIT}"
+    printf "Status: %s\n\n" "$STATE"
+  fi
+done
+
+exit 0
+"""]
+
 def list_services(instance_id: str, mode: str, query: str | None = None):
-    if not _is_windows_instance(instance_id):
-        return {"ok": True, "services": [], "note": "not_windows"}
+    """
+    Windows: PowerShell Get-Service
+    Linux:   try list (regex) -> strong-kind fallback -> targeted probe (systemd/sysv)
+    """
+    is_win = _is_windows_instance(instance_id)
 
     if not _ssm_online(instance_id):
         return {"ok": True, "services": [], "note": "not_connected"}
 
-    if mode == "sql":
-        ps = [
-            '$sv = Get-Service | Where-Object { '
-            '$_.Name -like "MSSQL*" -or $_.Name -like "SQLSERVERAGENT*" -or '
-            '$_.Name -eq "SQLBrowser" -or $_.Name -eq "SQLWriter" -or '
-            '$_.DisplayName -match "SQL Server" }',
+    # ---- Windows path (unchanged) ----
+    if is_win:
+        ps = _ps_list(mode, query or "")
+        ps += [
+            '$out = @()',
+            '$sv | ForEach-Object { $out += [pscustomobject]@{ name=$_.Name; display=$_.DisplayName; status=$_.Status.ToString().ToLower() } }',
+            '$out | ConvertTo-Json -Compress'
         ]
-    elif mode == "redis":
-        ps = [
-            '$sv = Get-Service | Where-Object { $_.Name -match "redis" -or $_.DisplayName -match "redis" }',
-        ]
-    else:  # filter
-        q = (query or "").replace("'", "''")
-        ps = [
-            f"$q = '{q}'",
-            '$sv = Get-Service | Where-Object { $_.Name -like ("*" + $q + "*") -or $_.DisplayName -like ("*" + $q + "*") }',
-        ]
+        ok, stdout, stderr = _run_powershell(instance_id, ps)
+        if not ok:
+            return {"ok": False, "error": stderr or stdout or "ssm_failed"}
+        rows = _parse_services_stdout(stdout)
+        return {"ok": True, "services": [_mk_row(r) for r in rows]}
 
-    # Emit predictable objects; UI contract unchanged
-    ps += [
-        '$out = @()',
-        '$sv | ForEach-Object { $out += [pscustomobject]@{ name=$_.Name; display=$_.DisplayName; status=$_.Status.ToString().ToLower() } }',
-        '$out | ConvertTo-Json -Compress'
-    ]
+    # ---- Linux path ----
+    q = (query or "")
 
-    ok, stdout, stderr = _run_powershell(instance_id, ps)
-
-    # ---- NEW: lightweight debug so we can see what the instance actually returned
+    # 1) regex list using user query or mode
+    sh = _sh_list(mode, q)
+    ok, stdout, stderr = _run_shell(instance_id, sh)
+    # Debug: capture raw stdout/stderr
     try:
-        print("DBG/services/stdout:", (stdout or "")[:2000])
-        print("DBG/services/stderr:", (stderr or "")[:2000])
+        print("DBG/Linux services raw stdout:", (stdout or "")[:1500])
+        print("DBG/Linux services raw stderr:", (stderr or "")[:1500])
     except Exception:
         pass
-    # ---- END NEW
 
     if not ok:
         return {"ok": False, "error": stderr or stdout or "ssm_failed"}
-
-    # tolerant parsing (JSON/CSV/table/key:val supported elsewhere in file)
     rows = _parse_services_stdout(stdout)
-    if not rows:
-        return {"ok": False, "error": "parse_error", "raw": stdout}
 
-    services = [_mk_row(r) for r in rows]
-    return {"ok": True, "services": services}
+    # 2) fallback: force kind regex (redis/rabbit) if the user typed a hint
+    if not rows:
+        want_redis  = (mode == "redis")  or re.search(r"redis", q, re.I) is not None
+        want_rabbit = (mode == "rabbit") or re.search(r"^ra|rabbit|rabbitmq|\bmq\b", q, re.I) is not None
+        if want_redis or want_rabbit:
+            kind = "redis" if want_redis else "rabbit"
+            ok2, stdout2, stderr2 = _run_shell(instance_id, _sh_list(kind, ""))
+            if ok2:
+                rows = _parse_services_stdout(stdout2)
+
+    # 3) final targeted probe of well-known unit names + sysv fallback
+    if not rows:
+        cands = _linux_candidates(mode, q)
+        probe = _linux_probe_script(cands)
+        ok3, stdout3, stderr3 = _run_shell(instance_id, [probe])
+        if ok3:
+            rows = _parse_services_stdout(stdout3)
+
+    if not rows:
+        return {"ok": True, "services": []}
+
+    return {"ok": True, "services": [_mk_row(r) for r in rows]}
+
 
 
 def control_service(instance_id: str, service_name: str, op: str):
-    if not _is_windows_instance(instance_id):
-        return {"ok": False, "error": "not_windows"}
+    """
+    Start/stop a service on the target instance via SSM.
+    - Windows: PowerShell Get-Service / Start-Service / Stop-Service
+    - Linux:   systemctl start|stop <unit>; echoes Name/DisplayName/Status
+    """
     if not _ssm_online(instance_id):
         return {"ok": False, "error": "not_connected"}
 
-    svc = service_name.replace("'", "''")
-    if op == "start":
-        action = [
-            f"$n = '{svc}'",
-            'try {',
-            '  $s = Get-Service -Name $n -ErrorAction Stop;',
-            '  if ($s.Status -ne "Running") { Start-Service -Name $n; $s.WaitForStatus("Running","00:00:20") }',
-            '  $s = Get-Service -Name $n;',
-            '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
-            '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
-            '$out | ConvertTo-Json -Compress'
-        ]
-    else:  # stop
-        action = [
-            f"$n = '{svc}'",
-            'try {',
-            '  $s = Get-Service -Name $n -ErrorAction Stop;',
-            '  if ($s.Status -ne "Stopped") { Stop-Service -Name $n -Force; $s.WaitForStatus("Stopped","00:00:20") }',
-            '  $s = Get-Service -Name $n;',
-            '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
-            '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
-            '$out | ConvertTo-Json -Compress'
-        ]
+    is_win = _is_windows_instance(instance_id)
 
-    ok, stdout, stderr = _run_powershell(instance_id, action)
+    # -------- Windows (unchanged) --------
+    svc = service_name.replace("'", "''")  # PS single-quote escaping
+    if is_win:
+        if op == "start":
+            action = [
+                f"$n = '{svc}'",
+                'try {',
+                '  $s = Get-Service -Name $n -ErrorAction Stop;',
+                '  if ($s.Status -ne "Running") { Start-Service -Name $n; $s.WaitForStatus("Running","00:00:20") }',
+                '  $s = Get-Service -Name $n;',
+                '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
+                '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
+                '$out | ConvertTo-Json -Compress'
+            ]
+        else:  # stop
+            action = [
+                f"$n = '{svc}'",
+                'try {',
+                '  $s = Get-Service -Name $n -ErrorAction Stop;',
+                '  if ($s.Status -ne "Stopped") { Stop-Service -Name $n -Force; $s.WaitForStatus("Stopped","00:00:20") }',
+                '  $s = Get-Service -Name $n;',
+                '  $out = [pscustomobject]@{ name=$s.Name; display=$s.DisplayName; status=$s.Status.ToString().ToLower() }',
+                '} catch { $out = [pscustomobject]@{ error=$_.Exception.Message } }',
+                '$out | ConvertTo-Json -Compress'
+            ]
+        ok, stdout, stderr = _run_powershell(instance_id, action)
+        if not ok:
+            return {"ok": False, "error": stderr or stdout or "ssm_failed"}
+        try:
+            data = json.loads(stdout) if stdout else {}
+        except Exception:
+            return {"ok": False, "error": "parse_error", "raw": stdout}
+        if isinstance(data, dict) and "error" in data:
+            return {"ok": False, "error": data["error"]}
+        return {"ok": True, "service": _mk_row(data)}
+
+    # -------- Linux (systemd) --------
+    if op not in ("start", "stop"):
+        return {"ok": False, "error": "unsupported_action"}
+
+    # Build a safe double-quoted string for the shell
+    svc_safe = (service_name or "").replace('"', '').replace('`', '').replace('\n', ' ').replace('\r', ' ').strip()
+
+    # IMPORTANT: use f-string and escape the ${...} braces as ${{...}} so Python
+    # doesn't treat them as f-string expressions.
+    sh = [f"""set -e
+UNIT="{svc_safe}"
+case "$UNIT" in
+  *.service) S="$UNIT" ;;
+  *) S="$UNIT.service" ;;
+esac
+
+# Try sudo first (if allowed), then plain systemctl
+if command -v sudo >/dev/null 2>&1; then
+  sudo systemctl {op} "$S" || true
+else
+  systemctl {op} "$S" || true
+fi
+
+DESC=$(systemctl show -p Description "$S" 2>/dev/null | sed 's/^Description=//')
+STATE=$(systemctl show -p ActiveState  "$S" 2>/dev/null | sed 's/^ActiveState=//')
+
+printf "Name: %s\\n" "$S"
+printf "DisplayName: %s\\n" "${{DESC:-$S}}"
+printf "Status: %s\\n" "$STATE"
+"""]
+
+    ok, stdout, stderr = _run_shell(instance_id, sh)
     if not ok:
         return {"ok": False, "error": stderr or stdout or "ssm_failed"}
 
-    try:
-        data = json.loads(stdout) if stdout else {}
-    except Exception:
-        return {"ok": False, "error": "parse_error", "raw": stdout}
-    if isinstance(data, dict) and "error" in data:
-        return {"ok": False, "error": data["error"]}
+    rows = _parse_services_stdout(stdout)
+    if not rows:
+        return {"ok": True, "service": {"name": svc_safe, "display": svc_safe, "status": "unknown"}}
+    return {"ok": True, "service": _mk_row(rows[0])}
 
-    return {"ok": True, "service": _mk_row(data)}
-
-def iis_reset(instance_id: str):
-    if not _is_windows_instance(instance_id):
-        return {"ok": False, "error": "not_windows"}
-    if not _ssm_online(instance_id):
-        return {"ok": False, "error": "not_connected"}
-    ok, stdout, stderr = _run_powershell(instance_id, ['iisreset /noforce'])
-    if not ok:
-        return {"ok": False, "error": stderr or stdout or "ssm_failed"}
-    return {"ok": True, "message": (stdout or "IIS reset issued").strip()}
-
-# --------- HTTP entrypoint ----------
+# ---------- HTTP entrypoint ----------
 def lambda_handler(event, context):
     path   = (event.get("requestContext", {}).get("http", {}).get("path") or
-              event.get("rawPath") or
-              event.get("path") or "").strip()
+              event.get("rawPath") or event.get("path") or "").strip()
     method = (event.get("requestContext", {}).get("http", {}).get("method") or
               event.get("httpMethod") or "GET").upper()
     body   = _read_body(event)
+    
+        # CORS preflight
+    if method == "OPTIONS":
+        return _json(204, {"ok": True})
+
 
     # Public
-    if path == "/request-otp"   and method == "POST": return handle_request_otp(body)
-    if path == "/verify-otp"    and method == "POST": return handle_verify_otp(body)
-    if path == "/login"         and method == "POST": return handle_login(body)
+    if path == "/request-otp" and method == "POST": return handle_request_otp(body)
+    if path == "/verify-otp"  and method == "POST": return handle_verify_otp(body)
+    if path == "/login"       and method == "POST": return handle_login(body)
 
-    # Protected
-    if path == "/instances"         and method == "GET":  return handle_instances()
-    if path == "/instance-action"   and method == "POST": return handle_instance_action(body)
-    if path == "/bulk-action"       and method == "POST": return handle_bulk(body)
+    # Protected (read OK for all roles)
+    if path == "/instances" and method == "GET":
+        return handle_instances()
 
-# Services (unchanged contract; tolerant to id/instanceId)
+    # Mutating endpoints — require admin
+    if path == "/instance-action" and method == "POST":
+        guard = _require_admin(event)
+        if guard: return guard
+        return handle_instance_action(body)
+
+    if path == "/bulk-action" and method == "POST":
+        guard = _require_admin(event)
+        if guard: return guard
+        return handle_bulk(body)
+
+    # Services (list = read-only; start/stop/iisreset = admin)
     if path == "/services" and method == "POST":
-        # accept both, in case an older UI sends "id"
         iid = (body.get("instanceId") or body.get("id"))
         if not iid:
-            try:
-                print("ERR /services: missing instanceId. Body:", str(body)[:400])
-            except Exception:
-                pass
+            try: print("ERR /services: missing instanceId. Body:", str(body)[:400])
+            except Exception: pass
             return _json(200, _err("instanceId required"))
 
         op = (body.get("op") or "list").lower()
         if op == "list":
             mode = (body.get("mode") or "filter").lower()
-            query = body.get("query") or ""
-            return _json(200, list_services(iid, mode, query))
-        if op in ("start", "stop"):
-            svc = body.get("serviceName")
-            if not svc:
-                return _json(200, _err("serviceName required"))
-            return _json(200, control_service(iid, svc, op))
-        if op == "iisreset":
-            return _json(200, iis_reset(iid))
-        
-        return _json(200, _err("unknown op"))
+            query = (body.get("query") or "").strip()
 
+            # If a query is typed, always honor it
+            if len(query) >= 2:
+                mode = "filter"
+
+            # Special-case: Rabbit heuristics (if user typed ra/rabbit/mq etc.)
+            if mode == "filter" and re.search(r"^ra|rabbit|rabbitmq|\bmq\b", query, re.I):
+                mode = "rabbit"
+
+            return _json(200, list_services(iid, mode, query))
+
+        if op in ("start", "stop", "iisreset"):
+            guard = _require_admin(event)
+            if guard: return guard
+
+            if op in ("start", "stop"):
+                svc = body.get("serviceName")
+                if not svc:
+                    return _json(200, _err("serviceName required"))
+                return _json(200, control_service(iid, svc, op))
+
+            if op == "iisreset":
+                # Block IIS reset for SQL / Redis / Rabbit instances by name heuristic
+                # Prefer instanceName from body; else EC2 Name tag lookup.
+                iname = (body.get("instanceName") or body.get("instance") or "") or _instance_name(iid)
+                nm = (iname or "").lower()
+                if any(k in nm for k in ("sql", "redis", "rabbit")):
+                    return _json(200, _err("IIS reset not allowed for SQL/Redis/Rabbit instances"))
+                return _json(200, iis_reset(iid))
+
+        return _json(200, _err("unknown op"))
 
     return _json(404, {"error":"not_found","path":path,"method":method})
